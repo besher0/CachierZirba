@@ -4561,7 +4561,11 @@ export default function App() {
             <Text style={styles.sidebarBrand}>{BRAND_NAME}</Text>
             <Text style={styles.sidebarSubBrand}>{BRAND_CATEGORY}</Text>
 
-            <View style={styles.sidebarNav}>
+            <ScrollView
+              style={styles.sidebarNavScroll}
+              contentContainerStyle={styles.sidebarNav}
+              showsVerticalScrollIndicator={false}
+            >
               {navItems.map((item) => {
                 const active = activeScreen === item.key;
                 return (
@@ -4579,7 +4583,7 @@ export default function App() {
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
 
             <Pressable style={styles.sidebarActionButton} onPress={() => setActiveScreen('pos')}>
               <Text style={styles.sidebarActionButtonText}>بيع جديد +</Text>
@@ -4826,7 +4830,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fceff3',
     borderLeftWidth: 1,
     borderLeftColor: '#efdbe2',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     paddingBottom: 22,
   },
   sidebarBrand: {
@@ -4845,8 +4849,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 1.1,
   },
+  sidebarNavScroll: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 4,
+    marginBottom: 12,
+  },
   sidebarNav: {
     gap: 8,
+    paddingBottom: 8,
   },
   sidebarNavItem: {
     borderRadius: 13,
@@ -4876,6 +4887,7 @@ const styles = StyleSheet.create({
     color: '#a77097',
   },
   sidebarActionButton: {
+    marginTop: 'auto',
     backgroundColor: '#ec4899',
     borderRadius: 13,
     paddingVertical: 12,
@@ -4976,7 +4988,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   content: {
-    paddingBottom: 24,
+    paddingBottom: 40,
   },
   storeRow: {
     flexDirection: 'row-reverse',
@@ -5061,6 +5073,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    rowGap: 8,
+    columnGap: 8,
   },
   productsGrid: {
     flexDirection: 'row-reverse',
@@ -5533,6 +5548,7 @@ const styles = StyleSheet.create({
   rowActionButtons: {
     marginTop: 8,
     flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
     gap: 8,
     alignItems: 'center',
   },
@@ -5558,7 +5574,9 @@ const styles = StyleSheet.create({
   },
   supplyHeaderActions: {
     flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
     alignItems: 'center',
+    justifyContent: 'flex-start',
     gap: 8,
   },
   addProductButton: {
