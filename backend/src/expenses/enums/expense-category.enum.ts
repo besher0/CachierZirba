@@ -1,0 +1,7 @@
+﻿export enum ExpenseCategory {
+  RAW_MATERIALS = 'RAW_MATERIALS',
+  UTILITIES = 'UTILITIES',
+  SALARIES = 'SALARIES',
+  MARKETING = 'MARKETING',
+  OTHER = 'OTHER',
+}
