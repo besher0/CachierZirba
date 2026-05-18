@@ -1167,6 +1167,21 @@ export default function App() {
     ],
   );
 
+  const settlementDistributedAmount = useMemo(
+    () => Number((parseNumberInput(cashBoxInput) + parseNumberInput(sharesInput)).toFixed(2)),
+    [cashBoxInput, sharesInput],
+  );
+
+  const settlementCarryForwardAmount = useMemo(
+    () => Number(Math.max(todayExpectedRemaining - settlementDistributedAmount, 0).toFixed(2)),
+    [settlementDistributedAmount, todayExpectedRemaining],
+  );
+
+  const settlementOverDistributedAmount = useMemo(
+    () => Number(Math.max(settlementDistributedAmount - todayExpectedRemaining, 0).toFixed(2)),
+    [settlementDistributedAmount, todayExpectedRemaining],
+  );
+
   const productSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(() => {
     const byProduct = new Map<string, ProductSalesSummaryRow>();
 
@@ -2140,6 +2155,10 @@ export default function App() {
     const createdAt = new Date().toISOString();
     const clientClosureId = makeId('close');
     const businessDate = createdAt.slice(0, 10);
+    const cashBoxAmount = parseNumberInput(cashBoxInput);
+    const sharesAmount = parseNumberInput(sharesInput);
+    const distributedAmount = Number((cashBoxAmount + sharesAmount).toFixed(2));
+    const carryForwardAmount = Number(Math.max(todayExpectedRemaining - distributedAmount, 0).toFixed(2));
 
     const adjustmentRows = pieceStockAuditRows.filter(
       (row) => row.diffQty !== null && Math.abs(row.diffQty) > 0,
@@ -2219,8 +2238,8 @@ export default function App() {
       clientClosureId,
       storeId: effectiveStoreId,
       businessDate,
-      cashBoxAmount: parseNumberInput(cashBoxInput),
-      sharesAmount: parseNumberInput(sharesInput),
+      cashBoxAmount,
+      sharesAmount,
       expectedRevenue: todayExpectedRemaining,
       note: settlementNoteInput.trim() || undefined,
       syncedAt: createdAt,
@@ -2244,7 +2263,7 @@ export default function App() {
     setCashBoxInput('');
     setSharesInput('');
     setSettlementNoteInput('');
-    setPosCashCarryAmount(0);
+    setPosCashCarryAmount(carryForwardAmount);
     setSettlementActualInputs({});
 
     const syncJob: SyncJob = {
@@ -2263,8 +2282,8 @@ export default function App() {
         markSettlementSynced(clientClosureId);
         setStatusMessage(
           adjustmentRows.length > 0
-            ? `تم تسجيل التسوية، وتوليد ${adjustmentRows.length} حركة ضبط جرد.`
-            : 'تم تسجيل تسوية اليوم في السيرفر.',
+            ? `تم تسجيل التسوية، وتوليد ${adjustmentRows.length} حركة ضبط جرد. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`
+            : `تم تسجيل تسوية اليوم في السيرفر. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`,
         );
         await refreshDashboardData();
         await refreshDailySettlementsData();
@@ -2285,8 +2304,8 @@ export default function App() {
     enqueueJob(syncJob);
     setStatusMessage(
       adjustmentRows.length > 0
-        ? `لا يوجد إنترنت: تم تخزين التسوية وتوليد ${adjustmentRows.length} حركة ضبط محلياً.`
-        : 'لا يوجد إنترنت: تم تخزين التسوية محلياً.',
+        ? `لا يوجد إنترنت: تم تخزين التسوية وتوليد ${adjustmentRows.length} حركة ضبط محلياً. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`
+        : `لا يوجد إنترنت: تم تخزين التسوية محلياً. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`,
     );
   };
 
@@ -4269,6 +4288,15 @@ export default function App() {
                       placeholderTextColor="#d7b3c4"
                     />
                   </View>
+                  <Text style={styles.orderRowMeta}>
+                    المتبقي الذي سيُرحّل تلقائياً للمدوّر: {formatMoney(settlementCarryForwardAmount)}
+                  </Text>
+                  {settlementOverDistributedAmount > 0 ? (
+                    <Text style={styles.pendingText}>
+                      تنبيه: المدخلات (صندوق + حصص) أعلى من المتوقع بمقدار{' '}
+                      {formatMoney(settlementOverDistributedAmount)}.
+                    </Text>
+                  ) : null}
                   <TextInput
                     style={styles.inputFull}
                     value={settlementNoteInput}
