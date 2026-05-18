@@ -6,10 +6,12 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
-  // Enable CORS only when explicitly requested via environment variable.
-  // This avoids breaking browser clients when CORS is intentionally disabled,
-  // while allowing enabling it for development or web usage.
-  if (process.env.ENABLE_CORS === 'true') {
+  // Keep browser/web clients working by default in non-production environments.
+  // Production can still be locked down via ENABLE_CORS=false.
+  const enableCors =
+    process.env.ENABLE_CORS === 'true' ||
+    (process.env.ENABLE_CORS !== 'false' && process.env.NODE_ENV !== 'production');
+  if (enableCors) {
     const rawOrigins = process.env.CORS_ORIGINS;
     let origins: string[] | true = true;
     if (rawOrigins) {
