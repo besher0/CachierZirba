@@ -4,6 +4,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -62,6 +63,9 @@ import {
   LocalOrder,
   LocalPurchase,
   LoginPayload,
+  OrderItem,
+  OrderStatus,
+  PaymentMethod,
   ProductTemplate,
   Store,
   SyncJob,
@@ -72,9 +76,17 @@ import { exportCsv, toCsv } from './src/utils/csv';
 
 interface OrderHistoryRow {
   clientOrderId: string;
+  cashierName: string;
+  status: OrderStatus;
+  paymentMethod: PaymentMethod;
+  subtotal: number;
+  discount: number;
+  tax: number;
   total: number;
   orderedAt: string;
   itemsCount: number;
+  items: OrderItem[];
+  note?: string;
   synced: boolean;
   source: 'LOCAL' | 'SERVER';
 }
@@ -357,12 +369,36 @@ function toShortDate(isoDate: string): string {
   return isoDate.replace('T', ' ').slice(0, 16);
 }
 
+function toOrderStatusLabel(status: OrderStatus): string {
+  return status === 'REFUNDED' ? 'مرتجع' : 'مكتمل';
+}
+
+function toPaymentMethodLabel(paymentMethod: PaymentMethod): string {
+  if (paymentMethod === 'CARD') {
+    return 'بطاقة';
+  }
+
+  if (paymentMethod === 'MIXED') {
+    return 'مختلط';
+  }
+
+  return 'كاش';
+}
+
 function mapApiOrderToRow(order: ApiOrder): OrderHistoryRow {
   return {
     clientOrderId: order.clientOrderId,
+    cashierName: order.cashierName,
+    status: order.status,
+    paymentMethod: order.paymentMethod,
+    subtotal: order.subtotal,
+    discount: order.discount,
+    tax: order.tax,
     total: order.total,
     orderedAt: order.orderedAt,
     itemsCount: order.items.length,
+    items: order.items,
+    note: order.note,
     synced: true,
     source: 'SERVER',
   };
@@ -371,9 +407,17 @@ function mapApiOrderToRow(order: ApiOrder): OrderHistoryRow {
 function mapLocalOrderToRow(order: LocalOrder): OrderHistoryRow {
   return {
     clientOrderId: order.clientOrderId,
+    cashierName: order.cashierName,
+    status: order.status,
+    paymentMethod: order.paymentMethod,
+    subtotal: order.subtotal,
+    discount: order.discount,
+    tax: order.tax,
     total: order.total,
     orderedAt: order.orderedAt,
     itemsCount: order.items.length,
+    items: order.items,
+    note: order.note,
     synced: order.synced,
     source: 'LOCAL',
   };
@@ -580,6 +624,7 @@ export default function App() {
   const [remoteSettlements, setRemoteSettlements] = useState<ApiDailySettlement[]>([]);
   const [remoteExpenses, setRemoteExpenses] = useState<ApiExpense[]>([]);
   const [remotePurchases, setRemotePurchases] = useState<ApiPurchase[]>([]);
+  const [selectedOrderInvoice, setSelectedOrderInvoice] = useState<OrderHistoryRow | null>(null);
 
   const [expenseEditingId, setExpenseEditingId] = useState<string | null>(null);
   const [expenseDateInput, setExpenseDateInput] = useState(new Date().toISOString().slice(0, 10));
@@ -1620,6 +1665,7 @@ export default function App() {
   useEffect(() => {
     setTodaySupplyInputs({});
     setSettlementActualInputs({});
+    setSelectedOrderInvoice(null);
   }, [selectedStoreId]);
 
   useEffect(() => {
@@ -3904,10 +3950,16 @@ export default function App() {
                   <Text style={styles.emptyText}>لا يوجد طلبات حالياً.</Text>
                 ) : (
                   mergedOrderRows.map((order) => (
-                    <View key={order.clientOrderId} style={styles.orderRow}>
+                    <Pressable
+                      key={order.clientOrderId}
+                      style={styles.orderRow}
+                      onPress={() => setSelectedOrderInvoice(order)}
+                    >
                       <View style={styles.orderRowMain}>
                         <Text style={styles.orderRowId}>{order.clientOrderId}</Text>
-                        <Text style={styles.orderRowItems}>{order.itemsCount} عناصر</Text>
+                        <Text style={styles.orderRowItems}>
+                          {toOrderStatusLabel(order.status)} - {order.itemsCount} عناصر
+                        </Text>
                       </View>
                       <View style={styles.orderRowMain}>
                         <Text style={styles.orderRowTotal}>{formatMoney(order.total)}</Text>
@@ -3918,7 +3970,8 @@ export default function App() {
                       <Text style={styles.orderRowMeta}>
                         {toShortDate(order.orderedAt)} - {order.source === 'SERVER' ? 'سيرفر' : 'محلي'}
                       </Text>
-                    </View>
+                      <Text style={styles.orderRowHint}>اضغط لعرض الفاتورة</Text>
+                    </Pressable>
                   ))
                 )}
               </View>
@@ -4161,6 +4214,78 @@ export default function App() {
                 )}
               </View>
             )}
+
+            <Modal
+              visible={selectedOrderInvoice !== null}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setSelectedOrderInvoice(null)}
+            >
+              <View style={styles.invoiceOverlay}>
+                <View style={styles.invoiceCard}>
+                  <View style={styles.sectionHeaderInline}>
+                    <Text style={styles.sectionTitle}>فاتورة الطلب</Text>
+                    <Pressable
+                      style={styles.smallRefreshButton}
+                      onPress={() => setSelectedOrderInvoice(null)}
+                    >
+                      <Text style={styles.smallRefreshText}>إغلاق</Text>
+                    </Pressable>
+                  </View>
+
+                  {selectedOrderInvoice ? (
+                    <>
+                      <Text style={styles.orderRowMeta}>الفرع: {selectedStore?.name ?? '-'}</Text>
+                      <Text style={styles.orderRowMeta}>رقم الفاتورة: {selectedOrderInvoice.clientOrderId}</Text>
+                      <Text style={styles.orderRowMeta}>الكاشير: {selectedOrderInvoice.cashierName}</Text>
+                      <Text style={styles.orderRowMeta}>
+                        التاريخ: {toShortDate(selectedOrderInvoice.orderedAt)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        الحالة: {toOrderStatusLabel(selectedOrderInvoice.status)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        الدفع: {toPaymentMethodLabel(selectedOrderInvoice.paymentMethod)}
+                      </Text>
+
+                      <Text style={styles.storeTableTitle}>العناصر</Text>
+                      <ScrollView style={styles.invoiceItemsList}>
+                        {selectedOrderInvoice.items.map((item, index) => (
+                          <View key={`${item.productName}-${index}`} style={styles.orderRow}>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowId}>{item.productName}</Text>
+                              <Text style={styles.orderRowItems}>{item.quantity}</Text>
+                            </View>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowMeta}>
+                                سعر الوحدة: {formatMoney(item.unitPrice)}
+                              </Text>
+                              <Text style={styles.orderRowTotal}>{formatMoney(item.lineTotal)}</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </ScrollView>
+
+                      <View style={styles.summaryRow}>
+                        <Text style={styles.summaryText}>
+                          المجموع الفرعي: {formatMoney(selectedOrderInvoice.subtotal)}
+                        </Text>
+                        <Text style={styles.summaryText}>
+                          الخصم: {formatMoney(selectedOrderInvoice.discount)}
+                        </Text>
+                        <Text style={styles.summaryText}>الضريبة: {formatMoney(selectedOrderInvoice.tax)}</Text>
+                        <Text style={styles.summaryText}>
+                          الإجمالي: {formatMoney(selectedOrderInvoice.total)}
+                        </Text>
+                        {selectedOrderInvoice.note ? (
+                          <Text style={styles.summaryText}>ملاحظة: {selectedOrderInvoice.note}</Text>
+                        ) : null}
+                      </View>
+                    </>
+                  ) : null}
+                </View>
+              </View>
+            </Modal>
 
             <View style={styles.footerStatus}>
               <Text style={styles.footerStatusText}>{statusMessage}</Text>
@@ -5357,6 +5482,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'right',
   },
+  orderRowHint: {
+    color: '#9d174d',
+    fontWeight: '700',
+    fontSize: 11,
+    textAlign: 'left',
+  },
   syncedText: {
     color: '#9a5e88',
     fontWeight: '700',
@@ -5388,6 +5519,25 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 15,
     textAlign: 'right',
+  },
+  invoiceOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 20, 20, 0.42)',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 24,
+  },
+  invoiceCard: {
+    backgroundColor: '#fffafd',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#f0d8e4',
+    maxHeight: '90%',
+    gap: 8,
+  },
+  invoiceItemsList: {
+    maxHeight: 260,
   },
   footerStatus: {
     backgroundColor: '#9d174d',
