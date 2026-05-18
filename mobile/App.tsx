@@ -182,6 +182,19 @@ function parseNumberInput(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeIsoTimestamp(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
 function normalizeQuantityForUnit(unitType: ProductTemplate['unitType'], value: number): number {
   if (unitType === 'KG') {
     return Number(value.toFixed(3));
@@ -640,6 +653,8 @@ export default function App() {
   const [purchaseFilterProduct, setPurchaseFilterProduct] = useState('');
   const [purchaseFilterFrom, setPurchaseFilterFrom] = useState('');
   const [purchaseFilterTo, setPurchaseFilterTo] = useState('');
+  const [tawasiCapitalInput, setTawasiCapitalInput] = useState('');
+  const [tawasiSellPriceInput, setTawasiSellPriceInput] = useState('');
   const [products, setProducts] = useState<ProductTemplate[]>(PRODUCT_CATALOG);
   const [todaySupplyInputs, setTodaySupplyInputs] = useState<Record<string, string>>({});
   const [isProductFormOpen, setIsProductFormOpen] = useState(false);
@@ -740,6 +755,110 @@ export default function App() {
   const selectedStoreWithdrawals = useMemo(
     () => employeeWithdrawals.filter((item) => item.storeId === selectedStoreId),
     [employeeWithdrawals, selectedStoreId],
+  );
+
+  const selectedStoreRemoteSettlements = useMemo(
+    () => remoteSettlements.filter((item) => item.storeId === selectedStoreId),
+    [remoteSettlements, selectedStoreId],
+  );
+
+  const todayDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const settlementCycleStartIso = useMemo(() => {
+    const candidates: string[] = [];
+
+    selectedStoreSettlements.forEach((item) => {
+      const candidate = normalizeIsoTimestamp(item.syncedAt ?? item.createdLocallyAt);
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    });
+
+    selectedStoreRemoteSettlements.forEach((item) => {
+      const candidate = normalizeIsoTimestamp(item.syncedAt);
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    });
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    return candidates.sort((a, b) => b.localeCompare(a))[0];
+  }, [selectedStoreRemoteSettlements, selectedStoreSettlements]);
+
+  const ordersInCurrentCycle = useMemo(
+    () =>
+      selectedStoreOrders.filter((item) => {
+        if (item.orderedAt.slice(0, 10) !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const orderedAt = normalizeIsoTimestamp(item.orderedAt);
+        return orderedAt ? orderedAt > settlementCycleStartIso : true;
+      }),
+    [selectedStoreOrders, settlementCycleStartIso, todayDate],
+  );
+
+  const expensesInCurrentCycle = useMemo(
+    () =>
+      selectedStoreExpenses.filter((item) => {
+        if (item.expenseDate !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const createdAt = normalizeIsoTimestamp(item.createdLocallyAt);
+        return createdAt ? createdAt > settlementCycleStartIso : true;
+      }),
+    [selectedStoreExpenses, settlementCycleStartIso, todayDate],
+  );
+
+  const purchasesInCurrentCycle = useMemo(
+    () =>
+      selectedStorePurchases.filter((item) => {
+        if (item.purchaseDate !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const createdAt = normalizeIsoTimestamp(item.createdLocallyAt);
+        return createdAt ? createdAt > settlementCycleStartIso : true;
+      }),
+    [selectedStorePurchases, settlementCycleStartIso, todayDate],
+  );
+
+  const withdrawalsInCurrentCycle = useMemo(
+    () =>
+      selectedStoreWithdrawals.filter((item) => {
+        if (item.withdrawalDate !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const createdAt = normalizeIsoTimestamp(item.createdAt);
+        return createdAt ? createdAt > settlementCycleStartIso : true;
+      }),
+    [selectedStoreWithdrawals, settlementCycleStartIso, todayDate],
+  );
+
+  const carryInAmount = useMemo(
+    () => Number(Math.abs(posCashCarryAmount).toFixed(2)),
+    [posCashCarryAmount],
   );
 
   const recentAbsenceRows = useMemo(
@@ -890,8 +1009,6 @@ export default function App() {
     [mergedPurchaseRows, purchaseFilterFrom, purchaseFilterProduct, purchaseFilterTo],
   );
 
-  const todayDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
-
   const productSupplyRows = useMemo<ProductSupplyRow[]>(() => {
     const purchasedByProduct = new Map<string, number>();
     const soldByProduct = new Map<string, number>();
@@ -942,18 +1059,18 @@ export default function App() {
 
   const todaySalesTotal = useMemo(
     () =>
-      selectedStoreOrders
-        .filter((item) => item.status === 'COMPLETED' && item.orderedAt.slice(0, 10) === todayDate)
+      ordersInCurrentCycle
+        .filter((item) => item.status === 'COMPLETED')
         .reduce((sum, item) => sum + item.total, 0),
-    [selectedStoreOrders, todayDate],
+    [ordersInCurrentCycle],
   );
 
   const todayRefundTotal = useMemo(
     () =>
-      selectedStoreOrders
-        .filter((item) => item.status === 'REFUNDED' && item.orderedAt.slice(0, 10) === todayDate)
+      ordersInCurrentCycle
+        .filter((item) => item.status === 'REFUNDED')
         .reduce((sum, item) => sum + item.total, 0),
-    [selectedStoreOrders, todayDate],
+    [ordersInCurrentCycle],
   );
 
   const todayNetSales = useMemo(
@@ -962,30 +1079,21 @@ export default function App() {
   );
 
   const todayExpensesTotal = useMemo(
-    () =>
-      selectedStoreExpenses
-        .filter((item) => item.expenseDate === todayDate)
-        .reduce((sum, item) => sum + item.amount, 0),
-    [selectedStoreExpenses, todayDate],
+    () => expensesInCurrentCycle.reduce((sum, item) => sum + item.amount, 0),
+    [expensesInCurrentCycle],
   );
 
   const todayPurchasesTotal = useMemo(
-    () =>
-      selectedStorePurchases
-        .filter((item) => item.purchaseDate === todayDate)
-        .reduce((sum, item) => sum + item.totalCost, 0),
-    [selectedStorePurchases, todayDate],
+    () => purchasesInCurrentCycle.reduce((sum, item) => sum + item.totalCost, 0),
+    [purchasesInCurrentCycle],
   );
 
   const weekStartDate = useMemo(() => getWeekStartMonday(todayDate), [todayDate]);
   const weekEndDate = useMemo(() => getWeekEndSunday(weekStartDate), [weekStartDate]);
 
   const todayEmployeeWithdrawalsTotal = useMemo(
-    () =>
-      selectedStoreWithdrawals
-        .filter((item) => item.withdrawalDate === todayDate)
-        .reduce((sum, item) => sum + item.amount, 0),
-    [selectedStoreWithdrawals, todayDate],
+    () => withdrawalsInCurrentCycle.reduce((sum, item) => sum + item.amount, 0),
+    [withdrawalsInCurrentCycle],
   );
 
   const employeeWeeklySnapshots = useMemo<EmployeeWeeklySnapshot[]>(
@@ -1047,11 +1155,11 @@ export default function App() {
           todayExpensesTotal -
           todayPurchasesTotal -
           todayEmployeeWithdrawalsTotal +
-          posCashCarryAmount
+          carryInAmount
         ).toFixed(2),
       ),
     [
-      posCashCarryAmount,
+      carryInAmount,
       todayEmployeeWithdrawalsTotal,
       todayExpensesTotal,
       todayNetSales,
@@ -1062,9 +1170,7 @@ export default function App() {
   const productSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(() => {
     const byProduct = new Map<string, ProductSalesSummaryRow>();
 
-    selectedStoreOrders
-      .filter((order) => order.orderedAt.slice(0, 10) === todayDate)
-      .forEach((order) => {
+    ordersInCurrentCycle.forEach((order) => {
         order.items.forEach((item) => {
           const key = normalizeProductKey(item.productName);
           const fromCatalog = products.find((entry) => normalizeProductKey(entry.name) === key);
@@ -1099,7 +1205,7 @@ export default function App() {
       netQty: Number(item.netQty.toFixed(3)),
       netAmount: Number(item.netAmount.toFixed(2)),
     }));
-  }, [products, selectedStoreOrders, todayDate]);
+  }, [ordersInCurrentCycle, products]);
 
   const pieceStockAuditRows = useMemo<PieceStockAuditRow[]>(
     () =>
@@ -1665,6 +1771,8 @@ export default function App() {
   useEffect(() => {
     setTodaySupplyInputs({});
     setSettlementActualInputs({});
+    setTawasiCapitalInput('');
+    setTawasiSellPriceInput('');
     setSelectedOrderInvoice(null);
   }, [selectedStoreId]);
 
@@ -2662,6 +2770,93 @@ export default function App() {
     setStatusMessage(`تم استلام ${rowsToReceive.length} توريد.`);
   };
 
+  const registerTawasiSupply = async () => {
+    if (!session) {
+      setStatusMessage('سجّل الدخول أولاً.');
+      return;
+    }
+
+    if (!canManageInventory) {
+      setStatusMessage('وضع القراءة فقط: تسجيل التواصي متاح للكاشير أو الأدمن فقط.');
+      return;
+    }
+
+    const effectiveStoreId = isCashier ? assignedStoreId ?? '' : selectedStoreId;
+    if (!effectiveStoreId) {
+      setStatusMessage('اختر المحل أولاً.');
+      return;
+    }
+
+    const capitalAmount = parseNumberInput(tawasiCapitalInput);
+    const sellAmount = parseNumberInput(tawasiSellPriceInput);
+    if (capitalAmount <= 0 || sellAmount <= 0) {
+      setStatusMessage('أدخل رأس مال وسعر مبيع صحيحين للتواصي.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const payload: CreatePurchasePayload = {
+      clientPurchaseId: makeId('pur'),
+      storeId: effectiveStoreId,
+      productName: 'تواصي',
+      quantity: 1,
+      unitCost: capitalAmount,
+      totalCost: capitalAmount,
+      purchaseDate: now.slice(0, 10),
+      note: `تواصي | رأس المال: ${capitalAmount} | سعر المبيع: ${sellAmount}`,
+      syncedAt: now,
+    };
+
+    const localRecord: LocalPurchase = {
+      ...payload,
+      synced: false,
+      createdLocallyAt: now,
+      updatedLocallyAt: now,
+    };
+
+    setPurchases((previous) => {
+      const next = [localRecord, ...previous];
+      void saveArray(STORAGE_KEYS.purchases, next);
+      return next;
+    });
+
+    setTawasiCapitalInput('');
+    setTawasiSellPriceInput('');
+
+    const syncJob: SyncJob = {
+      id: makeId('job'),
+      referenceId: localRecord.clientPurchaseId,
+      retries: 0,
+      createdAt: now,
+      entity: 'PURCHASE',
+      action: 'CREATE',
+      payload,
+    };
+
+    if (isOnline && authToken) {
+      try {
+        await postPurchase(authToken, payload);
+        markPurchaseSynced(localRecord.clientPurchaseId);
+        await refreshPurchasesData();
+        setStatusMessage('تم تسجيل التواصي على السيرفر.');
+        return;
+      } catch (error: unknown) {
+        enqueueJob(syncJob);
+
+        if (error instanceof ApiError && error.status === 401) {
+          logout('انتهت الجلسة وتم حفظ التواصي محلياً لحين تسجيل الدخول.');
+          return;
+        }
+
+        setStatusMessage('تم حفظ التواصي محلياً بانتظار المزامنة.');
+        return;
+      }
+    }
+
+    enqueueJob(syncJob);
+    setStatusMessage('لا يوجد إنترنت: تم تخزين التواصي محلياً.');
+  };
+
   const deletePurchaseRecord = async (clientPurchaseId: string) => {
     if (!canManageInventory) {
       setStatusMessage('وضع القراءة فقط: حذف المشتريات متاح للكاشير أو الأدمن فقط.');
@@ -2895,13 +3090,14 @@ export default function App() {
 
   const exportPurchasesData = async () => {
     const csv = toCsv(
-      ['التاريخ', 'المنتج', 'الكمية', 'تكلفة الوحدة', 'الإجمالي', 'الحالة'],
+      ['التاريخ', 'المنتج', 'الكمية', 'تكلفة الوحدة', 'الإجمالي', 'الملاحظة', 'الحالة'],
       filteredPurchaseRows.map((item) => [
         item.purchaseDate,
         item.productName,
         item.quantity,
         item.unitCost,
         item.totalCost,
+        item.note ?? '',
         item.synced ? 'متزامن' : 'معلق',
       ]),
     );
@@ -3135,7 +3331,7 @@ export default function App() {
                       </Text>
                     </View>
                     <View style={styles.padMetaRow}>
-                      <Text style={styles.padMetaText}>كاش مدور: {formatMoney(posCashCarryAmount)}</Text>
+                      <Text style={styles.padMetaText}>كاش مدور: +{formatMoney(carryInAmount)}</Text>
                     </View>
 
                     <View style={styles.padGrid}>
@@ -3270,6 +3466,35 @@ export default function App() {
                   <Pressable style={styles.addExpenseFromPurchasesButton} onPress={() => setActiveScreen('expenses')}>
                     <Text style={styles.addExpenseFromPurchasesButtonText}>+ تسجيل مصروف</Text>
                   </Pressable>
+
+                  <View style={styles.supplyAddBox}>
+                    <Text style={styles.supplyAddTitle}>تواصي</Text>
+                    <View style={styles.inputRow}>
+                      <TextInput
+                        style={styles.input}
+                        value={tawasiCapitalInput}
+                        onChangeText={setTawasiCapitalInput}
+                        keyboardType="decimal-pad"
+                        placeholder="رأس مال التواصي"
+                        placeholderTextColor="#d7b3c4"
+                      />
+                      <TextInput
+                        style={styles.input}
+                        value={tawasiSellPriceInput}
+                        onChangeText={setTawasiSellPriceInput}
+                        keyboardType="decimal-pad"
+                        placeholder="سعر مبيع التواصي"
+                        placeholderTextColor="#d7b3c4"
+                      />
+                    </View>
+                    <Pressable
+                      style={[styles.supplyActionButtonPrimary, !canManageInventory && styles.buttonDisabled]}
+                      disabled={!canManageInventory}
+                      onPress={() => void registerTawasiSupply()}
+                    >
+                      <Text style={styles.supplyActionButtonTextPrimary}>تسجيل تواصي</Text>
+                    </Pressable>
+                  </View>
 
                   {isProductFormOpen && (
                     <View style={styles.supplyAddBox}>
@@ -3494,6 +3719,7 @@ export default function App() {
                           </Text>
                         </View>
                         <Text style={styles.orderRowMeta}>{item.purchaseDate}</Text>
+                        {item.note ? <Text style={styles.orderRowMeta}>{item.note}</Text> : null}
                         {canManageInventory && (
                           <View style={styles.rowActionButtons}>
                             <Pressable
@@ -3983,27 +4209,27 @@ export default function App() {
                   <Text style={styles.sectionTitle}>تسوية اليوم</Text>
                   <View style={styles.settlementStatsGrid}>
                     <View style={styles.settlementStatCard}>
-                      <Text style={styles.settlementStatLabel}>مبيعات اليوم</Text>
+                      <Text style={styles.settlementStatLabel}>مبيعات الدورة</Text>
                       <Text style={styles.settlementStatValue}>{formatMoney(todaySalesTotal)}</Text>
                     </View>
                     <View style={styles.settlementStatCard}>
-                      <Text style={styles.settlementStatLabel}>مرتجعات اليوم</Text>
+                      <Text style={styles.settlementStatLabel}>مرتجعات الدورة</Text>
                       <Text style={styles.settlementStatValue}>{formatMoney(todayRefundTotal)}</Text>
                     </View>
                     <View style={styles.settlementStatCard}>
-                      <Text style={styles.settlementStatLabel}>صافي المبيعات</Text>
+                      <Text style={styles.settlementStatLabel}>صافي الدورة</Text>
                       <Text style={styles.settlementStatValue}>{formatMoney(todayNetSales)}</Text>
                     </View>
                     <View style={styles.settlementStatCard}>
-                      <Text style={styles.settlementStatLabel}>توريدات اليوم</Text>
+                      <Text style={styles.settlementStatLabel}>توريدات الدورة</Text>
                       <Text style={styles.settlementStatValue}>{formatMoney(todayPurchasesTotal)}</Text>
                     </View>
                     <View style={styles.settlementStatCard}>
-                      <Text style={styles.settlementStatLabel}>مصاريف اليوم</Text>
+                      <Text style={styles.settlementStatLabel}>مصاريف الدورة</Text>
                       <Text style={styles.settlementStatValue}>{formatMoney(todayExpensesTotal)}</Text>
                     </View>
                     <View style={styles.settlementStatCard}>
-                      <Text style={styles.settlementStatLabel}>سحوبات الموظفين</Text>
+                      <Text style={styles.settlementStatLabel}>سحوبات الدورة</Text>
                       <Text style={styles.settlementStatValue}>
                         {formatMoney(todayEmployeeWithdrawalsTotal)}
                       </Text>
@@ -4017,8 +4243,13 @@ export default function App() {
                   </View>
 
                   <Text style={styles.orderRowMeta}>
-                    المعادلة: (المبيعات - المرتجعات) - المصاريف - التوريدات - سحوبات الموظفين + الكاش المدوّر
+                    المعادلة: (المبيعات - المرتجعات) - المصاريف - التوريدات - سحوبات الموظفين + الكاش المدوّر (بالموجب)
                   </Text>
+                  {settlementCycleStartIso ? (
+                    <Text style={styles.orderRowMeta}>
+                      الدورة الحالية محسوبة من بعد آخر تسوية: {toShortDate(settlementCycleStartIso)}
+                    </Text>
+                  ) : null}
 
                   <View style={styles.inputRow}>
                     <TextInput
@@ -4046,9 +4277,9 @@ export default function App() {
                     placeholderTextColor="#d7b3c4"
                   />
 
-                  <Text style={styles.storeTableTitle}>ملخص بيع المنتجات اليوم</Text>
+                  <Text style={styles.storeTableTitle}>ملخص بيع المنتجات للدورة الحالية</Text>
                   {productSalesSummaryRows.length === 0 ? (
-                    <Text style={styles.emptyText}>لا يوجد حركات بيع/إرجاع اليوم.</Text>
+                    <Text style={styles.emptyText}>لا يوجد حركات بيع/إرجاع ضمن الدورة الحالية.</Text>
                   ) : (
                     productSalesSummaryRows.map((row) => (
                       <View key={row.productId} style={styles.orderRow}>
