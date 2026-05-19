@@ -21,10 +21,16 @@
         "backgroundColor": "#fff0f7"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.besher1.zerbepatisserie"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c683cd15-dd3e-48af-a2f2-c32093837820"
+      }
     }
   }
 }
