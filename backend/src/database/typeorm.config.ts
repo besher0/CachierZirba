@@ -3,6 +3,7 @@ import { DataSourceOptions } from 'typeorm';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { Expense } from '../expenses/entities/expense.entity';
 import { Order } from '../orders/entities/order.entity';
+import { Product } from '../products/entities/product.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
 import { Store } from '../stores/entities/store.entity';
 import { User } from '../users/entities/user.entity';
@@ -12,7 +13,7 @@ type DatabaseConfigOverrides = {
   synchronize?: boolean;
 };
 
-const entities = [Store, Order, DailySettlement, Expense, Purchase, User];
+const entities = [Store, Order, DailySettlement, Expense, Purchase, Product, User];
 
 export function createTypeOrmOptions(
   overrides: DatabaseConfigOverrides = {},
@@ -42,4 +43,3 @@ export function createTypeOrmOptions(
     synchronize,
   };
 }
-

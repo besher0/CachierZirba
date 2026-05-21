@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -30,20 +31,25 @@ import {
   fetchExpenses,
   fetchMe,
   fetchOrders,
+  fetchProducts,
   fetchPurchases,
   fetchStores,
   login,
+  patchProduct,
   patchExpense,
   patchPurchase,
   postDailySettlement,
   postExpense,
   postOrder,
+  postProduct,
   postPurchase,
+  deleteProduct,
 } from './src/services/api';
 import {
   ApiDailySettlement,
   ApiExpense,
   ApiOrder,
+  ApiProduct,
   ApiPurchase,
   AppScreenKey,
   AuthSession,
@@ -51,6 +57,7 @@ import {
   CreateDailySettlementPayload,
   CreateExpensePayload,
   CreateOrderPayload,
+  CreateProductPayload,
   CreatePurchasePayload,
   DashboardStoreSummary,
   Employee,
@@ -61,6 +68,7 @@ import {
   LocalDailySettlement,
   LocalExpense,
   LocalOrder,
+  LocalProduct,
   LocalPurchase,
   LoginPayload,
   OrderItem,
@@ -69,6 +77,7 @@ import {
   ProductTemplate,
   Store,
   SyncJob,
+  UpdateProductPayload,
   UpdateExpensePayload,
   UpdatePurchasePayload,
 } from './src/types';
@@ -176,8 +185,31 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function normalizeNumericInputText(value: string): string {
+  const arabicIndicDigits = '٠١٢٣٤٥٦٧٨٩';
+  const easternArabicDigits = '۰۱۲۳۴۵۶۷۸۹';
+
+  let normalized = value
+    .trim()
+    .replace(/\u00A0/g, '')
+    .replace(/[٠-٩]/g, (digit) => String(arabicIndicDigits.indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String(easternArabicDigits.indexOf(digit)))
+    .replace(/٫/g, '.')
+    .replace(/٬/g, ',')
+    .replace(/\s+/g, '');
+
+  if (normalized.includes(',') && !normalized.includes('.')) {
+    normalized = normalized.replace(/,/g, '.');
+  } else {
+    normalized = normalized.replace(/,/g, '');
+  }
+
+  normalized = normalized.replace(/[^0-9.+-]/g, '');
+  return normalized;
+}
+
 function parseNumberInput(value: string): number {
-  const normalized = value.trim().replace(',', '.');
+  const normalized = normalizeNumericInputText(value);
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -267,6 +299,59 @@ function buildProductsFromHistory(
   });
 
   return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+}
+
+function mapApiProductToLocal(product: ApiProduct): LocalProduct {
+  return {
+    id: product.clientProductId,
+    clientProductId: product.clientProductId,
+    name: product.name,
+    unitType: product.unitType,
+    price: product.price,
+    costPrice: product.costPrice,
+    synced: true,
+    createdLocallyAt: product.createdAt,
+    updatedLocallyAt: product.updatedAt,
+  };
+}
+
+function toLocalProduct(product: ProductTemplate, fallbackCreatedAt?: string): LocalProduct {
+  const nowIso = new Date().toISOString();
+  const clientProductId = (product as LocalProduct).clientProductId ?? product.id;
+  const createdLocallyAt = (product as LocalProduct).createdLocallyAt ?? fallbackCreatedAt ?? nowIso;
+  const updatedLocallyAt = (product as LocalProduct).updatedLocallyAt ?? createdLocallyAt;
+
+  return {
+    id: clientProductId,
+    clientProductId,
+    name: product.name,
+    unitType: product.unitType,
+    price: product.price,
+    costPrice: product.costPrice,
+    synced: (product as LocalProduct).synced ?? false,
+    createdLocallyAt,
+    updatedLocallyAt,
+  };
+}
+
+function mergeProductsWithRemote(
+  remoteProducts: ApiProduct[],
+  localProducts: LocalProduct[],
+): LocalProduct[] {
+  const merged = new Map<string, LocalProduct>();
+
+  remoteProducts.forEach((product) => {
+    const mapped = mapApiProductToLocal(product);
+    merged.set(mapped.clientProductId, mapped);
+  });
+
+  localProducts.forEach((product) => {
+    if (!product.synced) {
+      merged.set(product.clientProductId, product);
+    }
+  });
+
+  return Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
 }
 
 function isLikelyNetworkError(error: unknown): boolean {
@@ -508,7 +593,7 @@ function mapLocalPurchaseToRow(item: LocalPurchase): PurchaseRow {
 
 function mergeSyncJobs(previous: SyncJob[], incoming: SyncJob): SyncJob[] {
   const entity = incoming.entity ?? incoming.type;
-  if (entity !== 'EXPENSE' && entity !== 'PURCHASE') {
+  if (entity !== 'EXPENSE' && entity !== 'PURCHASE' && entity !== 'PRODUCT') {
     return [...previous, incoming];
   }
 
@@ -597,6 +682,7 @@ export default function App() {
   const shortestSide = Math.min(width, height);
   const isDesktop = shortestSide >= 960;
   const isPosSplit = width >= 980;
+  const isPortraitMobile = !isDesktop && height >= width;
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -655,7 +741,9 @@ export default function App() {
   const [purchaseFilterTo, setPurchaseFilterTo] = useState('');
   const [tawasiCapitalInput, setTawasiCapitalInput] = useState('');
   const [tawasiSellPriceInput, setTawasiSellPriceInput] = useState('');
-  const [products, setProducts] = useState<ProductTemplate[]>(PRODUCT_CATALOG);
+  const [products, setProducts] = useState<LocalProduct[]>(
+    PRODUCT_CATALOG.map((item) => toLocalProduct(item)),
+  );
   const [todaySupplyInputs, setTodaySupplyInputs] = useState<Record<string, string>>({});
   const [isProductFormOpen, setIsProductFormOpen] = useState(false);
   const [productEditingId, setProductEditingId] = useState<string | null>(null);
@@ -694,6 +782,54 @@ export default function App() {
       { key: 'orders', label: 'سجل الطلبات', subtitle: 'مراجعة اليوم' },
     ],
     [],
+  );
+
+  const swipeScreens = useMemo<AppScreenKey[]>(
+    () => [...navItems.map((item) => item.key), ...(isAdmin ? (['admin'] as AppScreenKey[]) : [])],
+    [isAdmin, navItems],
+  );
+
+  const moveScreenBySwipe = useCallback(
+    (direction: 'NEXT' | 'PREV') => {
+      if (swipeScreens.length === 0) {
+        return;
+      }
+
+      const currentIndex = swipeScreens.indexOf(activeScreen);
+      const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+      const delta = direction === 'NEXT' ? 1 : -1;
+      const nextIndex = (safeIndex + delta + swipeScreens.length) % swipeScreens.length;
+      setActiveScreen(swipeScreens[nextIndex]);
+    },
+    [activeScreen, swipeScreens],
+  );
+
+  const swipePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          if (isDesktop || selectedOrderInvoice !== null) {
+            return false;
+          }
+
+          const absDx = Math.abs(gestureState.dx);
+          const absDy = Math.abs(gestureState.dy);
+          return absDx > 24 && absDx > absDy * 1.25;
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          if (Math.abs(gestureState.dx) < 42 || Math.abs(gestureState.dx) <= Math.abs(gestureState.dy)) {
+            return;
+          }
+
+          if (gestureState.dx < 0) {
+            moveScreenBySwipe('NEXT');
+            return;
+          }
+
+          moveScreenBySwipe('PREV');
+        },
+      }),
+    [isDesktop, moveScreenBySwipe, selectedOrderInvoice],
   );
 
   const canSwitchStore = isAdmin;
@@ -1345,6 +1481,21 @@ export default function App() {
     });
   }, []);
 
+  const markProductSynced = useCallback((referenceId: string) => {
+    setProducts((previous) => {
+      const next = previous.map((item) =>
+        item.clientProductId === referenceId
+          ? {
+              ...item,
+              synced: true,
+            }
+          : item,
+      );
+      void saveArray(STORAGE_KEYS.products, next);
+      return next;
+    });
+  }, []);
+
   const enqueueJob = useCallback((job: SyncJob) => {
     setQueue((previous) => {
       const next = mergeSyncJobs(previous, job);
@@ -1430,6 +1581,37 @@ export default function App() {
       handleApiFailure(error, 'تعذر تحديث المشتريات من السيرفر.');
     }
   }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
+
+  const refreshProductsData = useCallback(async () => {
+    if (!authToken || !isOnline) {
+      return;
+    }
+
+    try {
+      const data = await fetchProducts(authToken);
+      const pendingDeleteIds = new Set(
+        queue
+          .filter(
+            (job) =>
+              (job.entity ?? job.type) === 'PRODUCT' &&
+              (job.action ?? 'CREATE') === 'DELETE',
+          )
+          .map((job) => job.referenceId),
+      );
+
+      setProducts((previous) => {
+        const localProducts = previous.map((item) => toLocalProduct(item));
+        const remoteVisibleProducts = data.filter(
+          (item) => !pendingDeleteIds.has(item.clientProductId),
+        );
+        const next = mergeProductsWithRemote(remoteVisibleProducts, localProducts);
+        void saveArray(STORAGE_KEYS.products, next);
+        return next;
+      });
+    } catch (error: unknown) {
+      handleApiFailure(error, 'تعذر تحديث كتالوج المنتجات من السيرفر.');
+    }
+  }, [authToken, handleApiFailure, isOnline, queue]);
 
   const refreshDashboardData = useCallback(async () => {
     if (!isOnline || !isAdmin || !authToken) {
@@ -1527,6 +1709,14 @@ export default function App() {
           markPurchaseSynced(job.referenceId);
         } else if (entity === 'PURCHASE' && action === 'DELETE') {
           await deletePurchase(authToken, job.referenceId);
+        } else if (entity === 'PRODUCT' && action === 'CREATE') {
+          await postProduct(authToken, job.payload as CreateProductPayload);
+          markProductSynced(job.referenceId);
+        } else if (entity === 'PRODUCT' && action === 'UPDATE') {
+          await patchProduct(authToken, job.referenceId, job.payload as UpdateProductPayload);
+          markProductSynced(job.referenceId);
+        } else if (entity === 'PRODUCT' && action === 'DELETE') {
+          await deleteProduct(authToken, job.referenceId);
         }
       } catch (error: unknown) {
         if (error instanceof ApiError && error.status === 401) {
@@ -1558,6 +1748,7 @@ export default function App() {
       await refreshDailySettlementsData();
       await refreshExpensesData();
       await refreshPurchasesData();
+      await refreshProductsData();
       return;
     }
 
@@ -1567,6 +1758,7 @@ export default function App() {
     isSyncing,
     markExpenseSynced,
     markOrderSynced,
+    markProductSynced,
     markPurchaseSynced,
     markSettlementSynced,
     queue,
@@ -1575,6 +1767,7 @@ export default function App() {
     refreshDailySettlementsData,
     refreshExpensesData,
     refreshOrdersData,
+    refreshProductsData,
     refreshPurchasesData,
     refreshDashboardData,
   ]);
@@ -1593,7 +1786,11 @@ export default function App() {
     setIsLoggingIn(true);
 
     try {
-      const authSession = await login(payload);
+      const authSession = await login(payload, {
+        onNetworkRetry: ({ attempt, maxAttempts }) => {
+          setStatusMessage(`ضعف اتصال بالسيرفر، إعادة المحاولة ${attempt}/${maxAttempts}...`);
+        },
+      });
       setSession(authSession);
       setActiveScreen('pos');
 
@@ -1612,7 +1809,7 @@ export default function App() {
         }
       } else if (isLikelyNetworkError(error)) {
         setStatusMessage(
-          `تعذر الاتصال بالسيرفر أو انتهت المهلة. تأكد أن الباك اند يعمل وأن عنوان API صحيح: ${API_BASE_URL}.`,
+          `تعذر الاتصال بالسيرفر بعد عدة محاولات. تأكد من تشغيل الباك اند وصحة عنوان API: ${API_BASE_URL}.`,
         );
       } else {
         setStatusMessage('حدث خطأ غير متوقع أثناء تسجيل الدخول.');
@@ -1657,7 +1854,7 @@ export default function App() {
             loadArray<LocalDailySettlement>(STORAGE_KEYS.dailySettlements),
             loadArray<LocalExpense>(STORAGE_KEYS.expenses),
             loadArray<LocalPurchase>(STORAGE_KEYS.purchases),
-            loadArray<ProductTemplate>(STORAGE_KEYS.products),
+            loadArray<ProductTemplate | LocalProduct>(STORAGE_KEYS.products),
             loadArray<Employee>(STORAGE_KEYS.employees),
             loadArray<EmployeeAbsenceEntry>(STORAGE_KEYS.employeeAbsences),
             loadArray<EmployeeWithdrawalEntry>(STORAGE_KEYS.employeeWithdrawals),
@@ -1680,8 +1877,10 @@ export default function App() {
             : effectiveStores[0]?.id ?? '';
         const initialProducts =
           cachedProducts.length > 0
-            ? cachedProducts
-            : buildProductsFromHistory(cachedPurchases, cachedOrders);
+            ? cachedProducts.map((item) => toLocalProduct(item))
+            : buildProductsFromHistory(cachedPurchases, cachedOrders).map((item) =>
+                toLocalProduct(item),
+              );
 
         setSession(cachedSession);
         setStores(effectiveStores);
@@ -1771,11 +1970,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const availableKeys = new Set([...navItems.map((item) => item.key), 'admin']);
+    const availableKeys = new Set<AppScreenKey>([
+      ...navItems.map((item) => item.key),
+      ...(isAdmin ? (['admin'] as AppScreenKey[]) : []),
+    ]);
     if (!availableKeys.has(activeScreen)) {
       setActiveScreen(navItems[0]?.key ?? 'pos');
     }
-  }, [activeScreen, navItems]);
+  }, [activeScreen, isAdmin, navItems]);
 
   useEffect(() => {
     if (isCashier && assignedStoreId) {
@@ -1822,6 +2024,14 @@ export default function App() {
   }, [isOnline, refreshStoresData, session?.accessToken]);
 
   useEffect(() => {
+    if (!isOnline || !session?.accessToken) {
+      return;
+    }
+
+    void refreshProductsData();
+  }, [isOnline, refreshProductsData, session?.accessToken]);
+
+  useEffect(() => {
     if (!isOnline || !session?.accessToken || !selectedStoreId) {
       return;
     }
@@ -1830,11 +2040,13 @@ export default function App() {
     void refreshDailySettlementsData();
     void refreshExpensesData();
     void refreshPurchasesData();
+    void refreshProductsData();
   }, [
     isOnline,
     refreshDailySettlementsData,
     refreshExpensesData,
     refreshOrdersData,
+    refreshProductsData,
     refreshPurchasesData,
     selectedStoreId,
     session?.accessToken,
@@ -1950,6 +2162,22 @@ export default function App() {
     setPendingMultiplier(null);
     setPendingAmountValue(null);
     setStatusMessage(`تمت إضافة ${formatMoney(cashValue)} إلى كاش الصندوق (مدور).`);
+  };
+
+  const updateCashBoxInput = (value: string) => {
+    const normalized = normalizeNumericInputText(value);
+    if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
+      return;
+    }
+    setCashBoxInput(normalized);
+  };
+
+  const updateSharesInput = (value: string) => {
+    const normalized = normalizeNumericInputText(value);
+    if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
+      return;
+    }
+    setSharesInput(normalized);
   };
 
   const addProductToCart = (productId: string) => {
@@ -2543,7 +2771,7 @@ export default function App() {
     setStatusMessage(`تعديل المنتج ${product.name}.`);
   };
 
-  const saveProductDefinition = () => {
+  const saveProductDefinition = async () => {
     if (!canManageInventory) {
       setStatusMessage('وضع القراءة فقط: إضافة/تعديل المنتجات متاحة للكاشير أو الأدمن فقط.');
       return;
@@ -2555,16 +2783,6 @@ export default function App() {
       return;
     }
 
-    const normalized = normalizeProductKey(name);
-    const duplicate = products.some(
-      (item) =>
-        item.id !== productEditingId && normalizeProductKey(item.name) === normalized,
-    );
-    if (duplicate) {
-      setStatusMessage('هذا المنتج موجود مسبقاً.');
-      return;
-    }
-
     const sellPrice = parseNumberInput(newProductSellPriceInput);
     const costPrice = parseNumberInput(newProductCostPriceInput);
     if (sellPrice <= 0 || costPrice <= 0) {
@@ -2572,26 +2790,34 @@ export default function App() {
       return;
     }
 
+    const now = new Date().toISOString();
     const isEditing = Boolean(productEditingId);
-    const nextProduct: ProductTemplate = isEditing
-      ? {
-          id: productEditingId as string,
-          name,
-          unitType: newProductUnitType,
-          price: sellPrice,
-          costPrice,
-        }
-      : {
-          id: makeId('prd'),
-          name,
-          unitType: newProductUnitType,
-          price: sellPrice,
-          costPrice,
-        };
+    const existingProduct = isEditing
+      ? products.find((item) => item.clientProductId === (productEditingId as string))
+      : null;
+    if (isEditing && !existingProduct) {
+      setStatusMessage('تعذر إيجاد المنتج المطلوب تعديله.');
+      return;
+    }
+
+    const clientProductId = isEditing ? (productEditingId as string) : makeId('prd');
+    const nextProduct: LocalProduct = {
+      id: clientProductId,
+      clientProductId,
+      name,
+      unitType: newProductUnitType,
+      price: sellPrice,
+      costPrice,
+      synced: false,
+      createdLocallyAt: existingProduct?.createdLocallyAt ?? now,
+      updatedLocallyAt: now,
+    };
 
     setProducts((previous) => {
       const next = isEditing
-        ? previous.map((item) => (item.id === nextProduct.id ? nextProduct : item))
+        ? previous.map((item) =>
+            item.clientProductId === nextProduct.clientProductId ? nextProduct : item,
+          )
         : [...previous, nextProduct];
       return next.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
     });
@@ -2612,11 +2838,81 @@ export default function App() {
       );
     }
 
+    const createPayload: CreateProductPayload = {
+      clientProductId,
+      name,
+      unitType: newProductUnitType,
+      price: sellPrice,
+      costPrice,
+      syncedAt: now,
+    };
+    const updatePayload: UpdateProductPayload = {
+      name,
+      unitType: newProductUnitType,
+      price: sellPrice,
+      costPrice,
+      syncedAt: now,
+    };
+
+    const syncJob: SyncJob = isEditing
+      ? {
+          id: makeId('job'),
+          referenceId: clientProductId,
+          retries: 0,
+          createdAt: now,
+          entity: 'PRODUCT',
+          action: 'UPDATE',
+          payload: updatePayload,
+        }
+      : {
+          id: makeId('job'),
+          referenceId: clientProductId,
+          retries: 0,
+          createdAt: now,
+          entity: 'PRODUCT',
+          action: 'CREATE',
+          payload: createPayload,
+        };
+
     resetProductForm();
-    setStatusMessage(isEditing ? `تم تعديل المنتج ${name}.` : `تمت إضافة المنتج ${name}.`);
+
+    if (isOnline && authToken) {
+      try {
+        if (isEditing) {
+          await patchProduct(authToken, clientProductId, updatePayload);
+        } else {
+          await postProduct(authToken, createPayload);
+        }
+
+        markProductSynced(clientProductId);
+        await refreshProductsData();
+        setStatusMessage(isEditing ? `تم تعديل المنتج ${name} على السيرفر.` : `تمت إضافة المنتج ${name} على السيرفر.`);
+        return;
+      } catch (error: unknown) {
+        enqueueJob(syncJob);
+        if (error instanceof ApiError && error.status === 401) {
+          logout('انتهت الجلسة وتم حفظ المنتج محلياً لحين تسجيل الدخول.');
+          return;
+        }
+
+        setStatusMessage(
+          isEditing
+            ? `تم تعديل المنتج ${name} محلياً بانتظار المزامنة.`
+            : `تمت إضافة المنتج ${name} محلياً بانتظار المزامنة.`,
+        );
+        return;
+      }
+    }
+
+    enqueueJob(syncJob);
+    setStatusMessage(
+      isEditing
+        ? `لا يوجد إنترنت: تم تعديل المنتج ${name} محلياً بانتظار المزامنة.`
+        : `لا يوجد إنترنت: تمت إضافة المنتج ${name} محلياً بانتظار المزامنة.`,
+    );
   };
 
-  const deleteProductDefinition = (productId: string) => {
+  const deleteProductDefinition = async (productId: string) => {
     if (!canManageInventory) {
       setStatusMessage('وضع القراءة فقط: حذف المنتجات متاح للكاشير أو الأدمن فقط.');
       return;
@@ -2627,6 +2923,7 @@ export default function App() {
       return;
     }
 
+    const now = new Date().toISOString();
     setProducts((previous) => previous.filter((item) => item.id !== productId));
     setCart((previous) => previous.filter((item) => item.id !== productId));
     setTodaySupplyInputs((previous) => {
@@ -2644,11 +2941,40 @@ export default function App() {
       resetProductForm();
     }
 
-    setStatusMessage(`تم حذف المنتج ${product.name}.`);
+    const syncJob: SyncJob = {
+      id: makeId('job'),
+      referenceId: product.clientProductId,
+      retries: 0,
+      createdAt: now,
+      entity: 'PRODUCT',
+      action: 'DELETE',
+      payload: { clientProductId: product.clientProductId },
+    };
+
+    if (isOnline && authToken) {
+      try {
+        await deleteProduct(authToken, product.clientProductId);
+        await refreshProductsData();
+        setStatusMessage(`تم حذف المنتج ${product.name} من السيرفر.`);
+        return;
+      } catch (error: unknown) {
+        enqueueJob(syncJob);
+        if (error instanceof ApiError && error.status === 401) {
+          logout('انتهت الجلسة وتم حفظ حذف المنتج محلياً لحين تسجيل الدخول.');
+          return;
+        }
+
+        setStatusMessage(`تم حذف المنتج ${product.name} محلياً بانتظار المزامنة.`);
+        return;
+      }
+    }
+
+    enqueueJob(syncJob);
+    setStatusMessage(`لا يوجد إنترنت: تم حذف المنتج ${product.name} محلياً بانتظار المزامنة.`);
   };
 
   const updateTodaySupplyInput = (productId: string, value: string) => {
-    const normalized = value.replace(',', '.');
+    const normalized = normalizeNumericInputText(value);
     if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
       return;
     }
@@ -3081,7 +3407,7 @@ export default function App() {
   };
 
   const updateSettlementActualInput = (productId: string, value: string) => {
-    const normalized = value.replace(',', '.');
+    const normalized = normalizeNumericInputText(value);
     if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
       return;
     }
@@ -3205,7 +3531,14 @@ export default function App() {
       {renderPastelBackdrop()}
 
       <View style={[styles.shell, !isDesktop && styles.shellMobile]}>
-        <View style={[styles.mainPane, !isDesktop && styles.mainPaneMobile]}>
+        <View
+          style={[
+            styles.mainPane,
+            !isDesktop && styles.mainPaneMobile,
+            isPortraitMobile && styles.mainPanePortraitMobile,
+          ]}
+          {...swipePanResponder.panHandlers}
+        >
           <View style={styles.headerRow}>
             <View style={styles.userBlock}>
               <Text style={styles.title}>{BRAND_NAME}</Text>
@@ -4274,7 +4607,7 @@ export default function App() {
                     <TextInput
                       style={styles.input}
                       value={cashBoxInput}
-                      onChangeText={setCashBoxInput}
+                      onChangeText={updateCashBoxInput}
                       keyboardType="decimal-pad"
                       placeholder="قيمة الصندوق"
                       placeholderTextColor="#d7b3c4"
@@ -4282,7 +4615,7 @@ export default function App() {
                     <TextInput
                       style={styles.input}
                       value={sharesInput}
-                      onChangeText={setSharesInput}
+                      onChangeText={updateSharesInput}
                       keyboardType="decimal-pad"
                       placeholder="قيمة الحصص"
                       placeholderTextColor="#d7b3c4"
@@ -4748,24 +5081,29 @@ const styles = StyleSheet.create({
   },
   loginHint: {
     textAlign: 'center',
-    color: '#ae7ca1',
+    color: '#7f4f6f',
     marginTop: 6,
     marginBottom: 6,
+    fontSize: 14,
+    fontWeight: '600',
   },
   loginApiHint: {
     textAlign: 'center',
-    color: '#d3aebf',
-    fontSize: 10,
+    color: '#8f5d7b',
+    fontSize: 11,
     marginBottom: 12,
   },
   loginInput: {
     backgroundColor: '#fdf1f5',
     borderRadius: 12,
-    color: '#9d174d',
+    color: '#6a1234',
     paddingHorizontal: 12,
-    paddingVertical: 11,
+    paddingVertical: 13,
     marginBottom: 10,
     textAlign: 'right',
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#efcadb',
   },
   loginButton: {
     marginTop: 6,
@@ -4800,8 +5138,9 @@ const styles = StyleSheet.create({
   loginStatus: {
     marginTop: 10,
     textAlign: 'center',
-    color: '#ae7ca1',
+    color: '#7f4f6f',
     fontWeight: '600',
+    fontSize: 13,
   },
   appRoot: {
     flex: 1,
@@ -4821,7 +5160,11 @@ const styles = StyleSheet.create({
   },
   mainPaneMobile: {
     paddingTop: 28,
-    paddingHorizontal: 12,
+    paddingHorizontal: 13,
+  },
+  mainPanePortraitMobile: {
+    paddingTop: 32,
+    paddingHorizontal: 14,
   },
   sidebar: {
     width: 168,
@@ -4984,8 +5327,9 @@ const styles = StyleSheet.create({
   },
   searchPlaceholder: {
     textAlign: 'right',
-    color: '#e0bfd0',
-    fontWeight: '600',
+    color: '#7c4f68',
+    fontWeight: '700',
+    fontSize: 14,
   },
   content: {
     paddingBottom: 40,
@@ -5012,9 +5356,9 @@ const styles = StyleSheet.create({
   mobileNavItem: {
     backgroundColor: '#f8e8ee',
     borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    minWidth: 108,
+    paddingVertical: 10,
+    paddingHorizontal: 13,
+    minWidth: 116,
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
@@ -5023,9 +5367,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#ec4899',
   },
   mobileNavText: {
-    color: '#831843',
-    fontWeight: '700',
-    fontSize: 13,
+    color: '#6f1536',
+    fontWeight: '800',
+    fontSize: 14,
     textAlign: 'center',
   },
   mobileNavTextActive: {
@@ -5044,8 +5388,9 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   storeChipText: {
-    color: '#831843',
-    fontWeight: '600',
+    color: '#6f1536',
+    fontWeight: '700',
+    fontSize: 14,
     textAlign: 'right',
   },
   storeChipTextSelected: {
@@ -5063,9 +5408,9 @@ const styles = StyleSheet.create({
     borderColor: '#f1e0e7',
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '800',
-    color: '#9d174d',
+    color: '#7a123a',
     textAlign: 'right',
     marginBottom: 12,
   },
@@ -5211,8 +5556,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   emptyText: {
-    color: '#b487a9',
-    fontSize: 14,
+    color: '#7f4f6f',
+    fontSize: 15,
+    fontWeight: '600',
     textAlign: 'right',
   },
   cartItemRow: {
@@ -5251,9 +5597,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#fdf2f6',
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#9d174d',
+    paddingVertical: 11,
+    color: '#6a1234',
     textAlign: 'right',
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#efcadb',
   },
   padDisplayBox: {
     backgroundColor: '#fdf2f6',
@@ -5313,14 +5662,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8e8ee',
     borderRadius: 8,
     alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   padActionButtonPrimary: {
     flex: 1,
     backgroundColor: '#ec4899',
     borderRadius: 8,
     alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   padActionButtonDanger: {
     backgroundColor: '#fdecef',
@@ -5330,12 +5679,12 @@ const styles = StyleSheet.create({
   padActionText: {
     color: '#831843',
     fontWeight: '800',
-    fontSize: 12,
+    fontSize: 13,
   },
   padActionTextPrimary: {
     color: '#ffffff',
     fontWeight: '800',
-    fontSize: 12,
+    fontSize: 13,
   },
   padClearButton: {
     marginTop: 6,
@@ -5354,9 +5703,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#fdf2f6',
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#9d174d',
+    paddingVertical: 11,
+    color: '#6a1234',
     textAlign: 'right',
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#efcadb',
   },
   summaryRow: {
     marginTop: 12,
@@ -5377,7 +5729,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     backgroundColor: '#ec4899',
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 13,
     alignItems: 'center',
   },
   buttonDisabled: {
@@ -5392,12 +5744,13 @@ const styles = StyleSheet.create({
     marginTop: 12,
     backgroundColor: '#9d174d',
     borderRadius: 12,
-    paddingVertical: 11,
+    paddingVertical: 13,
     alignItems: 'center',
   },
   secondaryButtonText: {
     color: '#ffffff',
     fontWeight: '700',
+    fontSize: 15,
   },
   sectionActions: {
     marginTop: 10,
@@ -5555,7 +5908,7 @@ const styles = StyleSheet.create({
   dangerButton: {
     backgroundColor: '#fdecef',
     borderRadius: 10,
-    paddingVertical: 6,
+    paddingVertical: 8,
     paddingHorizontal: 12,
   },
   dangerButtonText: {
@@ -5754,9 +6107,9 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   orderRowMeta: {
-    color: '#aa7399',
+    color: '#7d4f69',
     fontWeight: '600',
-    fontSize: 12,
+    fontSize: 13,
     textAlign: 'right',
   },
   orderRowHint: {
@@ -5826,12 +6179,13 @@ const styles = StyleSheet.create({
     color: '#fff3f8',
     textAlign: 'right',
     fontWeight: '600',
+    fontSize: 14,
   },
   footerStatusMeta: {
     color: '#eeced9',
     textAlign: 'right',
     marginTop: 4,
-    fontSize: 12,
+    fontSize: 13,
   },
 });
 

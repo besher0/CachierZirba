@@ -39,6 +39,36 @@ export interface ProductTemplate {
   unitType: 'PIECE' | 'KG';
 }
 
+export interface CreateProductPayload {
+  clientProductId: string;
+  name: string;
+  unitType: 'PIECE' | 'KG';
+  price: number;
+  costPrice: number;
+  syncedAt: string;
+}
+
+export interface UpdateProductPayload {
+  name?: string;
+  unitType?: 'PIECE' | 'KG';
+  price?: number;
+  costPrice?: number;
+  syncedAt?: string;
+}
+
+export interface LocalProduct extends ProductTemplate {
+  clientProductId: string;
+  synced: boolean;
+  createdLocallyAt: string;
+  updatedLocallyAt: string;
+}
+
+export interface ApiProduct extends CreateProductPayload {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface OrderItem {
   productName: string;
   quantity: number;
@@ -209,7 +239,7 @@ interface SyncJobBase {
   retries: number;
   createdAt: string;
   action?: 'CREATE' | 'UPDATE' | 'DELETE';
-  entity?: 'ORDER' | 'DAILY_SETTLEMENT' | 'EXPENSE' | 'PURCHASE';
+  entity?: 'ORDER' | 'DAILY_SETTLEMENT' | 'EXPENSE' | 'PURCHASE' | 'PRODUCT';
 }
 
 export interface OrderCreateSyncJob extends SyncJobBase {
@@ -270,6 +300,24 @@ export interface PurchaseDeleteSyncJob extends SyncJobBase {
   payload: { clientPurchaseId: string };
 }
 
+export interface ProductCreateSyncJob extends SyncJobBase {
+  action: 'CREATE';
+  entity: 'PRODUCT';
+  payload: CreateProductPayload;
+}
+
+export interface ProductUpdateSyncJob extends SyncJobBase {
+  action: 'UPDATE';
+  entity: 'PRODUCT';
+  payload: UpdateProductPayload;
+}
+
+export interface ProductDeleteSyncJob extends SyncJobBase {
+  action: 'DELETE';
+  entity: 'PRODUCT';
+  payload: { clientProductId: string };
+}
+
 export type SyncJob =
   | LegacyOrderSyncJob
   | LegacyDailySettlementSyncJob
@@ -280,7 +328,10 @@ export type SyncJob =
   | ExpenseDeleteSyncJob
   | PurchaseCreateSyncJob
   | PurchaseUpdateSyncJob
-  | PurchaseDeleteSyncJob;
+  | PurchaseDeleteSyncJob
+  | ProductCreateSyncJob
+  | ProductUpdateSyncJob
+  | ProductDeleteSyncJob;
 
 export interface DashboardStoreSummary {
   storeId: string;

@@ -3,20 +3,25 @@ import {
   ApiExpense,
   ApiDailySettlement,
   ApiOrder,
+  ApiProduct,
   ApiPurchase,
   AuthSession,
   CreateExpensePayload,
   CreateDailySettlementPayload,
   CreateOrderPayload,
+  CreateProductPayload,
   CreatePurchasePayload,
   DashboardResponse,
   LoginPayload,
   Store,
+  UpdateProductPayload,
   UpdateExpensePayload,
   UpdatePurchasePayload,
 } from '../types';
 
-const REQUEST_TIMEOUT_MS = 4500;
+const REQUEST_TIMEOUT_MS = 12000;
+const MAX_NETWORK_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 500;
 let lastReachableBaseUrl: string | null = null;
 
 export class ApiError extends Error {
@@ -30,6 +35,7 @@ export class ApiError extends Error {
 
 interface RequestOptions extends RequestInit {
   token?: string;
+  onNetworkRetry?: (info: { attempt: number; maxAttempts: number; baseUrl: string }) => void;
 }
 
 interface ListQuery {
@@ -83,6 +89,10 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
   }
 }
 
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function buildQuery(params: Record<string, string | undefined>): string {
   const search = new URLSearchParams();
 
@@ -124,11 +134,12 @@ function buildPurchaseQuery(params: PurchaseListQuery): string {
 }
 
 async function request<T>(path: string, options?: RequestOptions): Promise<T> {
-  const headers = new Headers(options?.headers);
+  const { token, onNetworkRetry, ...requestOptions } = options ?? {};
+  const headers = new Headers(requestOptions.headers);
   headers.set('Content-Type', 'application/json');
 
-  if (options?.token) {
-    headers.set('Authorization', `Bearer ${options.token}`);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
   }
 
   const configuredTargets =
@@ -137,35 +148,49 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   let lastNetworkError: TypeError | null = null;
 
   for (const baseUrl of targets) {
-    try {
-      const response = await fetchWithTimeout(`${baseUrl}${path}`, {
-        ...options,
-        headers,
-      }, REQUEST_TIMEOUT_MS);
+    for (let attempt = 1; attempt <= MAX_NETWORK_RETRIES + 1; attempt += 1) {
+      try {
+        const response = await fetchWithTimeout(
+          `${baseUrl}${path}`,
+          {
+            ...requestOptions,
+            headers,
+          },
+          REQUEST_TIMEOUT_MS,
+        );
 
-      if (!response.ok) {
-        const bodyText = await response.text();
-        throw new ApiError(response.status, bodyText);
+        if (!response.ok) {
+          const bodyText = await response.text();
+          throw new ApiError(response.status, bodyText);
+        }
+
+        lastReachableBaseUrl = baseUrl;
+        return (await response.json()) as T;
+      } catch (error: unknown) {
+        if (error instanceof ApiError) {
+          throw error;
+        }
+
+        const isAbort = error instanceof Error && error.name === 'AbortError';
+        const isNetwork = isAbort || error instanceof TypeError;
+        if (!isNetwork) {
+          throw error;
+        }
+
+        if (attempt <= MAX_NETWORK_RETRIES) {
+          onNetworkRetry?.({
+            attempt: attempt + 1,
+            maxAttempts: MAX_NETWORK_RETRIES + 1,
+            baseUrl,
+          });
+          await wait(RETRY_BASE_DELAY_MS * attempt);
+          continue;
+        }
+
+        lastNetworkError = isAbort
+          ? new TypeError(`Network timeout after ${REQUEST_TIMEOUT_MS}ms`)
+          : (error as TypeError);
       }
-
-      lastReachableBaseUrl = baseUrl;
-      return (await response.json()) as T;
-    } catch (error: unknown) {
-      if (error instanceof ApiError) {
-        throw error;
-      }
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        lastNetworkError = new TypeError(`Network timeout after ${REQUEST_TIMEOUT_MS}ms`);
-        continue;
-      }
-
-      if (error instanceof TypeError) {
-        lastNetworkError = error;
-        continue;
-      }
-
-      throw error;
     }
   }
 
@@ -176,10 +201,14 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   throw new Error(`Unable to reach API using configured endpoints: ${targets.join(', ')}`);
 }
 
-export function login(payload: LoginPayload): Promise<AuthSession> {
+export function login(
+  payload: LoginPayload,
+  options?: Pick<RequestOptions, 'onNetworkRetry'>,
+): Promise<AuthSession> {
   return request<AuthSession>('/auth/login', {
     method: 'POST',
     body: JSON.stringify(payload),
+    onNetworkRetry: options?.onNetworkRetry,
   });
 }
 
@@ -296,4 +325,38 @@ export function fetchPurchases(
   query: PurchaseListQuery = {},
 ): Promise<ApiPurchase[]> {
   return request<ApiPurchase[]>(`/purchases${buildPurchaseQuery(query)}`, { token });
+}
+
+export function fetchProducts(token: string): Promise<ApiProduct[]> {
+  return request<ApiProduct[]>('/products', { token });
+}
+
+export function postProduct(token: string, payload: CreateProductPayload): Promise<ApiProduct> {
+  return request<ApiProduct>('/products', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export function patchProduct(
+  token: string,
+  clientProductId: string,
+  payload: UpdateProductPayload,
+): Promise<ApiProduct> {
+  return request<ApiProduct>(`/products/${encodeURIComponent(clientProductId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export function deleteProduct(
+  token: string,
+  clientProductId: string,
+): Promise<{ deleted: true }> {
+  return request<{ deleted: true }>(`/products/${encodeURIComponent(clientProductId)}`, {
+    method: 'DELETE',
+    token,
+  });
 }
