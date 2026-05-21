@@ -2032,6 +2032,20 @@ export default function App() {
   }, [isOnline, refreshProductsData, session?.accessToken]);
 
   useEffect(() => {
+    if (!isOnline || !session?.accessToken) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void refreshProductsData();
+    }, 20000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isOnline, refreshProductsData, session?.accessToken]);
+
+  useEffect(() => {
     if (!isOnline || !session?.accessToken || !selectedStoreId) {
       return;
     }
@@ -3785,6 +3799,12 @@ export default function App() {
                         onPress={() => void refreshPurchasesData()}
                       >
                         <Text style={styles.smallRefreshText}>تحديث</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.smallRefreshButton}
+                        onPress={() => void refreshProductsData()}
+                      >
+                        <Text style={styles.smallRefreshText}>تحديث الكتالوج</Text>
                       </Pressable>
                       <Pressable
                         style={styles.addProductButton}
