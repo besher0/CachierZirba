@@ -214,6 +214,19 @@ function parseNumberInput(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function formatQuantity(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+
+  const rounded = Number(value.toFixed(3));
+  if (Number.isInteger(rounded)) {
+    return String(rounded);
+  }
+
+  return String(rounded).replace(/\.?0+$/, '');
+}
+
 function normalizeIsoTimestamp(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -682,7 +695,9 @@ export default function App() {
   const shortestSide = Math.min(width, height);
   const isDesktop = shortestSide >= 960;
   const isPosSplit = width >= 980;
+  const isPortrait = height >= width;
   const isPortraitMobile = !isDesktop && height >= width;
+  const showPageSwitchControls = !isDesktop || isPortrait;
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -784,6 +799,14 @@ export default function App() {
     [],
   );
 
+  const activeScreenLabel = useMemo(() => {
+    if (activeScreen === 'admin') {
+      return 'لوحة الأرباح';
+    }
+
+    return navItems.find((item) => item.key === activeScreen)?.label ?? 'الصفحات';
+  }, [activeScreen, navItems]);
+
   const swipeScreens = useMemo<AppScreenKey[]>(
     () => [...navItems.map((item) => item.key), ...(isAdmin ? (['admin'] as AppScreenKey[]) : [])],
     [isAdmin, navItems],
@@ -822,11 +845,11 @@ export default function App() {
           }
 
           if (gestureState.dx < 0) {
-            moveScreenBySwipe('NEXT');
+            moveScreenBySwipe('PREV');
             return;
           }
 
-          moveScreenBySwipe('PREV');
+          moveScreenBySwipe('NEXT');
         },
       }),
     [isDesktop, moveScreenBySwipe, selectedOrderInvoice],
@@ -3617,27 +3640,10 @@ export default function App() {
             })}
           </View>
 
-          {!isDesktop && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.mobileNavRow}
-            >
-              {navItems.map((item) => {
-                const active = activeScreen === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    style={[styles.mobileNavItem, active && styles.mobileNavItemActive]}
-                    onPress={() => setActiveScreen(item.key)}
-                  >
-                    <Text style={[styles.mobileNavText, active && styles.mobileNavTextActive]}>
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+          {showPageSwitchControls && (
+            <View style={styles.mobilePageRow}>
+              <Text style={styles.mobilePageCurrentText}>{activeScreenLabel}</Text>
+            </View>
           )}
 
           <ScrollView contentContainerStyle={styles.content}>
@@ -3688,7 +3694,7 @@ export default function App() {
                     <View style={styles.padMetaRow}>
                       <Text style={styles.padMetaText}>الوضع: {isRefundMode ? 'إرجاع' : 'بيع'}</Text>
                       <Text style={styles.padMetaText}>
-                        كمية: {pendingMultiplier && pendingMultiplier > 0 ? `${pendingMultiplier}` : '1'}
+                        كمية: {pendingMultiplier && pendingMultiplier > 0 ? formatQuantity(pendingMultiplier) : '1'}
                       </Text>
                     </View>
                     <View style={styles.padMetaRow}>
@@ -3701,7 +3707,7 @@ export default function App() {
                     </View>
 
                     <View style={styles.padGrid}>
-                      {['7', '8', '9', '4', '5', '6', '1', '2', '3', '0', '00', '.'].map((key) => (
+                      {['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0', '.'].map((key) => (
                         <Pressable key={key} style={styles.padKey} onPress={() => pushPadToken(key)}>
                           <Text style={styles.padKeyText}>{key}</Text>
                         </Pressable>
@@ -3746,7 +3752,7 @@ export default function App() {
                       cart.map((item) => (
                         <View key={item.id} style={styles.cartItemRow}>
                           <Text style={styles.cartItemName}>{item.name}</Text>
-                          <Text style={styles.cartItemQty}>x{item.quantity}</Text>
+                          <Text style={styles.cartItemQty}>x{formatQuantity(item.quantity)}</Text>
                           <Text style={styles.cartItemPrice}>
                             {formatMoney(item.price * item.quantity)}
                           </Text>
@@ -5367,33 +5373,18 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 4,
   },
-  mobileNavRow: {
-    gap: 8,
-    paddingBottom: 12,
-    paddingHorizontal: 2,
-    alignItems: 'center',
-  },
-  mobileNavItem: {
-    backgroundColor: '#f8e8ee',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 13,
-    minWidth: 116,
-    flexShrink: 0,
+  mobilePageRow: {
+    marginBottom: 12,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  mobileNavItemActive: {
-    backgroundColor: '#ec4899',
-  },
-  mobileNavText: {
-    color: '#6f1536',
+  mobilePageCurrentText: {
+    width: '100%',
+    textAlign: 'center',
+    color: '#9d174d',
     fontWeight: '800',
     fontSize: 14,
-    textAlign: 'center',
-  },
-  mobileNavTextActive: {
-    color: '#ffffff',
   },
   storeChip: {
     backgroundColor: '#f8e8ee',
@@ -5600,12 +5591,14 @@ const styles = StyleSheet.create({
     color: '#9a5e88',
     textAlign: 'center',
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   cartItemPrice: {
     width: 100,
     color: '#9d174d',
     textAlign: 'left',
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   inputRow: {
     flexDirection: 'row-reverse',
@@ -5655,22 +5648,25 @@ const styles = StyleSheet.create({
     fontSize: 10,
   },
   padGrid: {
-    flexDirection: 'row-reverse',
+    flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 5,
   },
   padKey: {
-    width: '23%',
+    width: '31.5%',
     minWidth: 40,
     backgroundColor: '#f8e8ee',
     borderRadius: 8,
     paddingVertical: 6,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#efcad4',
   },
   padKeyText: {
     color: '#831843',
     fontWeight: '900',
     fontSize: 15,
+    fontVariant: ['tabular-nums'],
   },
   padActionRow: {
     marginTop: 6,
