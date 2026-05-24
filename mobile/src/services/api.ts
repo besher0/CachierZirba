@@ -20,7 +20,7 @@ import {
 } from '../types';
 
 const REQUEST_TIMEOUT_MS = 30000;
-const MAX_NETWORK_RETRIES = 2;
+const DEFAULT_MAX_NETWORK_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
 let lastReachableBaseUrl: string | null = null;
 
@@ -35,6 +35,8 @@ export class ApiError extends Error {
 
 interface RequestOptions extends RequestInit {
   token?: string;
+  timeoutMs?: number;
+  maxNetworkRetries?: number;
   onNetworkRetry?: (info: { attempt: number; maxAttempts: number; baseUrl: string }) => void;
 }
 
@@ -134,7 +136,13 @@ function buildPurchaseQuery(params: PurchaseListQuery): string {
 }
 
 async function request<T>(path: string, options?: RequestOptions): Promise<T> {
-  const { token, onNetworkRetry, ...requestOptions } = options ?? {};
+  const {
+    token,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    maxNetworkRetries = DEFAULT_MAX_NETWORK_RETRIES,
+    onNetworkRetry,
+    ...requestOptions
+  } = options ?? {};
   const headers = new Headers(requestOptions.headers);
   headers.set('Content-Type', 'application/json');
 
@@ -148,7 +156,7 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   let lastNetworkError: TypeError | null = null;
 
   for (const baseUrl of targets) {
-    for (let attempt = 1; attempt <= MAX_NETWORK_RETRIES + 1; attempt += 1) {
+    for (let attempt = 1; attempt <= maxNetworkRetries + 1; attempt += 1) {
       try {
         const response = await fetchWithTimeout(
           `${baseUrl}${path}`,
@@ -156,7 +164,7 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
             ...requestOptions,
             headers,
           },
-          REQUEST_TIMEOUT_MS,
+          timeoutMs,
         );
 
         if (!response.ok) {
@@ -177,10 +185,10 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
           throw error;
         }
 
-        if (attempt <= MAX_NETWORK_RETRIES) {
+        if (attempt <= maxNetworkRetries) {
           onNetworkRetry?.({
             attempt: attempt + 1,
-            maxAttempts: MAX_NETWORK_RETRIES + 1,
+            maxAttempts: maxNetworkRetries + 1,
             baseUrl,
           });
           await wait(RETRY_BASE_DELAY_MS * attempt);
@@ -188,7 +196,7 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
         }
 
         lastNetworkError = isAbort
-          ? new TypeError(`Network timeout after ${REQUEST_TIMEOUT_MS}ms`)
+          ? new TypeError(`Network timeout after ${timeoutMs}ms`)
           : (error as TypeError);
       }
     }
@@ -208,6 +216,8 @@ export function login(
   return request<AuthSession>('/auth/login', {
     method: 'POST',
     body: JSON.stringify(payload),
+    timeoutMs: 45000,
+    maxNetworkRetries: 4,
     onNetworkRetry: options?.onNetworkRetry,
   });
 }

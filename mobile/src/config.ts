@@ -1,8 +1,40 @@
 import { NativeModules, Platform } from 'react-native';
 import { ExpenseCategory, ProductTemplate, Store } from './types';
 
+const RENDER_API_FALLBACK_URL = 'https://cachierzirba.onrender.com/api';
+
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
+}
+
+function buildBaseUrlVariants(value: string): string[] {
+  const normalized = normalizeBaseUrl(value);
+  if (!normalized) {
+    return [];
+  }
+
+  const variants = [normalized];
+
+  try {
+    const parsed = new URL(normalized);
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    if (pathname === '' || pathname === '/') {
+      parsed.pathname = '/api';
+      const withApiPath = normalizeBaseUrl(parsed.toString());
+      if (!variants.includes(withApiPath)) {
+        variants.unshift(withApiPath);
+      }
+    }
+  } catch {
+    if (!normalized.toLowerCase().endsWith('/api')) {
+      const withApiPath = `${normalized}/api`;
+      if (!variants.includes(withApiPath)) {
+        variants.unshift(withApiPath);
+      }
+    }
+  }
+
+  return variants;
 }
 
 function normalizeHost(host: string): string {
@@ -87,23 +119,26 @@ function resolveDefaultApiBaseUrl(): string {
 
 function resolveApiBaseCandidates(): string[] {
   const candidates: string[] = [];
+  const configuredApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
 
   const append = (value: string | null | undefined) => {
     if (!value) {
       return;
     }
 
-    const normalized = normalizeBaseUrl(value);
-    if (!normalized) {
-      return;
-    }
-
-    if (!candidates.includes(normalized)) {
-      candidates.push(normalized);
+    const variants = buildBaseUrlVariants(value);
+    for (const variant of variants) {
+      if (!candidates.includes(variant)) {
+        candidates.push(variant);
+      }
     }
   };
 
-  append(process.env.EXPO_PUBLIC_API_BASE_URL);
+  append(configuredApiBaseUrl);
+
+  if (!configuredApiBaseUrl && !__DEV__) {
+    append(RENDER_API_FALLBACK_URL);
+  }
 
   const inferredHost = inferMetroHost()?.toLowerCase() ?? null;
   if (inferredHost && !isLikelyTunnelHost(inferredHost)) {
@@ -136,9 +171,11 @@ function resolveApiBaseCandidates(): string[] {
   return candidates;
 }
 
-export const API_BASE_URL = normalizeBaseUrl(
-  process.env.EXPO_PUBLIC_API_BASE_URL ?? resolveDefaultApiBaseUrl(),
-);
+const configuredApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+const defaultApiBaseUrl =
+  configuredApiBaseUrl ?? (__DEV__ ? resolveDefaultApiBaseUrl() : RENDER_API_FALLBACK_URL);
+const defaultApiVariants = buildBaseUrlVariants(defaultApiBaseUrl);
+export const API_BASE_URL = defaultApiVariants[0] ?? normalizeBaseUrl(defaultApiBaseUrl);
 export const API_BASE_URL_CANDIDATES = resolveApiBaseCandidates();
 
 export const STORAGE_KEYS = {

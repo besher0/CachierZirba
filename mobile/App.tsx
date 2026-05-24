@@ -3488,7 +3488,7 @@ export default function App() {
   };
 
   const renderPastelBackdrop = () => (
-    <View pointerEvents="none" style={styles.pastelBackdrop}>
+    <View style={[styles.pastelBackdrop, styles.noPointerEvents]}>
       <View style={[styles.pastelBlob, styles.pastelBlobBlueTop]} />
       <View style={[styles.pastelBlob, styles.pastelBlobPinkRight]} />
       <View style={[styles.pastelBlob, styles.pastelBlobBlueBottom]} />
@@ -4970,6 +4970,9 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     overflow: 'hidden',
   },
+  noPointerEvents: {
+    pointerEvents: 'none',
+  },
   pastelBlob: {
     position: 'absolute',
     borderRadius: 999,
@@ -5466,10 +5469,7 @@ const styles = StyleSheet.create({
   posSection: {
     padding: 8,
     borderColor: '#f0d3e0',
-    shadowColor: '#c66b90',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    boxShadow: '0px 2px 6px rgba(198, 107, 144, 0.06)',
     elevation: 1,
   },
   posSectionTitle: {
