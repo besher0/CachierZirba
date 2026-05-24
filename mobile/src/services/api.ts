@@ -19,7 +19,7 @@ import {
   UpdatePurchasePayload,
 } from '../types';
 
-const REQUEST_TIMEOUT_MS = 12000;
+const REQUEST_TIMEOUT_MS = 30000;
 const MAX_NETWORK_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
 let lastReachableBaseUrl: string | null = null;
