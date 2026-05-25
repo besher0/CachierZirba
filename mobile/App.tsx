@@ -2307,6 +2307,22 @@ export default function App() {
     );
   };
 
+  const cancelCurrentOrder = () => {
+    if (cart.length === 0) {
+      setStatusMessage('السلة فارغة بالفعل.');
+      return;
+    }
+
+    setCart([]);
+    setDiscountInput('0');
+    setTaxInput('0');
+    setPosPadInput('');
+    setPendingMultiplier(null);
+    setPendingAmountValue(null);
+    setIsRefundMode(false);
+    setStatusMessage('تم إلغاء الطلب ومسح السلة.');
+  };
+
   const submitOrder = async () => {
     if (!session) {
       setStatusMessage('سجّل الدخول أولاً.');
@@ -3788,6 +3804,13 @@ export default function App() {
                       <Text style={styles.primaryButtonText}>
                         {isRefundMode ? 'تسجيل إرجاع' : 'حفظ الطلب'}
                       </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.cancelOrderButton, cart.length === 0 && styles.buttonDisabled]}
+                      disabled={cart.length === 0}
+                      onPress={cancelCurrentOrder}
+                    >
+                      <Text style={styles.cancelOrderButtonText}>إلغاء الطلب</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -5755,6 +5778,20 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '800',
     fontSize: 16,
+  },
+  cancelOrderButton: {
+    marginTop: 8,
+    backgroundColor: '#fdecef',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#efcad4',
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  cancelOrderButtonText: {
+    color: '#db2777',
+    fontWeight: '800',
+    fontSize: 15,
   },
   secondaryButton: {
     marginTop: 12,
