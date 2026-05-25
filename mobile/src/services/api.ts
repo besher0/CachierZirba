@@ -2,6 +2,7 @@ import { API_BASE_URL, API_BASE_URL_CANDIDATES } from '../config';
 import {
   ApiExpense,
   ApiDailySettlement,
+  CloudinarySignatureResponse,
   ApiOrder,
   ApiProduct,
   ApiPurchase,
@@ -351,6 +352,17 @@ export function fetchPurchases(
 
 export function fetchProducts(token: string): Promise<ApiProduct[]> {
   return request<ApiProduct[]>('/products', { token });
+}
+
+export function fetchCloudinarySignature(
+  token: string,
+  payload: { folder?: string } = {},
+): Promise<CloudinarySignatureResponse> {
+  return request<CloudinarySignatureResponse>('/uploads/cloudinary-signature', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+  });
 }
 
 export function postProduct(token: string, payload: CreateProductPayload): Promise<ApiProduct> {

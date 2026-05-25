@@ -13,6 +13,7 @@ import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { StoresModule } from './stores/stores.module';
+import { UploadsModule } from './uploads/uploads.module';
 import { createTypeOrmOptions } from './database/typeorm.config';
 
 @Module({
@@ -27,6 +28,7 @@ import { createTypeOrmOptions } from './database/typeorm.config';
     ProductsModule,
     PurchasesModule,
     ExpensesModule,
+    UploadsModule,
     AdminModule,
   ],
   controllers: [AppController],

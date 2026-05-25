@@ -128,6 +128,7 @@ export interface CreateExpensePayload {
   category: ExpenseCategory;
   description: string;
   amount: number;
+  imageUrl?: string;
   note?: string;
   syncedAt: string;
 }
@@ -137,12 +138,14 @@ export interface UpdateExpensePayload {
   category?: ExpenseCategory;
   description?: string;
   amount?: number;
+  imageUrl?: string;
   note?: string;
   syncedAt?: string;
 }
 
 export interface LocalExpense extends CreateExpensePayload {
   synced: boolean;
+  localImageUri?: string;
   createdLocallyAt: string;
   updatedLocallyAt: string;
 }
@@ -151,6 +154,16 @@ export interface ApiExpense extends CreateExpensePayload {
   id: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CloudinarySignatureResponse {
+  cloudName: string;
+  apiKey: string;
+  timestamp: number;
+  signature: string;
+  folder: string;
+  publicId: string;
+  uploadUrl: string;
 }
 
 export interface CreatePurchasePayload {

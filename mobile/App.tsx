@@ -1,14 +1,29 @@
-﻿import { StatusBar } from 'expo-status-bar';
+import { StatusBar } from 'expo-status-bar';
+import { useAudioPlayer } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import NetInfo from '@react-native-community/netinfo';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
+import {
+  ComponentProps,
+  createContext,
+  forwardRef,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import DraggableFlatList, { RenderItemParams } from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import {
   ActivityIndicator,
+  Image,
   Modal,
   PanResponder,
   Platform,
-  Pressable,
+  Pressable as RNPressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -27,6 +42,7 @@ import {
   ApiError,
   deleteExpense,
   deletePurchase,
+  fetchCloudinarySignature,
   fetchDashboard,
   fetchDailySettlements,
   fetchExpenses,
@@ -104,11 +120,15 @@ interface OrderHistoryRow {
 
 interface SettlementHistoryRow {
   businessDate: string;
+  clientClosureId: string;
   cashBoxAmount: number;
   sharesAmount: number;
+  expectedRevenue: number;
   actualRemainingAmount: number;
   expectedRemainingAmount: number;
   differenceAmount: number;
+  note?: string;
+  syncedAt: string;
   synced: boolean;
   source: 'LOCAL' | 'SERVER';
 }
@@ -119,6 +139,8 @@ interface ExpenseRow {
   category: ExpenseCategory;
   description: string;
   amount: number;
+  imageUrl?: string;
+  localImageUri?: string;
   note?: string;
   synced: boolean;
 }
@@ -174,6 +196,35 @@ interface PieceStockAuditRow {
   diffQty: number | null;
 }
 
+interface SettlementDayDetail {
+  businessDate: string;
+  orders: OrderHistoryRow[];
+  expenses: ExpenseRow[];
+  purchases: PurchaseRow[];
+  withdrawals: Array<EmployeeWithdrawalEntry & { employeeName: string }>;
+  note?: string;
+  salesAmount: number;
+  refundAmount: number;
+  netSalesAmount: number;
+  expensesAmount: number;
+  purchasesAmount: number;
+  withdrawalsAmount: number;
+  carryInAmount: number;
+  expectedBeforeDistributionAmount: number;
+  distributedAmount: number;
+  expectedRemainingAmount: number;
+  actualRemainingAmount: number;
+  differenceAmount: number;
+  sharesAmount: number;
+  cashBoxAmount: number;
+}
+
+interface MobileNavItem {
+  key: AppScreenKey | 'admin';
+  label: string;
+  subtitle: string;
+}
+
 const moneyFormatter = new Intl.NumberFormat('ar-SY', {
   style: 'currency',
   currency: 'SYP',
@@ -186,6 +237,27 @@ const BRAND_SIGNATURE = 'SKEIKE HANNA';
 const BRAND_CATEGORY = 'PATISSERIE';
 const BRAND_FULL = `${BRAND_SIGNATURE} ${BRAND_CATEGORY}`;
 const EXPORT_FILE_PREFIX = 'zerbe';
+const CLICK_SOUND_SOURCE = require('./assets/click.wav');
+const MISC_CART_ITEM_ID = '__MISC__';
+const MISC_CART_ITEM_NAME = 'منوعات';
+const PRODUCT_ORDER_STORAGE_KEY = `${STORAGE_KEYS.products}.orderByStore.v1`;
+
+const TapSoundContext = createContext<() => void>(() => {});
+type AppPressableProps = ComponentProps<typeof RNPressable>;
+
+const Pressable = forwardRef<any, AppPressableProps>((props, ref) => {
+  const playTapSound = useContext(TapSoundContext);
+  const { onPress, ...rest } = props;
+
+  const handlePress: AppPressableProps['onPress'] = (event) => {
+    playTapSound();
+    onPress?.(event);
+  };
+
+  return <RNPressable ref={ref} onPress={handlePress} {...rest} />;
+});
+
+Pressable.displayName = 'PressableWithTapSound';
 
 function formatMoney(value: number): string {
   return moneyFormatter.format(value);
@@ -482,6 +554,113 @@ async function saveObject<T>(key: string, value: T | null): Promise<void> {
   }
 }
 
+function sortProductsByLocalOrder(
+  sourceProducts: LocalProduct[],
+  orderedIds: string[],
+): LocalProduct[] {
+  if (orderedIds.length === 0) {
+    return [...sourceProducts];
+  }
+
+  const orderIndex = new Map(orderedIds.map((id, index) => [id, index]));
+  return [...sourceProducts].sort((a, b) => {
+    const aIndex = orderIndex.get(a.id);
+    const bIndex = orderIndex.get(b.id);
+    if (aIndex !== undefined && bIndex !== undefined) {
+      return aIndex - bIndex;
+    }
+    if (aIndex !== undefined) {
+      return -1;
+    }
+    if (bIndex !== undefined) {
+      return 1;
+    }
+    return a.name.localeCompare(b.name, 'ar');
+  });
+}
+
+function inferMimeTypeFromUri(uri: string): string {
+  const extension = uri.split('.').pop()?.toLowerCase();
+  if (extension === 'png') {
+    return 'image/png';
+  }
+  if (extension === 'webp') {
+    return 'image/webp';
+  }
+  if (extension === 'heic' || extension === 'heif') {
+    return 'image/heic';
+  }
+  return 'image/jpeg';
+}
+
+function isRemoteUri(uri: string): boolean {
+  return /^https?:\/\//i.test(uri);
+}
+
+async function persistExpenseImageLocally(
+  sourceUri: string,
+  clientExpenseId: string,
+): Promise<string> {
+  const extension = sourceUri.split('.').pop()?.toLowerCase() || 'jpg';
+  const safeExtension = extension.replace(/[^a-z0-9]/g, '') || 'jpg';
+
+  try {
+    const rootDirectory = FileSystem.Paths.document ?? FileSystem.Paths.cache;
+    const imagesDirectory = new FileSystem.Directory(rootDirectory, 'expense-images');
+    imagesDirectory.create({ idempotent: true, intermediates: true });
+
+    const targetFile = new FileSystem.File(
+      imagesDirectory,
+      `${clientExpenseId}.${safeExtension}`,
+    );
+    if (sourceUri !== targetFile.uri) {
+      const sourceFile = new FileSystem.File(sourceUri);
+      sourceFile.copy(targetFile);
+    }
+    return targetFile.uri;
+  } catch {
+    return sourceUri;
+  }
+}
+
+async function uploadExpenseImageToCloudinary(
+  token: string,
+  localImageUri: string,
+): Promise<string> {
+  const signature = await fetchCloudinarySignature(token);
+  const mimeType = inferMimeTypeFromUri(localImageUri);
+  const fileName = `${signature.publicId}.${mimeType.split('/')[1] ?? 'jpg'}`;
+
+  const formData = new FormData();
+  formData.append('file', {
+    uri: localImageUri,
+    name: fileName,
+    type: mimeType,
+  } as unknown as Blob);
+  formData.append('api_key', signature.apiKey);
+  formData.append('timestamp', String(signature.timestamp));
+  formData.append('signature', signature.signature);
+  formData.append('folder', signature.folder);
+  formData.append('public_id', signature.publicId);
+
+  const response = await fetch(signature.uploadUrl, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Cloudinary upload failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as { secure_url?: string; url?: string };
+  const uploadedUrl = payload.secure_url ?? payload.url;
+  if (!uploadedUrl) {
+    throw new Error('Cloudinary response missing uploaded URL.');
+  }
+
+  return uploadedUrl;
+}
+
 function toShortDate(isoDate: string): string {
   if (!isoDate) {
     return '-';
@@ -607,11 +786,15 @@ function mapApiSettlementToRow(item: ApiDailySettlement): SettlementHistoryRow {
   const actualRemainingAmount = Number((item.actualRemainingAmount ?? 0).toFixed(2));
   return {
     businessDate: item.businessDate,
+    clientClosureId: item.clientClosureId,
     cashBoxAmount: item.cashBoxAmount,
     sharesAmount: item.sharesAmount,
+    expectedRevenue: Number((item.expectedRevenue ?? 0).toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: Number((actualRemainingAmount - expectedRemainingClamped).toFixed(2)),
+    note: item.note,
+    syncedAt: item.syncedAt,
     synced: true,
     source: 'SERVER',
   };
@@ -625,11 +808,15 @@ function mapLocalSettlementToRow(item: LocalDailySettlement): SettlementHistoryR
   const actualRemainingAmount = Number((item.actualRemainingAmount ?? 0).toFixed(2));
   return {
     businessDate: item.businessDate,
+    clientClosureId: item.clientClosureId,
     cashBoxAmount: item.cashBoxAmount,
     sharesAmount: item.sharesAmount,
+    expectedRevenue: Number((item.expectedRevenue ?? 0).toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: Number((actualRemainingAmount - expectedRemainingClamped).toFixed(2)),
+    note: item.note,
+    syncedAt: item.syncedAt,
     synced: item.synced,
     source: 'LOCAL',
   };
@@ -642,6 +829,7 @@ function mapApiExpenseToRow(item: ApiExpense): ExpenseRow {
     category: item.category,
     description: item.description,
     amount: item.amount,
+    imageUrl: item.imageUrl,
     note: item.note,
     synced: true,
   };
@@ -654,6 +842,8 @@ function mapLocalExpenseToRow(item: LocalExpense): ExpenseRow {
     category: item.category,
     description: item.description,
     amount: item.amount,
+    imageUrl: item.imageUrl,
+    localImageUri: item.localImageUri,
     note: item.note,
     synced: item.synced,
   };
@@ -779,6 +969,16 @@ export default function App() {
   const isPortrait = height >= width;
   const isPortraitMobile = !isDesktop && height >= width;
   const showPageSwitchControls = !isDesktop || isPortrait;
+  const tapPlayer = useAudioPlayer(CLICK_SOUND_SOURCE);
+
+  const playTapSound = useCallback(() => {
+    try {
+      void tapPlayer.seekTo(0);
+      tapPlayer.play();
+    } catch {
+      // Ignore click sound failures to keep button interactions responsive.
+    }
+  }, [tapPlayer]);
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -803,7 +1003,6 @@ export default function App() {
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discountInput, setDiscountInput] = useState('0');
-  const [taxInput, setTaxInput] = useState('0');
   const [posPadInput, setPosPadInput] = useState('');
   const [pendingMultiplier, setPendingMultiplier] = useState<number | null>(null);
   const [pendingAmountValue, setPendingAmountValue] = useState<number | null>(null);
@@ -822,6 +1021,9 @@ export default function App() {
   const [remoteExpenses, setRemoteExpenses] = useState<ApiExpense[]>([]);
   const [remotePurchases, setRemotePurchases] = useState<ApiPurchase[]>([]);
   const [selectedOrderInvoice, setSelectedOrderInvoice] = useState<OrderHistoryRow | null>(null);
+  const [selectedSettlementDetail, setSelectedSettlementDetail] =
+    useState<SettlementDayDetail | null>(null);
+  const [selectedExpenseDetails, setSelectedExpenseDetails] = useState<ExpenseRow | null>(null);
 
   const [expenseEditingId, setExpenseEditingId] = useState<string | null>(null);
   const [expenseDateInput, setExpenseDateInput] = useState(new Date().toISOString().slice(0, 10));
@@ -833,6 +1035,8 @@ export default function App() {
   const [expenseDescriptionInput, setExpenseDescriptionInput] = useState('');
   const [expenseAmountInput, setExpenseAmountInput] = useState('');
   const [expenseNoteInput, setExpenseNoteInput] = useState('');
+  const [expenseImageLocalUri, setExpenseImageLocalUri] = useState<string | null>(null);
+  const [isPickingExpenseImage, setIsPickingExpenseImage] = useState(false);
   const [expenseFilterCategory, setExpenseFilterCategory] = useState<'ALL' | ExpenseCategory>('ALL');
   const [expenseFilterFrom, setExpenseFilterFrom] = useState('');
   const [expenseFilterTo, setExpenseFilterTo] = useState('');
@@ -846,6 +1050,7 @@ export default function App() {
   const [products, setProducts] = useState<LocalProduct[]>(
     PRODUCT_CATALOG.map((item) => toLocalProduct(item)),
   );
+  const [productOrderByStore, setProductOrderByStore] = useState<Record<string, string[]>>({});
   const [todaySupplyInputs, setTodaySupplyInputs] = useState<Record<string, string>>({});
   const [isProductFormOpen, setIsProductFormOpen] = useState(false);
   const [productEditingId, setProductEditingId] = useState<string | null>(null);
@@ -870,6 +1075,7 @@ export default function App() {
   const [adminToDateInput, setAdminToDateInput] = useState('');
   const [adminDatePickerTarget, setAdminDatePickerTarget] = useState<'from' | 'to' | null>(null);
   const [adminDatePickerValue, setAdminDatePickerValue] = useState(new Date());
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   const authToken = session?.accessToken ?? '';
   const isAdmin = session?.user.role === 'ADMIN';
@@ -877,6 +1083,10 @@ export default function App() {
   const canManageInventory = isCashier || isAdmin;
   const canManageExpenses = isCashier || isAdmin;
   const assignedStoreId = session?.user.storeId ?? null;
+
+  useEffect(() => {
+    tapPlayer.volume = 0.48;
+  }, [tapPlayer]);
 
   const navItems = useMemo<NavItem[]>(
     () => [
@@ -888,6 +1098,16 @@ export default function App() {
       { key: 'orders', label: 'سجل الطلبات', subtitle: 'مراجعة اليوم' },
     ],
     [],
+  );
+
+  const mobileNavItems = useMemo<MobileNavItem[]>(
+    () => [
+      ...navItems,
+      ...(isAdmin
+        ? ([{ key: 'admin', label: 'لوحة التسوية', subtitle: 'إدارة الفروع' }] as MobileNavItem[])
+        : []),
+    ],
+    [isAdmin, navItems],
   );
 
   const activeScreenLabel = useMemo(() => {
@@ -953,6 +1173,15 @@ export default function App() {
     [selectedStoreId, stores],
   );
 
+  const orderedProductIdsForStore = useMemo(
+    () => productOrderByStore[selectedStoreId] ?? [],
+    [productOrderByStore, selectedStoreId],
+  );
+  const posProducts = useMemo(
+    () => sortProductsByLocalOrder(products, orderedProductIdsForStore),
+    [orderedProductIdsForStore, products],
+  );
+
   const subtotal = useMemo(
     () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0),
     [cart],
@@ -960,9 +1189,8 @@ export default function App() {
 
   const total = useMemo(() => {
     const discountValue = parseNumberInput(discountInput);
-    const taxValue = parseNumberInput(taxInput);
-    return Math.max(subtotal - discountValue + taxValue, 0);
-  }, [discountInput, subtotal, taxInput]);
+    return Math.max(subtotal - discountValue, 0);
+  }, [discountInput, subtotal]);
 
   const padAmountPreview = useMemo(() => {
     if (pendingAmountValue && pendingAmountValue > 0) {
@@ -1127,7 +1355,7 @@ export default function App() {
     [selectedStoreWithdrawals],
   );
 
-  const mergedOrderRows = useMemo(() => {
+  const allMergedOrderRows = useMemo(() => {
     const rows = new Map<string, OrderHistoryRow>();
 
     remoteOrders
@@ -1136,10 +1364,13 @@ export default function App() {
 
     selectedStoreOrders.forEach((item) => rows.set(item.clientOrderId, mapLocalOrderToRow(item)));
 
-    return Array.from(rows.values())
-      .sort((a, b) => b.orderedAt.localeCompare(a.orderedAt))
-      .slice(0, 12);
+    return Array.from(rows.values()).sort((a, b) => b.orderedAt.localeCompare(a.orderedAt));
   }, [remoteOrders, selectedStoreId, selectedStoreOrders]);
+
+  const mergedOrderRows = useMemo(
+    () => allMergedOrderRows.slice(0, 12),
+    [allMergedOrderRows],
+  );
 
   const mergedSettlementRows = useMemo(() => {
     const rows = new Map<string, SettlementHistoryRow>();
@@ -1284,6 +1515,100 @@ export default function App() {
         return true;
       }),
     [mergedPurchaseRows, purchaseFilterFrom, purchaseFilterProduct, purchaseFilterTo],
+  );
+
+  const openExpenseDetails = useCallback((item: ExpenseRow) => {
+    setSelectedExpenseDetails(item);
+  }, []);
+
+  const openSettlementDetails = useCallback(
+    (settlement: SettlementHistoryRow) => {
+      const dayOrders = allMergedOrderRows.filter(
+        (item) => item.orderedAt.slice(0, 10) === settlement.businessDate,
+      );
+      const dayExpenses = mergedExpenseRows.filter(
+        (item) => item.expenseDate === settlement.businessDate,
+      );
+      const dayPurchases = mergedPurchaseRows.filter(
+        (item) => item.purchaseDate === settlement.businessDate,
+      );
+      const employeeNameLookup = new Map(
+        selectedStoreEmployees.map((employee) => [employee.id, employee.name]),
+      );
+      const dayWithdrawals = selectedStoreWithdrawals
+        .filter((item) => item.withdrawalDate === settlement.businessDate)
+        .map((item) => ({
+          ...item,
+          employeeName: employeeNameLookup.get(item.employeeId) ?? item.employeeId,
+        }));
+
+      const salesAmount = dayOrders
+        .filter((item) => item.status === 'COMPLETED')
+        .reduce((sum, item) => sum + item.total, 0);
+      const refundAmount = dayOrders
+        .filter((item) => item.status === 'REFUNDED')
+        .reduce((sum, item) => sum + item.total, 0);
+      const netSalesAmount = Number((salesAmount - refundAmount).toFixed(2));
+      const expensesAmount = Number(
+        dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+      );
+      const purchasesAmount = Number(
+        dayPurchases.reduce((sum, item) => sum + item.totalCost, 0).toFixed(2),
+      );
+      const withdrawalsAmount = Number(
+        dayWithdrawals.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+      );
+
+      const expectedBeforeDistributionAmount = Number(
+        (settlement.expectedRevenue ?? 0).toFixed(2),
+      );
+      const distributedAmount = Number(
+        (settlement.cashBoxAmount + settlement.sharesAmount).toFixed(2),
+      );
+      const expectedRemainingAmount = Number(
+        Math.max(expectedBeforeDistributionAmount - distributedAmount, 0).toFixed(2),
+      );
+      const carryInAmount = Number(
+        (
+          expectedBeforeDistributionAmount -
+          (netSalesAmount - expensesAmount - purchasesAmount - withdrawalsAmount)
+        ).toFixed(2),
+      );
+      const actualRemainingAmount = Number(settlement.actualRemainingAmount.toFixed(2));
+      const differenceAmount = Number(
+        (actualRemainingAmount - expectedRemainingAmount).toFixed(2),
+      );
+
+      setSelectedSettlementDetail({
+        businessDate: settlement.businessDate,
+        orders: dayOrders,
+        expenses: dayExpenses,
+        purchases: dayPurchases,
+        withdrawals: dayWithdrawals,
+        note: settlement.note,
+        salesAmount: Number(salesAmount.toFixed(2)),
+        refundAmount: Number(refundAmount.toFixed(2)),
+        netSalesAmount,
+        expensesAmount,
+        purchasesAmount,
+        withdrawalsAmount,
+        carryInAmount,
+        expectedBeforeDistributionAmount,
+        distributedAmount,
+        expectedRemainingAmount,
+        actualRemainingAmount,
+        differenceAmount,
+        sharesAmount: Number(settlement.sharesAmount.toFixed(2)),
+        cashBoxAmount: Number(settlement.cashBoxAmount.toFixed(2)),
+      });
+    },
+    [
+      allMergedOrderRows,
+      mergedExpenseRows,
+      mergedPurchaseRows,
+      selectedStoreEmployees,
+      selectedStoreWithdrawals,
+    ],
   );
 
   const productSupplyRows = useMemo<ProductSupplyRow[]>(() => {
@@ -1919,10 +2244,62 @@ export default function App() {
           });
           markSettlementSynced(job.referenceId);
         } else if (entity === 'EXPENSE' && action === 'CREATE') {
-          await postExpense(authToken, job.payload as CreateExpensePayload);
+          let payload = job.payload as CreateExpensePayload;
+          const matchingExpense = expenses.find(
+            (item) => item.clientExpenseId === job.referenceId,
+          );
+          if (!payload.imageUrl && matchingExpense?.localImageUri) {
+            if (isRemoteUri(matchingExpense.localImageUri)) {
+              payload = { ...payload, imageUrl: matchingExpense.localImageUri };
+            } else {
+              const uploadedImageUrl = await uploadExpenseImageToCloudinary(
+                authToken,
+                matchingExpense.localImageUri,
+              );
+              payload = { ...payload, imageUrl: uploadedImageUrl };
+            }
+
+            setExpenses((previous) => {
+              const next = previous.map((item) =>
+                item.clientExpenseId === job.referenceId
+                  ? { ...item, imageUrl: payload.imageUrl }
+                  : item,
+              );
+              void saveArray(STORAGE_KEYS.expenses, next);
+              return next;
+            });
+          }
+
+          await postExpense(authToken, payload);
           markExpenseSynced(job.referenceId);
         } else if (entity === 'EXPENSE' && action === 'UPDATE') {
-          await patchExpense(authToken, job.referenceId, job.payload as UpdateExpensePayload);
+          let payload = job.payload as UpdateExpensePayload;
+          const matchingExpense = expenses.find(
+            (item) => item.clientExpenseId === job.referenceId,
+          );
+          if (!payload.imageUrl && matchingExpense?.localImageUri) {
+            if (isRemoteUri(matchingExpense.localImageUri)) {
+              payload = { ...payload, imageUrl: matchingExpense.localImageUri };
+            } else {
+              const uploadedImageUrl = await uploadExpenseImageToCloudinary(
+                authToken,
+                matchingExpense.localImageUri,
+              );
+              payload = { ...payload, imageUrl: uploadedImageUrl };
+            }
+
+            setExpenses((previous) => {
+              const next = previous.map((item) =>
+                item.clientExpenseId === job.referenceId
+                  ? { ...item, imageUrl: payload.imageUrl }
+                  : item,
+              );
+              void saveArray(STORAGE_KEYS.expenses, next);
+              return next;
+            });
+          }
+
+          await patchExpense(authToken, job.referenceId, payload);
           markExpenseSynced(job.referenceId);
         } else if (entity === 'EXPENSE' && action === 'DELETE') {
           await deleteExpense(authToken, job.referenceId);
@@ -1981,6 +2358,7 @@ export default function App() {
   }, [
     isOnline,
     isSyncing,
+    expenses,
     markExpenseSynced,
     markOrderSynced,
     markProductSynced,
@@ -2071,6 +2449,7 @@ export default function App() {
           cachedEmployees,
           cachedEmployeeAbsences,
           cachedEmployeeWithdrawals,
+          cachedProductOrderByStore,
           cachedQueue,
         ] =
           await Promise.all([
@@ -2085,6 +2464,7 @@ export default function App() {
             loadArray<Employee>(STORAGE_KEYS.employees),
             loadArray<EmployeeAbsenceEntry>(STORAGE_KEYS.employeeAbsences),
             loadArray<EmployeeWithdrawalEntry>(STORAGE_KEYS.employeeWithdrawals),
+            loadObject<Record<string, string[]>>(PRODUCT_ORDER_STORAGE_KEY),
             loadArray<SyncJob>(STORAGE_KEYS.syncQueue),
           ]);
 
@@ -2128,6 +2508,7 @@ export default function App() {
         setEmployees(cachedEmployees);
         setEmployeeAbsences(cachedEmployeeAbsences);
         setEmployeeWithdrawals(cachedEmployeeWithdrawals);
+        setProductOrderByStore(cachedProductOrderByStore ?? {});
         setQueue(cachedQueue);
         setSelectedStoreId(initialStoreId);
       } catch {
@@ -2146,6 +2527,7 @@ export default function App() {
         setEmployees([]);
         setEmployeeAbsences([]);
         setEmployeeWithdrawals([]);
+        setProductOrderByStore({});
         setQueue([]);
         setSelectedStoreId(FALLBACK_STORES[0]?.id ?? '');
         setStatusMessage('حدث خطأ في تحميل البيانات المحلية. تم تشغيل النظام بالوضع الافتراضي.');
@@ -2174,6 +2556,10 @@ export default function App() {
   useEffect(() => {
     void saveArray(STORAGE_KEYS.products, products);
   }, [products]);
+
+  useEffect(() => {
+    void saveObject(PRODUCT_ORDER_STORAGE_KEY, productOrderByStore);
+  }, [productOrderByStore]);
 
   useEffect(() => {
     void saveArray(STORAGE_KEYS.employees, employees);
@@ -2221,6 +2607,16 @@ export default function App() {
   }, [activeScreen, isAdmin, navItems]);
 
   useEffect(() => {
+    setIsMobileNavOpen(false);
+  }, [activeScreen]);
+
+  useEffect(() => {
+    if (isDesktop && isMobileNavOpen) {
+      setIsMobileNavOpen(false);
+    }
+  }, [isDesktop, isMobileNavOpen]);
+
+  useEffect(() => {
     if (isCashier && assignedStoreId) {
       setSelectedStoreId(assignedStoreId);
     }
@@ -2233,6 +2629,8 @@ export default function App() {
     setTawasiCapitalInput('');
     setTawasiSellPriceInput('');
     setSelectedOrderInvoice(null);
+    setSelectedExpenseDetails(null);
+    setSelectedSettlementDetail(null);
   }, [selectedStoreId]);
 
   useEffect(() => {
@@ -2240,6 +2638,24 @@ export default function App() {
       setSelectedStoreId(stores[0].id);
     }
   }, [selectedStoreId, stores]);
+
+  useEffect(() => {
+    const validIds = new Set(products.map((item) => item.id));
+    setProductOrderByStore((previous) => {
+      let changed = false;
+      const next: Record<string, string[]> = {};
+
+      Object.entries(previous).forEach(([storeId, orderedIds]) => {
+        const filtered = orderedIds.filter((id) => validIds.has(id));
+        if (filtered.length !== orderedIds.length) {
+          changed = true;
+        }
+        next[storeId] = filtered;
+      });
+
+      return changed ? next : previous;
+    });
+  }, [products]);
 
   useEffect(() => {
     const normalizedCurrent = normalizeExpenseCategoryValue(expenseCategoryInput);
@@ -2540,6 +2956,46 @@ export default function App() {
     setPendingAmountValue(null);
   };
 
+  const addMiscAmountToCart = () => {
+    if (!posPadInput.trim()) {
+      setStatusMessage('أدخل مبلغ المنوعات من لوحة الأرقام أولاً.');
+      return;
+    }
+
+    const miscAmount = parseNumberInput(posPadInput);
+    if (miscAmount <= 0) {
+      setStatusMessage('مبلغ المنوعات غير صالح.');
+      return;
+    }
+
+    const miscItem: CartItem = {
+      id: MISC_CART_ITEM_ID,
+      name: MISC_CART_ITEM_NAME,
+      unitType: 'PIECE',
+      quantity: 1,
+      price: miscAmount,
+      costPrice: 0,
+    };
+
+    setCart((previous) => [...previous, miscItem]);
+    setPosPadInput('');
+    setPendingMultiplier(null);
+    setPendingAmountValue(null);
+    setStatusMessage(`تمت إضافة منوعات بقيمة ${formatMoney(miscAmount)}.`);
+  };
+
+  const handlePosProductDragEnd = ({ data }: { data: LocalProduct[] }) => {
+    if (!selectedStoreId) {
+      return;
+    }
+
+    setProductOrderByStore((previous) => ({
+      ...previous,
+      [selectedStoreId]: data.map((item) => item.id),
+    }));
+    setStatusMessage('تم حفظ ترتيب المنتجات محلياً على هذا الجهاز.');
+  };
+
   const decreaseProductInCart = (productId: string) => {
     setCart((previous) =>
       previous
@@ -2558,7 +3014,6 @@ export default function App() {
 
     setCart([]);
     setDiscountInput('0');
-    setTaxInput('0');
     setPosPadInput('');
     setPendingMultiplier(null);
     setPendingAmountValue(null);
@@ -2593,7 +3048,7 @@ export default function App() {
       paymentMethod: 'CASH',
       subtotal,
       discount: parseNumberInput(discountInput),
-      tax: parseNumberInput(taxInput),
+      tax: 0,
       total,
       items: cart.map((item) => ({
         productName: item.name,
@@ -2618,7 +3073,6 @@ export default function App() {
 
     setCart([]);
     setDiscountInput('0');
-    setTaxInput('0');
     setPosPadInput('');
     setPendingMultiplier(null);
     setPendingAmountValue(null);
@@ -2847,6 +3301,44 @@ export default function App() {
     setExpenseDescriptionInput('');
     setExpenseAmountInput('');
     setExpenseNoteInput('');
+    setExpenseImageLocalUri(null);
+  };
+
+  const pickExpenseImage = async () => {
+    if (isPickingExpenseImage) {
+      return;
+    }
+
+    setIsPickingExpenseImage(true);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setStatusMessage('يجب منح صلاحية الوصول للصور لإرفاق صورة المصروف.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.75,
+      });
+
+      if (result.canceled || !result.assets[0]?.uri) {
+        return;
+      }
+
+      setExpenseImageLocalUri(result.assets[0].uri);
+      setStatusMessage('تم اختيار صورة المصروف.');
+    } catch {
+      setStatusMessage('تعذر اختيار الصورة حالياً.');
+    } finally {
+      setIsPickingExpenseImage(false);
+    }
+  };
+
+  const clearExpenseImage = () => {
+    setExpenseImageLocalUri(null);
+    setStatusMessage('تم حذف صورة المصروف من النموذج.');
   };
 
   const addExpenseCategoryOption = () => {
@@ -2887,12 +3379,14 @@ export default function App() {
   };
 
   const beginExpenseEdit = (item: ExpenseRow) => {
+    setSelectedExpenseDetails(null);
     setExpenseEditingId(item.clientExpenseId);
     setExpenseDateInput(item.expenseDate);
     setExpenseCategoryInput(item.category);
     setExpenseDescriptionInput(item.description);
     setExpenseAmountInput(String(item.amount));
     setExpenseNoteInput(item.note ?? '');
+    setExpenseImageLocalUri(item.localImageUri ?? item.imageUrl ?? null);
     setActiveScreen('expenses');
   };
 
@@ -2926,9 +3420,16 @@ export default function App() {
 
     const expenseCategoryValue = normalizeExpenseCategoryValue(expenseCategoryInput) || 'OTHER';
     const now = new Date().toISOString();
+    const trimmedNote = expenseNoteInput.trim() || undefined;
+    const imagePreviewUri = expenseImageLocalUri?.trim() || '';
 
     if (!expenseEditingId) {
       const clientExpenseId = makeId('exp');
+      const persistedLocalImageUri =
+        imagePreviewUri && !isRemoteUri(imagePreviewUri)
+          ? await persistExpenseImageLocally(imagePreviewUri, clientExpenseId)
+          : undefined;
+
       const payload: CreateExpensePayload = {
         clientExpenseId,
         storeId: effectiveStoreId,
@@ -2936,12 +3437,14 @@ export default function App() {
         category: expenseCategoryValue,
         description: expenseDescriptionInput.trim(),
         amount,
-        note: expenseNoteInput.trim() || undefined,
+        imageUrl: imagePreviewUri && isRemoteUri(imagePreviewUri) ? imagePreviewUri : undefined,
+        note: trimmedNote,
         syncedAt: now,
       };
 
       const localRecord: LocalExpense = {
         ...payload,
+        localImageUri: persistedLocalImageUri,
         synced: false,
         createdLocallyAt: now,
         updatedLocallyAt: now,
@@ -2965,7 +3468,25 @@ export default function App() {
 
       if (isOnline && authToken) {
         try {
-          await postExpense(authToken, payload);
+          let payloadToSend = payload;
+          if (localRecord.localImageUri) {
+            const uploadedImageUrl = await uploadExpenseImageToCloudinary(
+              authToken,
+              localRecord.localImageUri,
+            );
+            payloadToSend = { ...payloadToSend, imageUrl: uploadedImageUrl };
+            setExpenses((previous) => {
+              const next = previous.map((item) =>
+                item.clientExpenseId === clientExpenseId
+                  ? { ...item, imageUrl: uploadedImageUrl }
+                  : item,
+              );
+              void saveArray(STORAGE_KEYS.expenses, next);
+              return next;
+            });
+          }
+
+          await postExpense(authToken, payloadToSend);
           markExpenseSynced(clientExpenseId);
           await refreshExpensesData();
           setStatusMessage('تم حفظ المصروف في السيرفر.');
@@ -2982,12 +3503,25 @@ export default function App() {
       return;
     }
 
+    const existingLocalRecord = expenses.find((item) => item.clientExpenseId === expenseEditingId);
+    const persistedLocalImageUri =
+      imagePreviewUri && !isRemoteUri(imagePreviewUri)
+        ? await persistExpenseImageLocally(imagePreviewUri, expenseEditingId)
+        : undefined;
+
+    const hasNewLocalImage = Boolean(persistedLocalImageUri);
     const updatePayload: UpdateExpensePayload = {
       expenseDate: expenseDateInput,
       category: expenseCategoryValue,
       description: expenseDescriptionInput.trim(),
       amount,
-      note: expenseNoteInput.trim() || undefined,
+      imageUrl:
+        imagePreviewUri && isRemoteUri(imagePreviewUri)
+          ? imagePreviewUri
+          : hasNewLocalImage
+            ? undefined
+            : existingLocalRecord?.imageUrl,
+      note: trimmedNote,
       syncedAt: now,
     };
 
@@ -2997,6 +3531,7 @@ export default function App() {
           ? {
               ...item,
               ...updatePayload,
+              localImageUri: persistedLocalImageUri,
               synced: false,
               updatedLocallyAt: now,
             }
@@ -3018,7 +3553,25 @@ export default function App() {
 
     if (isOnline && authToken) {
       try {
-        await patchExpense(authToken, expenseEditingId, updatePayload);
+        let payloadToSend = updatePayload;
+        if (persistedLocalImageUri) {
+          const uploadedImageUrl = await uploadExpenseImageToCloudinary(
+            authToken,
+            persistedLocalImageUri,
+          );
+          payloadToSend = { ...payloadToSend, imageUrl: uploadedImageUrl };
+          setExpenses((previous) => {
+            const next = previous.map((item) =>
+              item.clientExpenseId === expenseEditingId
+                ? { ...item, imageUrl: uploadedImageUrl }
+                : item,
+            );
+            void saveArray(STORAGE_KEYS.expenses, next);
+            return next;
+          });
+        }
+
+        await patchExpense(authToken, expenseEditingId, payloadToSend);
         markExpenseSynced(expenseEditingId);
         await refreshExpensesData();
         setStatusMessage('تم تحديث المصروف على السيرفر.');
@@ -3041,6 +3594,9 @@ export default function App() {
     }
 
     const now = new Date().toISOString();
+    if (selectedExpenseDetails?.clientExpenseId === clientExpenseId) {
+      setSelectedExpenseDetails(null);
+    }
     setExpenses((previous) => {
       const next = previous.filter((item) => item.clientExpenseId !== clientExpenseId);
       void saveArray(STORAGE_KEYS.expenses, next);
@@ -3267,6 +3823,12 @@ export default function App() {
     const now = new Date().toISOString();
     setProducts((previous) => previous.filter((item) => item.id !== productId));
     setCart((previous) => previous.filter((item) => item.id !== productId));
+    if (selectedStoreId) {
+      setProductOrderByStore((previous) => ({
+        ...previous,
+        [selectedStoreId]: (previous[selectedStoreId] ?? []).filter((id) => id !== productId),
+      }));
+    }
     setTodaySupplyInputs((previous) => {
       const next = { ...previous };
       delete next[productId];
@@ -3809,71 +4371,85 @@ export default function App() {
 
   if (isBootstrapping) {
     return (
-      <View style={styles.bootRoot}>
-        <StatusBar style="dark" />
-        {renderPastelBackdrop()}
-        <ActivityIndicator size="large" color="#ec4899" />
-        <Text style={styles.bootText}>يتم تجهيز نظام {BRAND_NAME}...</Text>
-      </View>
+      <TapSoundContext.Provider value={playTapSound}>
+        <GestureHandlerRootView style={styles.flexOne}>
+          <View style={styles.bootRoot}>
+            <StatusBar style="dark" />
+            {renderPastelBackdrop()}
+            <ActivityIndicator size="large" color="#ec4899" />
+            <Text style={styles.bootText}>يتم تجهيز نظام {BRAND_NAME}...</Text>
+          </View>
+        </GestureHandlerRootView>
+      </TapSoundContext.Provider>
     );
   }
 
   if (!session) {
     return (
-      <View style={styles.loginRoot}>
-        <StatusBar style="dark" />
-        {renderPastelBackdrop()}
-        <View style={styles.loginCircleOne} />
-        <View style={styles.loginCircleTwo} />
-        <View style={styles.loginCard}>
-          <Text style={styles.loginBrand}>{BRAND_NAME}</Text>
-          <Text style={styles.loginTitle}>{BRAND_SIGNATURE}</Text>
-          <Text style={styles.loginHint}>
-            {BRAND_CATEGORY} - استخدم حساب الإدارة أو الكاشير المرتبط بالفرع
-          </Text>
-          <Text style={styles.loginApiHint}>API: {API_BASE_URL}</Text>
+      <TapSoundContext.Provider value={playTapSound}>
+        <GestureHandlerRootView style={styles.flexOne}>
+          <View style={styles.loginRoot}>
+            <StatusBar style="dark" />
+            {renderPastelBackdrop()}
+            <View style={styles.loginCircleOne} />
+            <View style={styles.loginCircleTwo} />
+            <View style={styles.loginCard}>
+              <Text style={styles.loginBrand}>{BRAND_NAME}</Text>
+              <Text style={styles.loginTitle}>{BRAND_SIGNATURE}</Text>
+              <Text style={styles.loginHint}>
+                {BRAND_CATEGORY} - استخدم حساب الإدارة أو الكاشير المرتبط بالفرع
+              </Text>
+              <Text style={styles.loginApiHint}>API: {API_BASE_URL}</Text>
 
-          <TextInput
-            style={styles.loginInput}
-            value={usernameInput}
-            onChangeText={setUsernameInput}
-            placeholder="اسم المستخدم"
-            placeholderTextColor="#c092b3"
-            autoCapitalize="none"
-          />
-          <TextInput
-            style={styles.loginInput}
-            value={passwordInput}
-            onChangeText={setPasswordInput}
-            placeholder="كلمة المرور"
-            placeholderTextColor="#c092b3"
-            secureTextEntry
-          />
+              <TextInput
+                style={styles.loginInput}
+                value={usernameInput}
+                onChangeText={setUsernameInput}
+                placeholder="اسم المستخدم"
+                placeholderTextColor="#c092b3"
+                autoCapitalize="none"
+              />
+              <TextInput
+                style={styles.loginInput}
+                value={passwordInput}
+                onChangeText={setPasswordInput}
+                placeholder="كلمة المرور"
+                placeholderTextColor="#c092b3"
+                secureTextEntry
+              />
 
-          <Pressable style={styles.loginButton} onPress={() => void loginUser()} disabled={isLoggingIn}>
-            <Text style={styles.loginButtonText}>{isLoggingIn ? 'جاري الدخول...' : 'دخول'}</Text>
-          </Pressable>
+              <Pressable
+                style={styles.loginButton}
+                onPress={() => void loginUser()}
+                disabled={isLoggingIn}
+              >
+                <Text style={styles.loginButtonText}>{isLoggingIn ? 'جاري الدخول...' : 'دخول'}</Text>
+              </Pressable>
 
-          <View style={styles.loginDemoBox}>
-            <Text style={styles.loginDemoTitle}>حسابات تجريبية</Text>
-            <Text style={styles.loginDemoText}>مها / abcd</Text>
-            <Text style={styles.loginDemoText}>محافظة / 0000</Text>
-            <Text style={styles.loginDemoText}>فرقان / 1111</Text>
-            <Text style={styles.loginDemoText}>اندلس / 5555</Text>
+              <View style={styles.loginDemoBox}>
+                <Text style={styles.loginDemoTitle}>حسابات تجريبية</Text>
+                <Text style={styles.loginDemoText}>مها / abcd</Text>
+                <Text style={styles.loginDemoText}>محافظة / 0000</Text>
+                <Text style={styles.loginDemoText}>فرقان / 1111</Text>
+                <Text style={styles.loginDemoText}>اندلس / 5555</Text>
+              </View>
+
+              <Text style={styles.loginStatus}>{statusMessage}</Text>
+            </View>
           </View>
-
-          <Text style={styles.loginStatus}>{statusMessage}</Text>
-        </View>
-      </View>
+        </GestureHandlerRootView>
+      </TapSoundContext.Provider>
     );
   }
 
   return (
-    <View style={styles.appRoot}>
-      <StatusBar style="dark" />
-      {renderPastelBackdrop()}
+    <TapSoundContext.Provider value={playTapSound}>
+      <GestureHandlerRootView style={styles.flexOne}>
+        <View style={styles.appRoot}>
+          <StatusBar style="dark" />
+          {renderPastelBackdrop()}
 
-      <View style={[styles.shell, !isDesktop && styles.shellMobile]}>
+          <View style={[styles.shell, !isDesktop && styles.shellMobile]}>
         <View
           style={[
             styles.mainPane,
@@ -3895,6 +4471,14 @@ export default function App() {
               <View style={[styles.badge, isOnline ? styles.badgeOnline : styles.badgeOffline]}>
                 <Text style={styles.badgeText}>{isOnline ? 'متصل' : 'أوفلاين'}</Text>
               </View>
+              {!isDesktop && (
+                <Pressable
+                  style={styles.mobileNavButton}
+                  onPress={() => setIsMobileNavOpen(true)}
+                >
+                  <Text style={styles.mobileNavButtonText}>☰ الصفحات</Text>
+                </Pressable>
+              )}
               {isAdmin && (
                 <Pressable style={styles.adminButton} onPress={() => setActiveScreen('admin')}>
                   <Text style={styles.adminButtonText}>لوحة التسوية</Text>
@@ -3957,36 +4541,56 @@ export default function App() {
               <View style={[styles.posWorkspace, !isPosSplit && styles.posWorkspaceMobile]}>
                 <View style={[styles.section, styles.posSection, styles.posProductsPane, !isPosSplit && styles.posProductsPaneMobile]}>
                   <Text style={[styles.sectionTitle, styles.posSectionTitle]}>منتجات سريعة</Text>
-                  {products.length === 0 ? (
+                  {posProducts.length === 0 ? (
                     <Text style={styles.emptyText}>لا يوجد منتجات بعد. أضف منتجات من صفحة التوريدات.</Text>
                   ) : (
-                    <View style={styles.productsGridCompact}>
-                      {products.map((product) => (
-                        <View
-                          key={product.id}
-                          style={[styles.productCardCompact, !isPosSplit && styles.productCardCompactMobile]}
-                        >
-                          <Text style={styles.productName} numberOfLines={2}>
-                            {product.name}
-                          </Text>
-                          <Text style={styles.productPrice}>{formatMoney(product.price)}</Text>
-                          <View style={styles.productActions}>
+                    <>
+                      <Text style={styles.orderRowMeta}>اضغط على المنتج للإضافة. سحب مطوّل على ↕ لتغيير الترتيب.</Text>
+                      <DraggableFlatList
+                        data={posProducts}
+                        keyExtractor={(item) => item.id}
+                        onDragEnd={handlePosProductDragEnd}
+                        renderItem={({ item, drag, isActive }: RenderItemParams<LocalProduct>) => (
+                          <View
+                            style={[
+                              styles.productCardCompact,
+                              !isPosSplit && styles.productCardCompactMobile,
+                              isActive && styles.productCardDragging,
+                            ]}
+                          >
+                            <View style={styles.productCardHeadRow}>
+                              <Pressable
+                                style={styles.dragHandleButton}
+                                onLongPress={drag}
+                                delayLongPress={140}
+                              >
+                                <Text style={styles.dragHandleText}>↕</Text>
+                              </Pressable>
+                              <Pressable
+                                style={styles.smallButtonGhostCompact}
+                                onPress={() => decreaseProductInCart(item.id)}
+                              >
+                                <Text style={styles.smallButtonGhostText}>-</Text>
+                              </Pressable>
+                            </View>
                             <Pressable
-                              style={styles.smallButtonGhostCompact}
-                              onPress={() => decreaseProductInCart(product.id)}
+                              style={styles.productTapArea}
+                              onPress={() => addProductToCart(item.id)}
                             >
-                              <Text style={styles.smallButtonGhostText}>-</Text>
-                            </Pressable>
-                            <Pressable
-                              style={styles.smallButtonSolidCompact}
-                              onPress={() => addProductToCart(product.id)}
-                            >
-                              <Text style={styles.smallButtonSolidText}>+</Text>
+                              <Text style={styles.productName} numberOfLines={2}>
+                                {item.name}
+                              </Text>
+                              <Text style={styles.productPrice}>{formatMoney(item.price)}</Text>
                             </Pressable>
                           </View>
-                        </View>
-                      ))}
-                    </View>
+                        )}
+                        numColumns={3}
+                        scrollEnabled={false}
+                        contentContainerStyle={styles.productsGridCompact}
+                        columnWrapperStyle={styles.productGridRow}
+                        activationDistance={14}
+                      />
+                    </>
                   )}
                 </View>
 
@@ -4022,7 +4626,10 @@ export default function App() {
 
                     <View style={styles.padActionRow}>
                       <Pressable style={styles.padActionButton} onPress={applyDiscountFromPad}>
-                        <Text style={styles.padActionText}>حسم</Text>
+                        <Text style={styles.padActionText}>حسم+</Text>
+                      </Pressable>
+                      <Pressable style={styles.padActionButton} onPress={addMiscAmountToCart}>
+                        <Text style={styles.padActionText}>المنوعات</Text>
                       </Pressable>
                       <Pressable style={styles.padActionButton} onPress={roundPadValue}>
                         <Text style={styles.padActionText}>مدور</Text>
@@ -4052,38 +4659,35 @@ export default function App() {
 
                   <View style={[styles.section, styles.posSection]}>
                     <Text style={[styles.sectionTitle, styles.posSectionTitle]}>سلة الطلب</Text>
-                    {cart.length === 0 ? (
-                      <Text style={styles.emptyText}>لا يوجد عناصر في السلة.</Text>
-                    ) : (
-                      cart.map((item) => (
-                        <View key={item.id} style={styles.cartItemRow}>
-                          <Text style={styles.cartItemName}>{item.name}</Text>
-                          <Text style={styles.cartItemQty}>x{formatQuantity(item.quantity)}</Text>
-                          <Text style={styles.cartItemPrice}>
-                            {formatMoney(item.price * item.quantity)}
-                          </Text>
-                        </View>
-                      ))
-                    )}
-
-                    <View style={styles.inputRow}>
-                      <TextInput
-                        style={styles.input}
-                        value={discountInput}
-                        onChangeText={setDiscountInput}
-                        keyboardType="decimal-pad"
-                        placeholder="الخصم"
-                        placeholderTextColor="#d7b3c4"
-                      />
-                      <TextInput
-                        style={styles.input}
-                        value={taxInput}
-                        onChangeText={setTaxInput}
-                        keyboardType="decimal-pad"
-                        placeholder="الضريبة"
-                        placeholderTextColor="#d7b3c4"
-                      />
+                    <View style={styles.cartListContainer}>
+                      {cart.length === 0 ? (
+                        <Text style={styles.emptyText}>لا يوجد عناصر في السلة.</Text>
+                      ) : (
+                        <ScrollView style={styles.cartListScroll} nestedScrollEnabled>
+                          {cart.map((item, index) => (
+                            <View
+                              key={`${item.id}-${index}`}
+                              style={styles.cartItemRow}
+                            >
+                              <Text style={styles.cartItemName}>{item.name}</Text>
+                              <Text style={styles.cartItemQty}>x{formatQuantity(item.quantity)}</Text>
+                              <Text style={styles.cartItemPrice}>
+                                {formatMoney(item.price * item.quantity)}
+                              </Text>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      )}
                     </View>
+
+                    <TextInput
+                      style={styles.inputFull}
+                      value={discountInput}
+                      onChangeText={setDiscountInput}
+                      keyboardType="decimal-pad"
+                      placeholder="حسم+"
+                      placeholderTextColor="#d7b3c4"
+                    />
 
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryText}>المجموع الفرعي: {formatMoney(subtotal)}</Text>
@@ -4515,6 +5119,31 @@ export default function App() {
                     placeholder="ملاحظة (اختياري)"
                     placeholderTextColor="#d7b3c4"
                   />
+                  <View style={styles.rowActionButtons}>
+                    <Pressable
+                      style={[styles.smallRefreshButton, isPickingExpenseImage && styles.buttonDisabled]}
+                      disabled={isPickingExpenseImage}
+                      onPress={() => void pickExpenseImage()}
+                    >
+                      <Text style={styles.smallRefreshText}>
+                        {isPickingExpenseImage ? 'جاري فتح الصور...' : 'إضافة صورة'}
+                      </Text>
+                    </Pressable>
+                    {expenseImageLocalUri ? (
+                      <Pressable style={styles.dangerButton} onPress={clearExpenseImage}>
+                        <Text style={styles.dangerButtonText}>حذف الصورة</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                  {expenseImageLocalUri ? (
+                    <View style={styles.expenseImagePreviewBox}>
+                      <Image
+                        source={{ uri: expenseImageLocalUri }}
+                        style={styles.expenseImagePreview}
+                        resizeMode="cover"
+                      />
+                    </View>
+                  ) : null}
 
                   <View style={styles.sectionActions}>
                     <Pressable
@@ -4605,7 +5234,11 @@ export default function App() {
                     <Text style={styles.emptyText}>لا يوجد قيود مصاريف.</Text>
                   ) : (
                     filteredExpenseRows.map((item) => (
-                      <View key={item.clientExpenseId} style={styles.orderRow}>
+                      <Pressable
+                        key={item.clientExpenseId}
+                        style={styles.orderRow}
+                        onPress={() => openExpenseDetails(item)}
+                      >
                         <View style={styles.orderRowMain}>
                           <Text style={styles.orderRowId}>{item.description}</Text>
                           <Text style={styles.orderRowItems}>{toExpenseCategoryLabel(item.category)}</Text>
@@ -4617,23 +5250,32 @@ export default function App() {
                           </Text>
                         </View>
                         <Text style={styles.orderRowMeta}>{item.expenseDate}</Text>
+                        {item.imageUrl || item.localImageUri ? (
+                          <Text style={styles.orderRowHint}>اضغط لعرض صورة المصروف</Text>
+                        ) : null}
                         {canManageExpenses && (
                           <View style={styles.rowActionButtons}>
                             <Pressable
                               style={styles.smallRefreshButton}
-                              onPress={() => beginExpenseEdit(item)}
+                              onPress={(event) => {
+                                event.stopPropagation();
+                                beginExpenseEdit(item);
+                              }}
                             >
                               <Text style={styles.smallRefreshText}>تعديل</Text>
                             </Pressable>
                             <Pressable
                               style={styles.dangerButton}
-                              onPress={() => void deleteExpenseRecord(item.clientExpenseId)}
+                              onPress={(event) => {
+                                event.stopPropagation();
+                                void deleteExpenseRecord(item.clientExpenseId);
+                              }}
                             >
                               <Text style={styles.dangerButtonText}>حذف</Text>
                             </Pressable>
                           </View>
                         )}
-                      </View>
+                      </Pressable>
                     ))
                   )}
                 </View>
@@ -5093,7 +5735,11 @@ export default function App() {
                     <Text style={styles.emptyText}>لا يوجد تسويات مسجلة بعد.</Text>
                   ) : (
                     mergedSettlementRows.map((item) => (
-                      <View key={item.businessDate} style={styles.settlementRow}>
+                      <Pressable
+                        key={item.businessDate}
+                        style={styles.settlementRow}
+                        onPress={() => openSettlementDetails(item)}
+                      >
                         <View style={styles.orderRowMain}>
                           <Text style={styles.orderRowId}>{item.businessDate}</Text>
                           <Text style={item.synced ? styles.syncedText : styles.pendingText}>
@@ -5124,7 +5770,8 @@ export default function App() {
                             فرق: {formatMoney(item.differenceAmount)}
                           </Text>
                         </View>
-                      </View>
+                        <Text style={styles.orderRowHint}>اضغط لعرض تفاصيل التسوية</Text>
+                      </Pressable>
                     ))
                   )}
                 </View>
@@ -5248,6 +5895,59 @@ export default function App() {
               </View>
             )}
 
+            <Modal
+              visible={isMobileNavOpen}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setIsMobileNavOpen(false)}
+            >
+              <View style={styles.invoiceOverlay}>
+                <View style={styles.mobileNavModalCard}>
+                  <View style={styles.sectionHeaderInline}>
+                    <Text style={styles.sectionTitle}>الصفحات</Text>
+                    <Pressable
+                      style={styles.smallRefreshButton}
+                      onPress={() => setIsMobileNavOpen(false)}
+                    >
+                      <Text style={styles.smallRefreshText}>إغلاق</Text>
+                    </Pressable>
+                  </View>
+                  <ScrollView style={styles.mobileNavList}>
+                    {mobileNavItems.map((item) => (
+                      <Pressable
+                        key={item.key}
+                        style={[
+                          styles.mobileNavItem,
+                          activeScreen === item.key && styles.mobileNavItemActive,
+                        ]}
+                        onPress={() => {
+                          setActiveScreen(item.key as AppScreenKey);
+                          setIsMobileNavOpen(false);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.mobileNavItemLabel,
+                            activeScreen === item.key && styles.mobileNavItemLabelActive,
+                          ]}
+                        >
+                          {item.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.mobileNavItemSubLabel,
+                            activeScreen === item.key && styles.mobileNavItemSubLabelActive,
+                          ]}
+                        >
+                          {item.subtitle}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+            </Modal>
+
             {adminDatePickerTarget && Platform.OS === 'android' ? (
               <DateTimePicker
                 mode="date"
@@ -5286,6 +5986,195 @@ export default function App() {
                       <Text style={styles.datePickerConfirmText}>اعتماد التاريخ</Text>
                     </Pressable>
                   </View>
+                </View>
+              </View>
+            </Modal>
+
+            <Modal
+              visible={selectedExpenseDetails !== null}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setSelectedExpenseDetails(null)}
+            >
+              <View style={styles.invoiceOverlay}>
+                <View style={styles.invoiceCard}>
+                  <View style={styles.sectionHeaderInline}>
+                    <Text style={styles.sectionTitle}>تفاصيل المصروف</Text>
+                    <Pressable
+                      style={styles.smallRefreshButton}
+                      onPress={() => setSelectedExpenseDetails(null)}
+                    >
+                      <Text style={styles.smallRefreshText}>إغلاق</Text>
+                    </Pressable>
+                  </View>
+
+                  {selectedExpenseDetails ? (
+                    <>
+                      <Text style={styles.orderRowMeta}>التاريخ: {selectedExpenseDetails.expenseDate}</Text>
+                      <Text style={styles.orderRowMeta}>
+                        التصنيف: {toExpenseCategoryLabel(selectedExpenseDetails.category)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>الوصف: {selectedExpenseDetails.description}</Text>
+                      <Text style={styles.orderRowMeta}>
+                        المبلغ: {formatMoney(selectedExpenseDetails.amount)}
+                      </Text>
+                      {selectedExpenseDetails.note ? (
+                        <Text style={styles.orderRowMeta}>ملاحظة: {selectedExpenseDetails.note}</Text>
+                      ) : null}
+                      {selectedExpenseDetails.imageUrl || selectedExpenseDetails.localImageUri ? (
+                        <Image
+                          source={{
+                            uri:
+                              selectedExpenseDetails.imageUrl ??
+                              selectedExpenseDetails.localImageUri ??
+                              '',
+                          }}
+                          style={styles.expenseImageLargePreview}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <Text style={styles.emptyText}>لا توجد صورة لهذا المصروف.</Text>
+                      )}
+                    </>
+                  ) : null}
+                </View>
+              </View>
+            </Modal>
+
+            <Modal
+              visible={selectedSettlementDetail !== null}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setSelectedSettlementDetail(null)}
+            >
+              <View style={styles.invoiceOverlay}>
+                <View style={styles.invoiceCard}>
+                  <View style={styles.sectionHeaderInline}>
+                    <Text style={styles.sectionTitle}>تفاصيل تسوية اليوم</Text>
+                    <Pressable
+                      style={styles.smallRefreshButton}
+                      onPress={() => setSelectedSettlementDetail(null)}
+                    >
+                      <Text style={styles.smallRefreshText}>إغلاق</Text>
+                    </Pressable>
+                  </View>
+
+                  {selectedSettlementDetail ? (
+                    <>
+                      <Text style={styles.orderRowMeta}>التاريخ: {selectedSettlementDetail.businessDate}</Text>
+                      <Text style={styles.orderRowMeta}>
+                        مبيعات: {formatMoney(selectedSettlementDetail.salesAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        مرتجعات: {formatMoney(selectedSettlementDetail.refundAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        صافي: {formatMoney(selectedSettlementDetail.netSalesAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        مصاريف: {formatMoney(selectedSettlementDetail.expensesAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        توريدات: {formatMoney(selectedSettlementDetail.purchasesAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        سحوبات: {formatMoney(selectedSettlementDetail.withdrawalsAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        مدور: {formatMoney(selectedSettlementDetail.carryInAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        مفروض قبل التوزيع: {formatMoney(selectedSettlementDetail.expectedBeforeDistributionAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        الموزع (صندوق + حصص): {formatMoney(selectedSettlementDetail.distributedAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        صندوق: {formatMoney(selectedSettlementDetail.cashBoxAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        حصص: {formatMoney(selectedSettlementDetail.sharesAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        مفروض متبقي: {formatMoney(selectedSettlementDetail.expectedRemainingAmount)}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        فعلي متبقي: {formatMoney(selectedSettlementDetail.actualRemainingAmount)}
+                      </Text>
+                      <Text
+                        style={
+                          selectedSettlementDetail.differenceAmount === 0
+                            ? styles.settlementDiffNeutral
+                            : selectedSettlementDetail.differenceAmount > 0
+                              ? styles.settlementDiffPositive
+                              : styles.settlementDiffNegative
+                        }
+                      >
+                        فرق: {formatMoney(selectedSettlementDetail.differenceAmount)}
+                      </Text>
+                      {selectedSettlementDetail.note ? (
+                        <Text style={styles.orderRowMeta}>ملاحظة اليوم: {selectedSettlementDetail.note}</Text>
+                      ) : null}
+
+                      <Text style={styles.storeTableTitle}>فواتير البيع ({selectedSettlementDetail.orders.length})</Text>
+                      <ScrollView style={styles.invoiceItemsList}>
+                        {selectedSettlementDetail.orders.length === 0 ? (
+                          <Text style={styles.emptyText}>لا توجد فواتير في هذا اليوم.</Text>
+                        ) : (
+                          selectedSettlementDetail.orders.map((order) => (
+                            <View key={order.clientOrderId} style={styles.orderRow}>
+                              <Text style={styles.orderRowId}>{order.clientOrderId}</Text>
+                              <Text style={styles.orderRowMeta}>
+                                {toOrderStatusLabel(order.status)} - {formatMoney(order.total)}
+                              </Text>
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+
+                      <Text style={styles.storeTableTitle}>المصاريف ({selectedSettlementDetail.expenses.length})</Text>
+                      <ScrollView style={styles.invoiceItemsList}>
+                        {selectedSettlementDetail.expenses.length === 0 ? (
+                          <Text style={styles.emptyText}>لا توجد مصاريف.</Text>
+                        ) : (
+                          selectedSettlementDetail.expenses.map((expense) => (
+                            <View key={expense.clientExpenseId} style={styles.orderRow}>
+                              <Text style={styles.orderRowId}>{expense.description}</Text>
+                              <Text style={styles.orderRowMeta}>{formatMoney(expense.amount)}</Text>
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+
+                      <Text style={styles.storeTableTitle}>السحوبات ({selectedSettlementDetail.withdrawals.length})</Text>
+                      <ScrollView style={styles.invoiceItemsList}>
+                        {selectedSettlementDetail.withdrawals.length === 0 ? (
+                          <Text style={styles.emptyText}>لا توجد سحوبات.</Text>
+                        ) : (
+                          selectedSettlementDetail.withdrawals.map((withdrawal) => (
+                            <View key={withdrawal.id} style={styles.orderRow}>
+                              <Text style={styles.orderRowId}>{withdrawal.employeeName}</Text>
+                              <Text style={styles.orderRowMeta}>{formatMoney(withdrawal.amount)}</Text>
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+
+                      <Text style={styles.storeTableTitle}>التوريدات ({selectedSettlementDetail.purchases.length})</Text>
+                      <ScrollView style={styles.invoiceItemsList}>
+                        {selectedSettlementDetail.purchases.length === 0 ? (
+                          <Text style={styles.emptyText}>لا توجد توريدات.</Text>
+                        ) : (
+                          selectedSettlementDetail.purchases.map((purchase) => (
+                            <View key={purchase.clientPurchaseId} style={styles.orderRow}>
+                              <Text style={styles.orderRowId}>{purchase.productName}</Text>
+                              <Text style={styles.orderRowMeta}>{formatMoney(purchase.totalCost)}</Text>
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+                    </>
+                  ) : null}
                 </View>
               </View>
             </Modal>
@@ -5348,7 +6237,6 @@ export default function App() {
                         <Text style={styles.summaryText}>
                           الخصم: {formatMoney(selectedOrderInvoice.discount)}
                         </Text>
-                        <Text style={styles.summaryText}>الضريبة: {formatMoney(selectedOrderInvoice.tax)}</Text>
                         <Text style={styles.summaryText}>
                           الإجمالي: {formatMoney(selectedOrderInvoice.total)}
                         </Text>
@@ -5406,12 +6294,17 @@ export default function App() {
             </Pressable>
           </View>
         )}
-      </View>
-    </View>
+          </View>
+        </View>
+      </GestureHandlerRootView>
+    </TapSoundContext.Provider>
   );
 }
 
 const styles = StyleSheet.create({
+  flexOne: {
+    flex: 1,
+  },
   bootRoot: {
     flex: 1,
     backgroundColor: '#fffafc',
@@ -5641,15 +6534,15 @@ const styles = StyleSheet.create({
   },
   mainPane: {
     flex: 1,
-    paddingTop: 56,
+    paddingTop: 44,
     paddingHorizontal: 16,
   },
   mainPaneMobile: {
-    paddingTop: 28,
+    paddingTop: 22,
     paddingHorizontal: 13,
   },
   mainPanePortraitMobile: {
-    paddingTop: 32,
+    paddingTop: 24,
     paddingHorizontal: 14,
   },
   sidebar: {
@@ -5768,6 +6661,16 @@ const styles = StyleSheet.create({
   headerActions: {
     alignItems: 'flex-end',
     gap: 8,
+  },
+  mobileNavButton: {
+    backgroundColor: '#f8e8ee',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  mobileNavButtonText: {
+    color: '#9d174d',
+    fontWeight: '700',
   },
   adminButton: {
     backgroundColor: '#f8e8ee',
@@ -5907,8 +6810,8 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
   },
   posControlPane: {
-    flex: 1.35,
-    width: '57%',
+    flex: 1.05,
+    width: '50%',
     gap: 6,
   },
   posControlPaneMobile: {
@@ -5916,15 +6819,15 @@ const styles = StyleSheet.create({
     flex: 0,
   },
   posProductsPane: {
-    flex: 1,
-    width: '43%',
+    flex: 1.2,
+    width: '50%',
   },
   posProductsPaneMobile: {
     width: '100%',
     flex: 0,
   },
   posSection: {
-    padding: 8,
+    padding: 7,
     borderColor: '#f0d3e0',
     boxShadow: '0px 2px 6px rgba(198, 107, 144, 0.06)',
     elevation: 1,
@@ -5934,22 +6837,53 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   productsGridCompact: {
-    flexDirection: 'row-reverse',
-    flexWrap: 'wrap',
     gap: 4,
   },
+  productGridRow: {
+    justifyContent: 'space-between',
+  },
   productCardCompact: {
-    width: '31%',
+    width: '32%',
     minWidth: 0,
     backgroundColor: '#fbe8ee',
     borderRadius: 10,
-    padding: 6,
+    padding: 5,
     borderWidth: 1,
     borderColor: '#efcad4',
+    marginBottom: 5,
   },
   productCardCompactMobile: {
-    width: '31%',
+    width: '32%',
     minWidth: 0,
+  },
+  productCardDragging: {
+    opacity: 0.85,
+    borderColor: '#db2777',
+  },
+  productCardHeadRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  dragHandleButton: {
+    backgroundColor: '#f8e8ee',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#efcad4',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+  },
+  dragHandleText: {
+    color: '#9d174d',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  productTapArea: {
+    borderRadius: 8,
+    backgroundColor: '#fff6fa',
+    paddingHorizontal: 5,
+    paddingVertical: 4,
   },
   productCard: {
     width: '48%',
@@ -6037,6 +6971,13 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f2e2e8',
     paddingVertical: 8,
   },
+  cartListContainer: {
+    minHeight: 88,
+    maxHeight: 210,
+  },
+  cartListScroll: {
+    maxHeight: 210,
+  },
   cartItemName: {
     flex: 1,
     color: '#9d174d',
@@ -6101,7 +7042,7 @@ const styles = StyleSheet.create({
     color: '#9d174d',
     textAlign: 'right',
     fontWeight: '900',
-    fontSize: 18,
+    fontSize: 16,
     marginTop: 2,
   },
   padMetaRow: {
@@ -6125,7 +7066,7 @@ const styles = StyleSheet.create({
     minWidth: 40,
     backgroundColor: '#f8e8ee',
     borderRadius: 8,
-    paddingVertical: 6,
+    paddingVertical: 5,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#efcad4',
@@ -6133,7 +7074,7 @@ const styles = StyleSheet.create({
   padKeyText: {
     color: '#831843',
     fontWeight: '900',
-    fontSize: 15,
+    fontSize: 14,
     fontVariant: ['tabular-nums'],
   },
   padActionRow: {
@@ -6146,14 +7087,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8e8ee',
     borderRadius: 8,
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 7,
   },
   padActionButtonPrimary: {
     flex: 1,
     backgroundColor: '#ec4899',
     borderRadius: 8,
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 7,
   },
   padActionButtonDanger: {
     backgroundColor: '#fdecef',
@@ -6163,12 +7104,12 @@ const styles = StyleSheet.create({
   padActionText: {
     color: '#831843',
     fontWeight: '800',
-    fontSize: 13,
+    fontSize: 12,
   },
   padActionTextPrimary: {
     color: '#ffffff',
     fontWeight: '800',
-    fontSize: 13,
+    fontSize: 12,
   },
   padClearButton: {
     marginTop: 6,
@@ -6253,6 +7194,24 @@ const styles = StyleSheet.create({
   sectionActions: {
     marginTop: 10,
     gap: 8,
+  },
+  expenseImagePreviewBox: {
+    marginTop: 10,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#efcadb',
+    backgroundColor: '#fff6fa',
+  },
+  expenseImagePreview: {
+    width: '100%',
+    height: 140,
+  },
+  expenseImageLargePreview: {
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    marginTop: 8,
   },
   supplyAddBox: {
     marginTop: 8,
@@ -6672,6 +7631,49 @@ const styles = StyleSheet.create({
     borderColor: '#f0d8e4',
     gap: 8,
   },
+  mobileNavModalCard: {
+    backgroundColor: '#fffafd',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#f0d8e4',
+    maxHeight: '80%',
+    gap: 8,
+  },
+  mobileNavList: {
+    maxHeight: 340,
+  },
+  mobileNavItem: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: '#fff6fa',
+    borderWidth: 1,
+    borderColor: '#f2e2e8',
+    marginBottom: 8,
+  },
+  mobileNavItemActive: {
+    backgroundColor: '#f4d9e7',
+    borderColor: '#efcad4',
+  },
+  mobileNavItemLabel: {
+    color: '#9d174d',
+    fontWeight: '800',
+    textAlign: 'right',
+    fontSize: 14,
+  },
+  mobileNavItemLabelActive: {
+    color: '#7a123a',
+  },
+  mobileNavItemSubLabel: {
+    color: '#a77097',
+    textAlign: 'right',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  mobileNavItemSubLabelActive: {
+    color: '#9d174d',
+  },
   datePickerConfirmButton: {
     backgroundColor: '#ec4899',
     borderRadius: 10,
@@ -6704,5 +7706,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 });
+
 
 

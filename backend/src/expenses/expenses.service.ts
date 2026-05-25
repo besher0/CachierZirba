@@ -38,6 +38,7 @@ export class ExpensesService {
       const record = this.expenseRepository.create({
         ...dto,
         storeId: scopedStoreId,
+        imageUrl: dto.imageUrl?.trim() || null,
         note: dto.note ?? null,
         syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
       });
@@ -75,6 +76,10 @@ export class ExpensesService {
 
     if (dto.amount !== undefined) {
       record.amount = dto.amount;
+    }
+
+    if (dto.imageUrl !== undefined) {
+      record.imageUrl = dto.imageUrl?.trim() || null;
     }
 
     if (dto.note !== undefined) {

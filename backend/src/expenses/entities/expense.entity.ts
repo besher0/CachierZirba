@@ -39,6 +39,9 @@ export class Expense {
   amount: number;
 
   @Column({ type: 'text', nullable: true })
+  imageUrl: string | null;
+
+  @Column({ type: 'text', nullable: true })
   note: string | null;
 
   @Column()

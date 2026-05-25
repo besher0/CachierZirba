@@ -33,6 +33,11 @@ export class UpdateExpenseDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1200)
+  imageUrl?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(500)
   note?: string;
 
