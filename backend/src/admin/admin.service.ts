@@ -222,12 +222,14 @@ export class AdminService {
       qb.andWhere('o.status = :status', { status: query.status });
     }
 
-    if (query.from) {
-      qb.andWhere('o.orderedAt >= :from', { from: query.from });
+    const fromValue = this.toOrderFromBoundary(query.from);
+    if (fromValue) {
+      qb.andWhere('o.orderedAt >= :from', { from: fromValue });
     }
 
-    if (query.to) {
-      qb.andWhere('o.orderedAt <= :to', { to: query.to });
+    const toValue = this.toOrderToBoundary(query.to);
+    if (toValue) {
+      qb.andWhere('o.orderedAt <= :to', { to: toValue });
     }
 
     return qb.getMany();
@@ -245,12 +247,14 @@ export class AdminService {
       .where('s.storeId = :storeId', { storeId })
       .orderBy('s.businessDate', 'DESC');
 
-    if (query.from) {
-      qb.andWhere('s.businessDate >= :fromDate', { fromDate: query.from.slice(0, 10) });
+    const fromDate = this.toDateOnly(query.from);
+    if (fromDate) {
+      qb.andWhere('s.businessDate >= :fromDate', { fromDate });
     }
 
-    if (query.to) {
-      qb.andWhere('s.businessDate <= :toDate', { toDate: query.to.slice(0, 10) });
+    const toDate = this.toDateOnly(query.to);
+    if (toDate) {
+      qb.andWhere('s.businessDate <= :toDate', { toDate });
     }
 
     return qb.getMany();
@@ -275,12 +279,14 @@ export class AdminService {
       })
       .groupBy('o.storeId');
 
-    if (query.from) {
-      qb.andWhere('o.orderedAt >= :from', { from: query.from });
+    const fromValue = this.toOrderFromBoundary(query.from);
+    if (fromValue) {
+      qb.andWhere('o.orderedAt >= :from', { from: fromValue });
     }
 
-    if (query.to) {
-      qb.andWhere('o.orderedAt <= :to', { to: query.to });
+    const toValue = this.toOrderToBoundary(query.to);
+    if (toValue) {
+      qb.andWhere('o.orderedAt <= :to', { to: toValue });
     }
 
     return qb;
@@ -299,12 +305,14 @@ export class AdminService {
       .addSelect('SUM(s.actualRemainingAmount)', 'actualRemainingAmount')
       .groupBy('s.storeId');
 
-    if (query.from) {
-      qb.andWhere('s.businessDate >= :fromDate', { fromDate: query.from.slice(0, 10) });
+    const fromDate = this.toDateOnly(query.from);
+    if (fromDate) {
+      qb.andWhere('s.businessDate >= :fromDate', { fromDate });
     }
 
-    if (query.to) {
-      qb.andWhere('s.businessDate <= :toDate', { toDate: query.to.slice(0, 10) });
+    const toDate = this.toDateOnly(query.to);
+    if (toDate) {
+      qb.andWhere('s.businessDate <= :toDate', { toDate });
     }
 
     return qb;
@@ -317,5 +325,45 @@ export class AdminService {
 
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private normalizeDateInput(value: string | undefined): string | undefined {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  private toDateOnly(value: string | undefined): string | undefined {
+    const normalized = this.normalizeDateInput(value);
+    if (!normalized) {
+      return undefined;
+    }
+
+    return normalized.slice(0, 10);
+  }
+
+  private toOrderFromBoundary(value: string | undefined): string | undefined {
+    const normalized = this.normalizeDateInput(value);
+    if (!normalized) {
+      return undefined;
+    }
+
+    if (normalized.length === 10) {
+      return `${normalized}T00:00:00.000Z`;
+    }
+
+    return normalized;
+  }
+
+  private toOrderToBoundary(value: string | undefined): string | undefined {
+    const normalized = this.normalizeDateInput(value);
+    if (!normalized) {
+      return undefined;
+    }
+
+    if (normalized.length === 10) {
+      return `${normalized}T23:59:59.999Z`;
+    }
+
+    return normalized;
   }
 }

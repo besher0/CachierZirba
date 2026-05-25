@@ -1,5 +1,6 @@
 ﻿import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import NetInfo from '@react-native-community/netinfo';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -867,6 +868,8 @@ export default function App() {
   const [settlementActualInputs, setSettlementActualInputs] = useState<Record<string, string>>({});
   const [adminFromDateInput, setAdminFromDateInput] = useState('');
   const [adminToDateInput, setAdminToDateInput] = useState('');
+  const [adminDatePickerTarget, setAdminDatePickerTarget] = useState<'from' | 'to' | null>(null);
+  const [adminDatePickerValue, setAdminDatePickerValue] = useState(new Date());
 
   const authToken = session?.accessToken ?? '';
   const isAdmin = session?.user.role === 'ADMIN';
@@ -1762,6 +1765,11 @@ export default function App() {
       return;
     }
 
+    if (adminFromDateInput && adminToDateInput && adminFromDateInput > adminToDateInput) {
+      setStatusMessage('تاريخ البداية يجب أن يكون قبل أو يساوي تاريخ النهاية.');
+      return;
+    }
+
     try {
       const dashboard = await fetchDashboard(authToken, {
         from: adminFromDateInput || undefined,
@@ -1773,6 +1781,63 @@ export default function App() {
       handleApiFailure(error, 'تعذر تحديث لوحة الإدارة حالياً.');
     }
   }, [adminFromDateInput, adminToDateInput, authToken, handleApiFailure, isAdmin, isOnline]);
+
+  const applyAdminDateSelection = useCallback((target: 'from' | 'to', selectedDate: Date) => {
+    const isoDate = toIsoDateOnly(selectedDate);
+    if (target === 'from') {
+      setAdminFromDateInput(isoDate);
+      return;
+    }
+    setAdminToDateInput(isoDate);
+  }, []);
+
+  const openAdminDatePicker = useCallback(
+    (target: 'from' | 'to') => {
+      const source = target === 'from' ? adminFromDateInput : adminToDateInput;
+      const isIsoDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(source);
+      setAdminDatePickerValue(isIsoDateOnly ? dateFromIsoOnly(source) : new Date());
+      setAdminDatePickerTarget(target);
+    },
+    [adminFromDateInput, adminToDateInput],
+  );
+
+  const clearAdminDateFilters = useCallback(() => {
+    setAdminFromDateInput('');
+    setAdminToDateInput('');
+    setStatusMessage('تم مسح فلتر التاريخ من لوحة التسوية.');
+  }, []);
+
+  const closeAdminDatePicker = useCallback(() => {
+    setAdminDatePickerTarget(null);
+  }, []);
+
+  const confirmAdminDatePicker = useCallback(() => {
+    if (!adminDatePickerTarget) {
+      return;
+    }
+
+    applyAdminDateSelection(adminDatePickerTarget, adminDatePickerValue);
+    closeAdminDatePicker();
+  }, [adminDatePickerTarget, adminDatePickerValue, applyAdminDateSelection, closeAdminDatePicker]);
+
+  const onAdminDatePickerChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS === 'android') {
+        const target = adminDatePickerTarget;
+        closeAdminDatePicker();
+
+        if (event.type === 'set' && selectedDate && target) {
+          applyAdminDateSelection(target, selectedDate);
+        }
+        return;
+      }
+
+      if (selectedDate) {
+        setAdminDatePickerValue(selectedDate);
+      }
+    },
+    [adminDatePickerTarget, applyAdminDateSelection, closeAdminDatePicker],
+  );
 
   const validateSession = useCallback(async () => {
     if (!authToken || !isOnline) {
@@ -2276,12 +2341,12 @@ export default function App() {
   }, [isOnline, session?.accessToken, validateSession]);
 
   useEffect(() => {
-    if (!isOnline || !session?.accessToken || !isAdmin) {
+    if (!isOnline || !session?.accessToken || !isAdmin || activeScreen !== 'admin') {
       return;
     }
 
     void refreshDashboardData();
-  }, [isAdmin, isOnline, session?.accessToken]);
+  }, [activeScreen, isAdmin, isOnline, refreshDashboardData, session?.accessToken]);
 
   useEffect(() => {
     void syncQueue();
@@ -5080,20 +5145,33 @@ export default function App() {
                     </View>
 
                     <View style={styles.inputRow}>
-                      <TextInput
-                        style={styles.input}
-                        value={adminFromDateInput}
-                        onChangeText={setAdminFromDateInput}
-                        placeholder="من تاريخ (اختياري)"
-                        placeholderTextColor="#d7b3c4"
-                      />
-                      <TextInput
-                        style={styles.input}
-                        value={adminToDateInput}
-                        onChangeText={setAdminToDateInput}
-                        placeholder="إلى تاريخ (اختياري)"
-                        placeholderTextColor="#d7b3c4"
-                      />
+                      <Pressable style={styles.input} onPress={() => openAdminDatePicker('from')}>
+                        <Text
+                          style={
+                            adminFromDateInput
+                              ? styles.datePickerInputText
+                              : styles.datePickerInputPlaceholder
+                          }
+                        >
+                          {adminFromDateInput || 'اختر من تاريخ'}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.input} onPress={() => openAdminDatePicker('to')}>
+                        <Text
+                          style={
+                            adminToDateInput
+                              ? styles.datePickerInputText
+                              : styles.datePickerInputPlaceholder
+                          }
+                        >
+                          {adminToDateInput || 'اختر إلى تاريخ'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.rowActionButtons}>
+                      <Pressable style={styles.smallRefreshButton} onPress={clearAdminDateFilters}>
+                        <Text style={styles.smallRefreshText}>مسح التاريخ</Text>
+                      </Pressable>
                     </View>
                     <Text style={styles.orderRowMeta}>
                       التقرير يحسب الحصص/الصندوق/الفرق بين المتبقي المتوقع والفعلي ضمن الفترة المحددة.
@@ -5169,6 +5247,48 @@ export default function App() {
                 )}
               </View>
             )}
+
+            {adminDatePickerTarget && Platform.OS === 'android' ? (
+              <DateTimePicker
+                mode="date"
+                value={adminDatePickerValue}
+                onChange={onAdminDatePickerChange}
+                maximumDate={new Date('2100-12-31T00:00:00')}
+                minimumDate={new Date('2000-01-01T00:00:00')}
+              />
+            ) : null}
+            <Modal
+              visible={adminDatePickerTarget !== null && Platform.OS !== 'android'}
+              transparent
+              animationType="fade"
+              onRequestClose={closeAdminDatePicker}
+            >
+              <View style={styles.invoiceOverlay}>
+                <View style={styles.datePickerModalCard}>
+                  <Text style={styles.sectionTitle}>
+                    {adminDatePickerTarget === 'from' ? 'اختر تاريخ البداية' : 'اختر تاريخ النهاية'}
+                  </Text>
+                  {adminDatePickerTarget ? (
+                    <DateTimePicker
+                      mode="date"
+                      display="spinner"
+                      value={adminDatePickerValue}
+                      onChange={onAdminDatePickerChange}
+                      maximumDate={new Date('2100-12-31T00:00:00')}
+                      minimumDate={new Date('2000-01-01T00:00:00')}
+                    />
+                  ) : null}
+                  <View style={styles.rowActionButtons}>
+                    <Pressable style={styles.smallRefreshButton} onPress={closeAdminDatePicker}>
+                      <Text style={styles.smallRefreshText}>إلغاء</Text>
+                    </Pressable>
+                    <Pressable style={styles.datePickerConfirmButton} onPress={confirmAdminDatePicker}>
+                      <Text style={styles.datePickerConfirmText}>اعتماد التاريخ</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            </Modal>
 
             <Modal
               visible={selectedOrderInvoice !== null}
@@ -5954,6 +6074,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#efcadb',
   },
+  datePickerInputText: {
+    color: '#6a1234',
+    textAlign: 'right',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  datePickerInputPlaceholder: {
+    color: '#d7b3c4',
+    textAlign: 'right',
+    fontSize: 16,
+  },
   padDisplayBox: {
     backgroundColor: '#fdf2f6',
     borderRadius: 9,
@@ -6533,6 +6664,24 @@ const styles = StyleSheet.create({
     maxHeight: '90%',
     gap: 8,
   },
+  datePickerModalCard: {
+    backgroundColor: '#fffafd',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#f0d8e4',
+    gap: 8,
+  },
+  datePickerConfirmButton: {
+    backgroundColor: '#ec4899',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  datePickerConfirmText: {
+    color: '#ffffff',
+    fontWeight: '800',
+  },
   invoiceItemsList: {
     maxHeight: 260,
   },
@@ -6555,4 +6704,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 });
+
 
