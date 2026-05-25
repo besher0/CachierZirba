@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+﻿import { NativeModules, Platform } from 'react-native';
 import { ExpenseCategory, ProductTemplate, Store } from './types';
 
 const RENDER_API_FALLBACK_URL = 'https://cachierzirba.onrender.com/api';
@@ -184,6 +184,7 @@ export const STORAGE_KEYS = {
   orders: 'zirba.cached.orders.v1',
   dailySettlements: 'zirba.cached.dailySettlements.v1',
   expenses: 'zirba.cached.expenses.v1',
+  expenseCategories: 'zirba.cached.expenseCategories.v1',
   purchases: 'zirba.cached.purchases.v1',
   products: 'zirba.cached.products.v1',
   employees: 'zirba.cached.employees.v1',
@@ -195,24 +196,29 @@ export const STORAGE_KEYS = {
 export const FALLBACK_STORES: Store[] = [
   {
     id: '11111111-1111-4111-8111-111111111111',
-    name: 'ZERBE - الفرع الرئيسي',
-    code: 'ZERBE_MAIN',
+    name: 'محافظة',
+    code: 'ZIRBA_MAIN',
     isActive: true,
   },
   {
     id: '22222222-2222-4222-8222-222222222222',
-    name: 'ZERBE - فرع المول',
-    code: 'ZERBE_MALL',
+    name: 'فرقان',
+    code: 'ZIRBA_MALL',
+    isActive: true,
+  },
+  {
+    id: '33333333-3333-4333-8333-333333333333',
+    name: 'اندلس',
+    code: 'ZIRBA_BASHAR',
     isActive: true,
   },
 ];
 
 export const PRODUCT_CATALOG: ProductTemplate[] = [];
 
-export const EXPENSE_CATEGORY_OPTIONS: Array<{ value: ExpenseCategory; label: string }> = [
-  { value: 'RAW_MATERIALS', label: 'المواد الخام' },
-  { value: 'UTILITIES', label: 'المرافق' },
-  { value: 'SALARIES', label: 'الرواتب' },
-  { value: 'MARKETING', label: 'التسويق' },
+export const DEFAULT_EXPENSE_CATEGORY_OPTIONS: Array<{ value: ExpenseCategory; label: string }> = [
+  { value: 'CLEANING', label: 'منظفات' },
+  { value: 'DRINKS', label: 'مشروبات' },
   { value: 'OTHER', label: 'أخرى' },
 ];
+

@@ -65,37 +65,53 @@ export class StoresService implements OnModuleInit {
     const defaults: Array<Pick<Store, 'id' | 'name' | 'code' | 'isActive'>> = [
       {
         id: '11111111-1111-4111-8111-111111111111',
-        name: 'Zirba Main Branch',
+        name: 'محافظة',
         code: 'ZIRBA_MAIN',
         isActive: true,
       },
       {
         id: '22222222-2222-4222-8222-222222222222',
-        name: 'Zirba Mall Branch',
+        name: 'فرقان',
         code: 'ZIRBA_MALL',
         isActive: true,
       },
       {
         id: '33333333-3333-4333-8333-333333333333',
-        name: 'Bashar Store',
+        name: 'اندلس',
         code: 'ZIRBA_BASHAR',
         isActive: true,
       },
     ];
 
-    const existingStores = await this.storeRepository
-      .createQueryBuilder('store')
-      .where('store.code IN (:...codes)', { codes: defaults.map((entry) => entry.code) })
-      .getMany();
+    for (const entry of defaults) {
+      const existing =
+        (await this.storeRepository.findOne({
+          where: [{ code: entry.code }, { id: entry.id }],
+        })) ?? null;
 
-    const existingCodes = new Set(existingStores.map((store) => store.code));
-    const missingDefaults = defaults.filter((entry) => !existingCodes.has(entry.code));
-    if (missingDefaults.length === 0) {
-      return;
+      if (!existing) {
+        const created = this.storeRepository.create(entry);
+        await this.storeRepository.save(created);
+        continue;
+      }
+
+      let changed = false;
+      if (existing.name !== entry.name) {
+        existing.name = entry.name;
+        changed = true;
+      }
+      if (existing.code !== entry.code) {
+        existing.code = entry.code;
+        changed = true;
+      }
+      if (existing.isActive !== entry.isActive) {
+        existing.isActive = entry.isActive;
+        changed = true;
+      }
+      if (changed) {
+        await this.storeRepository.save(existing);
+      }
     }
-
-    const stores = missingDefaults.map((entry) => this.storeRepository.create(entry));
-    await this.storeRepository.save(stores);
   }
 
   private isSqliteUniqueConstraintError(error: unknown): boolean {

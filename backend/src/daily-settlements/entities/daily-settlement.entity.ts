@@ -37,6 +37,9 @@ export class DailySettlement {
   sharesAmount: number;
 
   @Column({ type: 'real', default: 0 })
+  actualRemainingAmount: number;
+
+  @Column({ type: 'real', default: 0 })
   expectedRevenue: number;
 
   @Column({ type: 'text', nullable: true })

@@ -41,6 +41,7 @@ export class DailySettlementsService {
       sameDayRecord.clientClosureId = dto.clientClosureId;
       sameDayRecord.cashBoxAmount = dto.cashBoxAmount;
       sameDayRecord.sharesAmount = dto.sharesAmount;
+      sameDayRecord.actualRemainingAmount = dto.actualRemainingAmount;
       sameDayRecord.expectedRevenue = dto.expectedRevenue ?? sameDayRecord.expectedRevenue;
       sameDayRecord.note = dto.note ?? null;
       sameDayRecord.syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
@@ -52,6 +53,7 @@ export class DailySettlementsService {
       const record = this.dailySettlementRepository.create({
         ...dto,
         storeId: scopedStoreId,
+        actualRemainingAmount: dto.actualRemainingAmount,
         expectedRevenue: dto.expectedRevenue ?? 0,
         note: dto.note ?? null,
         syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),

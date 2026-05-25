@@ -55,6 +55,11 @@ interface PurchaseListQuery extends ListQuery {
   product?: string;
 }
 
+interface DateRangeQuery {
+  from?: string;
+  to?: string;
+}
+
 function getOrderedTargets(targets: string[]): string[] {
   if (!lastReachableBaseUrl || !targets.includes(lastReachableBaseUrl)) {
     return targets;
@@ -132,6 +137,13 @@ function buildPurchaseQuery(params: PurchaseListQuery): string {
     from: params.from,
     to: params.to,
     product: params.product,
+  });
+}
+
+function buildDateRangeQuery(params: DateRangeQuery): string {
+  return buildQuery({
+    from: params.from,
+    to: params.to,
   });
 }
 
@@ -259,8 +271,8 @@ export function fetchDailySettlements(
   });
 }
 
-export function fetchDashboard(token: string): Promise<DashboardResponse> {
-  return request<DashboardResponse>('/admin/dashboard', { token });
+export function fetchDashboard(token: string, query: DateRangeQuery = {}): Promise<DashboardResponse> {
+  return request<DashboardResponse>(`/admin/dashboard${buildDateRangeQuery(query)}`, { token });
 }
 
 export function postExpense(token: string, payload: CreateExpensePayload): Promise<ApiExpense> {

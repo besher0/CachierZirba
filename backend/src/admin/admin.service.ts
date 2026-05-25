@@ -20,6 +20,8 @@ interface SettlementAggRow {
   storeId: string;
   cashBoxAmount: string;
   sharesAmount: string;
+  expectedCarryForwardAmount: string;
+  actualRemainingAmount: string;
 }
 
 export interface StoreDashboardSummary {
@@ -30,6 +32,9 @@ export interface StoreDashboardSummary {
   refundAmount: number;
   sharesAmount: number;
   cashBoxAmount: number;
+  expectedCarryForwardAmount: number;
+  actualRemainingAmount: number;
+  settlementDifferenceAmount: number;
   netProfit: number;
 }
 
@@ -40,6 +45,9 @@ export interface AdminDashboardResponse {
     refundAmount: number;
     sharesAmount: number;
     cashBoxAmount: number;
+    expectedCarryForwardAmount: number;
+    actualRemainingAmount: number;
+    settlementDifferenceAmount: number;
     netProfit: number;
   };
   stores: StoreDashboardSummary[];
@@ -53,6 +61,9 @@ export interface StoreSummaryResponse {
     refundAmount: number;
     sharesAmount: number;
     cashBoxAmount: number;
+    expectedCarryForwardAmount: number;
+    actualRemainingAmount: number;
+    settlementDifferenceAmount: number;
     netProfit: number;
   };
 }
@@ -93,6 +104,13 @@ export class AdminService {
       const refundAmount = this.parseNumber(orderAgg?.refundAmount);
       const sharesAmount = this.parseNumber(settlementAgg?.sharesAmount);
       const cashBoxAmount = this.parseNumber(settlementAgg?.cashBoxAmount);
+      const expectedCarryForwardAmount = this.parseNumber(
+        settlementAgg?.expectedCarryForwardAmount,
+      );
+      const actualRemainingAmount = this.parseNumber(settlementAgg?.actualRemainingAmount);
+      const settlementDifferenceAmount = Number(
+        (actualRemainingAmount - expectedCarryForwardAmount).toFixed(2),
+      );
       const netProfit = completedRevenue - refundAmount - sharesAmount;
 
       return {
@@ -103,6 +121,9 @@ export class AdminService {
         refundAmount,
         sharesAmount,
         cashBoxAmount,
+        expectedCarryForwardAmount,
+        actualRemainingAmount,
+        settlementDifferenceAmount,
         netProfit,
       } satisfies StoreDashboardSummary;
     });
@@ -117,6 +138,18 @@ export class AdminService {
         refundAmount: storeSummaries.reduce((sum, item) => sum + item.refundAmount, 0),
         sharesAmount: storeSummaries.reduce((sum, item) => sum + item.sharesAmount, 0),
         cashBoxAmount: storeSummaries.reduce((sum, item) => sum + item.cashBoxAmount, 0),
+        expectedCarryForwardAmount: storeSummaries.reduce(
+          (sum, item) => sum + item.expectedCarryForwardAmount,
+          0,
+        ),
+        actualRemainingAmount: storeSummaries.reduce(
+          (sum, item) => sum + item.actualRemainingAmount,
+          0,
+        ),
+        settlementDifferenceAmount: storeSummaries.reduce(
+          (sum, item) => sum + item.settlementDifferenceAmount,
+          0,
+        ),
         netProfit: storeSummaries.reduce((sum, item) => sum + item.netProfit, 0),
       },
       stores: storeSummaries,
@@ -140,6 +173,20 @@ export class AdminService {
       .reduce((sum, item) => sum + item.total, 0);
     const sharesAmount = settlements.reduce((sum, item) => sum + item.sharesAmount, 0);
     const cashBoxAmount = settlements.reduce((sum, item) => sum + item.cashBoxAmount, 0);
+    const expectedCarryForwardAmount = settlements.reduce((sum, item) => {
+      const expectedCarryForward = Math.max(
+        item.expectedRevenue - item.cashBoxAmount - item.sharesAmount,
+        0,
+      );
+      return sum + expectedCarryForward;
+    }, 0);
+    const actualRemainingAmount = settlements.reduce(
+      (sum, item) => sum + item.actualRemainingAmount,
+      0,
+    );
+    const settlementDifferenceAmount = Number(
+      (actualRemainingAmount - expectedCarryForwardAmount).toFixed(2),
+    );
 
     return {
       store: {
@@ -154,6 +201,9 @@ export class AdminService {
         refundAmount,
         sharesAmount,
         cashBoxAmount,
+        expectedCarryForwardAmount,
+        actualRemainingAmount,
+        settlementDifferenceAmount,
         netProfit: completedRevenue - refundAmount - sharesAmount,
       },
     };
@@ -242,6 +292,11 @@ export class AdminService {
       .select('s.storeId', 'storeId')
       .addSelect('SUM(s.cashBoxAmount)', 'cashBoxAmount')
       .addSelect('SUM(s.sharesAmount)', 'sharesAmount')
+      .addSelect(
+        'SUM(CASE WHEN (s.expectedRevenue - s.cashBoxAmount - s.sharesAmount) > 0 THEN (s.expectedRevenue - s.cashBoxAmount - s.sharesAmount) ELSE 0 END)',
+        'expectedCarryForwardAmount',
+      )
+      .addSelect('SUM(s.actualRemainingAmount)', 'actualRemainingAmount')
       .groupBy('s.storeId');
 
     if (query.from) {

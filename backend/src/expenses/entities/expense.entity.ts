@@ -9,7 +9,6 @@
   UpdateDateColumn,
 } from 'typeorm';
 import { Store } from '../../stores/entities/store.entity';
-import { ExpenseCategory } from '../enums/expense-category.enum';
 
 @Entity('expenses')
 @Unique('UQ_client_expense_id', ['clientExpenseId'])
@@ -30,8 +29,8 @@ export class Expense {
   @Column({ type: 'varchar', length: 10 })
   expenseDate: string;
 
-  @Column({ type: 'varchar', length: 40 })
-  category: ExpenseCategory;
+  @Column({ type: 'varchar', length: 80 })
+  category: string;
 
   @Column({ type: 'varchar', length: 300 })
   description: string;

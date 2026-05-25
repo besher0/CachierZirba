@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import {
   API_BASE_URL,
-  EXPENSE_CATEGORY_OPTIONS,
+  DEFAULT_EXPENSE_CATEGORY_OPTIONS,
   FALLBACK_STORES,
   PRODUCT_CATALOG,
   STORAGE_KEYS,
@@ -59,6 +59,7 @@ import {
   CreateOrderPayload,
   CreateProductPayload,
   CreatePurchasePayload,
+  DashboardResponse,
   DashboardStoreSummary,
   Employee,
   EmployeeAbsenceEntry,
@@ -104,6 +105,9 @@ interface SettlementHistoryRow {
   businessDate: string;
   cashBoxAmount: number;
   sharesAmount: number;
+  actualRemainingAmount: number;
+  expectedRemainingAmount: number;
+  differenceAmount: number;
   synced: boolean;
   source: 'LOCAL' | 'SERVER';
 }
@@ -127,6 +131,11 @@ interface PurchaseRow {
   totalCost: number;
   note?: string;
   synced: boolean;
+}
+
+interface ExpenseCategoryOption {
+  value: ExpenseCategory;
+  label: string;
 }
 
 interface NavItem {
@@ -496,6 +505,61 @@ function toPaymentMethodLabel(paymentMethod: PaymentMethod): string {
   return 'كاش';
 }
 
+function normalizeExpenseCategoryValue(value: string): string {
+  return value.trim();
+}
+
+function toExpenseCategoryFallbackLabel(value: string): string {
+  const normalized = normalizeExpenseCategoryValue(value);
+  if (normalized === 'CLEANING') {
+    return 'منظفات';
+  }
+  if (normalized === 'DRINKS') {
+    return 'مشروبات';
+  }
+  if (normalized === 'OTHER') {
+    return 'أخرى';
+  }
+  if (normalized === 'RAW_MATERIALS') {
+    return 'مواد خام';
+  }
+  if (normalized === 'UTILITIES') {
+    return 'مرافق';
+  }
+  if (normalized === 'SALARIES') {
+    return 'رواتب';
+  }
+  if (normalized === 'MARKETING') {
+    return 'تسويق';
+  }
+  return normalized;
+}
+
+function mergeExpenseCategoryOptions(options: ExpenseCategoryOption[]): ExpenseCategoryOption[] {
+  const normalizedKeys = new Set<string>();
+  const next: ExpenseCategoryOption[] = [];
+
+  options.forEach((option) => {
+    const value = normalizeExpenseCategoryValue(option.value);
+    if (!value) {
+      return;
+    }
+
+    const key = value.toLowerCase();
+    if (normalizedKeys.has(key)) {
+      return;
+    }
+
+    normalizedKeys.add(key);
+    next.push({
+      value,
+      label: option.label.trim() || toExpenseCategoryFallbackLabel(value),
+    });
+  });
+
+  return next;
+}
+
 function mapApiOrderToRow(order: ApiOrder): OrderHistoryRow {
   return {
     clientOrderId: order.clientOrderId,
@@ -535,20 +599,36 @@ function mapLocalOrderToRow(order: LocalOrder): OrderHistoryRow {
 }
 
 function mapApiSettlementToRow(item: ApiDailySettlement): SettlementHistoryRow {
+  const expectedRemainingAmount = Number(
+    Math.max(item.expectedRevenue ?? 0, 0) - item.cashBoxAmount - item.sharesAmount,
+  );
+  const expectedRemainingClamped = Number(Math.max(expectedRemainingAmount, 0).toFixed(2));
+  const actualRemainingAmount = Number((item.actualRemainingAmount ?? 0).toFixed(2));
   return {
     businessDate: item.businessDate,
     cashBoxAmount: item.cashBoxAmount,
     sharesAmount: item.sharesAmount,
+    actualRemainingAmount,
+    expectedRemainingAmount: expectedRemainingClamped,
+    differenceAmount: Number((actualRemainingAmount - expectedRemainingClamped).toFixed(2)),
     synced: true,
     source: 'SERVER',
   };
 }
 
 function mapLocalSettlementToRow(item: LocalDailySettlement): SettlementHistoryRow {
+  const expectedRemainingAmount = Number(
+    Math.max(item.expectedRevenue ?? 0, 0) - item.cashBoxAmount - item.sharesAmount,
+  );
+  const expectedRemainingClamped = Number(Math.max(expectedRemainingAmount, 0).toFixed(2));
+  const actualRemainingAmount = Number((item.actualRemainingAmount ?? 0).toFixed(2));
   return {
     businessDate: item.businessDate,
     cashBoxAmount: item.cashBoxAmount,
     sharesAmount: item.sharesAmount,
+    actualRemainingAmount,
+    expectedRemainingAmount: expectedRemainingClamped,
+    differenceAmount: Number((actualRemainingAmount - expectedRemainingClamped).toFixed(2)),
     synced: item.synced,
     source: 'LOCAL',
   };
@@ -702,8 +782,8 @@ export default function App() {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [session, setSession] = useState<AuthSession | null>(null);
 
-  const [usernameInput, setUsernameInput] = useState('admin');
-  const [passwordInput, setPasswordInput] = useState('Admin@123');
+  const [usernameInput, setUsernameInput] = useState('مها');
+  const [passwordInput, setPasswordInput] = useState('abcd');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [activeScreen, setActiveScreen] = useState<AppScreenKey>('pos');
@@ -731,8 +811,10 @@ export default function App() {
 
   const [cashBoxInput, setCashBoxInput] = useState('');
   const [sharesInput, setSharesInput] = useState('');
+  const [actualRemainingInput, setActualRemainingInput] = useState('');
   const [settlementNoteInput, setSettlementNoteInput] = useState('');
 
+  const [dashboardTotals, setDashboardTotals] = useState<DashboardResponse['totals'] | null>(null);
   const [dashboardSummaries, setDashboardSummaries] = useState<DashboardStoreSummary[]>([]);
   const [remoteOrders, setRemoteOrders] = useState<ApiOrder[]>([]);
   const [remoteSettlements, setRemoteSettlements] = useState<ApiDailySettlement[]>([]);
@@ -742,7 +824,11 @@ export default function App() {
 
   const [expenseEditingId, setExpenseEditingId] = useState<string | null>(null);
   const [expenseDateInput, setExpenseDateInput] = useState(new Date().toISOString().slice(0, 10));
-  const [expenseCategoryInput, setExpenseCategoryInput] = useState<ExpenseCategory>('RAW_MATERIALS');
+  const [expenseCategoryOptions, setExpenseCategoryOptions] = useState<ExpenseCategoryOption[]>(
+    DEFAULT_EXPENSE_CATEGORY_OPTIONS,
+  );
+  const [expenseCategoryInput, setExpenseCategoryInput] = useState<ExpenseCategory>('CLEANING');
+  const [newExpenseCategoryLabelInput, setNewExpenseCategoryLabelInput] = useState('');
   const [expenseDescriptionInput, setExpenseDescriptionInput] = useState('');
   const [expenseAmountInput, setExpenseAmountInput] = useState('');
   const [expenseNoteInput, setExpenseNoteInput] = useState('');
@@ -779,6 +865,8 @@ export default function App() {
   const [withdrawalAmountInput, setWithdrawalAmountInput] = useState('');
   const [withdrawalNoteInput, setWithdrawalNoteInput] = useState('');
   const [settlementActualInputs, setSettlementActualInputs] = useState<Record<string, string>>({});
+  const [adminFromDateInput, setAdminFromDateInput] = useState('');
+  const [adminToDateInput, setAdminToDateInput] = useState('');
 
   const authToken = session?.accessToken ?? '';
   const isAdmin = session?.user.role === 'ADMIN';
@@ -801,7 +889,7 @@ export default function App() {
 
   const activeScreenLabel = useMemo(() => {
     if (activeScreen === 'admin') {
-      return 'لوحة الأرباح';
+      return 'لوحة التسوية';
     }
 
     return navItems.find((item) => item.key === activeScreen)?.label ?? 'الصفحات';
@@ -1100,6 +1188,33 @@ export default function App() {
     return Array.from(rows.values()).sort((a, b) => b.expenseDate.localeCompare(a.expenseDate));
   }, [pendingExpenseDeletes, remoteExpenses, selectedStoreExpenses, selectedStoreId]);
 
+  const effectiveExpenseCategoryOptions = useMemo(() => {
+    const fromRecords = mergedExpenseRows.map((item) => ({
+      value: normalizeExpenseCategoryValue(item.category),
+      label: toExpenseCategoryFallbackLabel(item.category),
+    }));
+
+    return mergeExpenseCategoryOptions([...expenseCategoryOptions, ...fromRecords]);
+  }, [expenseCategoryOptions, mergedExpenseRows]);
+
+  const expenseCategoryLabelMap = useMemo(
+    () =>
+      new Map(
+        effectiveExpenseCategoryOptions.map((option) => [
+          normalizeExpenseCategoryValue(option.value),
+          option.label,
+        ]),
+      ),
+    [effectiveExpenseCategoryOptions],
+  );
+
+  const toExpenseCategoryLabel = useCallback(
+    (category: string): string =>
+      expenseCategoryLabelMap.get(normalizeExpenseCategoryValue(category)) ??
+      toExpenseCategoryFallbackLabel(category),
+    [expenseCategoryLabelMap],
+  );
+
   const mergedPurchaseRows = useMemo(() => {
     const rows = new Map<string, PurchaseRow>();
 
@@ -1341,6 +1456,16 @@ export default function App() {
     [settlementDistributedAmount, todayExpectedRemaining],
   );
 
+  const settlementActualRemainingAmount = useMemo(
+    () => Number(parseNumberInput(actualRemainingInput).toFixed(2)),
+    [actualRemainingInput],
+  );
+
+  const settlementDifferenceAmount = useMemo(
+    () => Number((settlementActualRemainingAmount - settlementCarryForwardAmount).toFixed(2)),
+    [settlementActualRemainingAmount, settlementCarryForwardAmount],
+  );
+
   const productSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(() => {
     const byProduct = new Map<string, ProductSalesSummaryRow>();
 
@@ -1403,41 +1528,37 @@ export default function App() {
     [productSupplyRows, settlementActualInputs],
   );
 
-  const localSummary = useMemo(() => {
-    const scopedOrders = selectedStoreOrders;
-    const scopedSettlements = selectedStoreSettlements;
-
-    const completedRevenue = scopedOrders
-      .filter((item) => item.status === 'COMPLETED')
-      .reduce((sum, item) => sum + item.total, 0);
-    const refundAmount = scopedOrders
-      .filter((item) => item.status === 'REFUNDED')
-      .reduce((sum, item) => sum + item.total, 0);
-    const sharesAmount = scopedSettlements.reduce((sum, item) => sum + item.sharesAmount, 0);
-    const cashBoxAmount = scopedSettlements.reduce(
-      (sum, item) => sum + item.cashBoxAmount,
-      0,
-    );
-
-    return {
-      storeId: selectedStoreId,
-      storeName: selectedStore?.name ?? 'غير محدد',
-      ordersCount: scopedOrders.length,
-      completedRevenue,
-      refundAmount,
-      sharesAmount,
-      cashBoxAmount,
-      netProfit: completedRevenue - refundAmount - sharesAmount,
-    } satisfies DashboardStoreSummary;
-  }, [selectedStore?.name, selectedStoreId, selectedStoreOrders, selectedStoreSettlements]);
-
-  const effectiveSummary = useMemo(() => {
-    const fromApi = dashboardSummaries.find((item) => item.storeId === selectedStoreId);
-    return fromApi ?? localSummary;
-  }, [dashboardSummaries, localSummary, selectedStoreId]);
+  const effectiveDashboardTotals = useMemo(
+    () =>
+      dashboardTotals ?? {
+        ordersCount: dashboardSummaries.reduce((sum, item) => sum + item.ordersCount, 0),
+        completedRevenue: dashboardSummaries.reduce(
+          (sum, item) => sum + item.completedRevenue,
+          0,
+        ),
+        refundAmount: dashboardSummaries.reduce((sum, item) => sum + item.refundAmount, 0),
+        sharesAmount: dashboardSummaries.reduce((sum, item) => sum + item.sharesAmount, 0),
+        cashBoxAmount: dashboardSummaries.reduce((sum, item) => sum + item.cashBoxAmount, 0),
+        expectedCarryForwardAmount: dashboardSummaries.reduce(
+          (sum, item) => sum + item.expectedCarryForwardAmount,
+          0,
+        ),
+        actualRemainingAmount: dashboardSummaries.reduce(
+          (sum, item) => sum + item.actualRemainingAmount,
+          0,
+        ),
+        settlementDifferenceAmount: dashboardSummaries.reduce(
+          (sum, item) => sum + item.settlementDifferenceAmount,
+          0,
+        ),
+        netProfit: dashboardSummaries.reduce((sum, item) => sum + item.netProfit, 0),
+      },
+    [dashboardSummaries, dashboardTotals],
+  );
 
   const logout = useCallback((message: string) => {
     setSession(null);
+    setDashboardTotals(null);
     setDashboardSummaries([]);
     setRemoteOrders([]);
     setRemoteSettlements([]);
@@ -1642,12 +1763,16 @@ export default function App() {
     }
 
     try {
-      const dashboard = await fetchDashboard(authToken);
+      const dashboard = await fetchDashboard(authToken, {
+        from: adminFromDateInput || undefined,
+        to: adminToDateInput || undefined,
+      });
+      setDashboardTotals(dashboard.totals);
       setDashboardSummaries(dashboard.stores);
     } catch (error: unknown) {
       handleApiFailure(error, 'تعذر تحديث لوحة الإدارة حالياً.');
     }
-  }, [authToken, handleApiFailure, isAdmin, isOnline]);
+  }, [adminFromDateInput, adminToDateInput, authToken, handleApiFailure, isAdmin, isOnline]);
 
   const validateSession = useCallback(async () => {
     if (!authToken || !isOnline) {
@@ -1714,7 +1839,19 @@ export default function App() {
           await postOrder(authToken, job.payload as CreateOrderPayload);
           markOrderSynced(job.referenceId);
         } else if (entity === 'DAILY_SETTLEMENT') {
-          await postDailySettlement(authToken, job.payload as CreateDailySettlementPayload);
+          const settlementPayload = job.payload as Partial<CreateDailySettlementPayload>;
+          const expectedRemainingFallback = Math.max(
+            (settlementPayload.expectedRevenue ?? 0) -
+              (settlementPayload.cashBoxAmount ?? 0) -
+              (settlementPayload.sharesAmount ?? 0),
+            0,
+          );
+
+          await postDailySettlement(authToken, {
+            ...(settlementPayload as CreateDailySettlementPayload),
+            actualRemainingAmount:
+              settlementPayload.actualRemainingAmount ?? Number(expectedRemainingFallback.toFixed(2)),
+          });
           markSettlementSynced(job.referenceId);
         } else if (entity === 'EXPENSE' && action === 'CREATE') {
           await postExpense(authToken, job.payload as CreateExpensePayload);
@@ -1863,6 +2000,7 @@ export default function App() {
           cachedOrders,
           cachedSettlements,
           cachedExpenses,
+          cachedExpenseCategories,
           cachedPurchases,
           cachedProducts,
           cachedEmployees,
@@ -1876,6 +2014,7 @@ export default function App() {
             loadArray<LocalOrder>(STORAGE_KEYS.orders),
             loadArray<LocalDailySettlement>(STORAGE_KEYS.dailySettlements),
             loadArray<LocalExpense>(STORAGE_KEYS.expenses),
+            loadArray<ExpenseCategoryOption>(STORAGE_KEYS.expenseCategories),
             loadArray<LocalPurchase>(STORAGE_KEYS.purchases),
             loadArray<ProductTemplate | LocalProduct>(STORAGE_KEYS.products),
             loadArray<Employee>(STORAGE_KEYS.employees),
@@ -1904,12 +2043,21 @@ export default function App() {
             : buildProductsFromHistory(cachedPurchases, cachedOrders).map((item) =>
                 toLocalProduct(item),
               );
+        const initialExpenseCategories = mergeExpenseCategoryOptions([
+          ...DEFAULT_EXPENSE_CATEGORY_OPTIONS,
+          ...cachedExpenseCategories,
+          ...cachedExpenses.map((item) => ({
+            value: normalizeExpenseCategoryValue(item.category),
+            label: toExpenseCategoryFallbackLabel(item.category),
+          })),
+        ]);
 
         setSession(cachedSession);
         setStores(effectiveStores);
         setOrders(cachedOrders);
         setDailySettlements(cachedSettlements);
         setExpenses(cachedExpenses);
+        setExpenseCategoryOptions(initialExpenseCategories);
         setPurchases(cachedPurchases);
         setProducts(initialProducts);
         setEmployees(cachedEmployees);
@@ -1927,6 +2075,7 @@ export default function App() {
         setOrders([]);
         setDailySettlements([]);
         setExpenses([]);
+        setExpenseCategoryOptions(DEFAULT_EXPENSE_CATEGORY_OPTIONS);
         setPurchases([]);
         setProducts([]);
         setEmployees([]);
@@ -1952,6 +2101,10 @@ export default function App() {
   useEffect(() => {
     void saveObject(STORAGE_KEYS.authSession, session);
   }, [session]);
+
+  useEffect(() => {
+    void saveArray(STORAGE_KEYS.expenseCategories, expenseCategoryOptions);
+  }, [expenseCategoryOptions]);
 
   useEffect(() => {
     void saveArray(STORAGE_KEYS.products, products);
@@ -2011,6 +2164,7 @@ export default function App() {
   useEffect(() => {
     setTodaySupplyInputs({});
     setSettlementActualInputs({});
+    setActualRemainingInput('');
     setTawasiCapitalInput('');
     setTawasiSellPriceInput('');
     setSelectedOrderInvoice(null);
@@ -2021,6 +2175,30 @@ export default function App() {
       setSelectedStoreId(stores[0].id);
     }
   }, [selectedStoreId, stores]);
+
+  useEffect(() => {
+    const normalizedCurrent = normalizeExpenseCategoryValue(expenseCategoryInput);
+    const exists = effectiveExpenseCategoryOptions.some(
+      (option) => normalizeExpenseCategoryValue(option.value) === normalizedCurrent,
+    );
+    if (!exists) {
+      setExpenseCategoryInput(effectiveExpenseCategoryOptions[0]?.value ?? 'OTHER');
+    }
+  }, [effectiveExpenseCategoryOptions, expenseCategoryInput]);
+
+  useEffect(() => {
+    if (expenseFilterCategory === 'ALL') {
+      return;
+    }
+
+    const normalizedCurrent = normalizeExpenseCategoryValue(expenseFilterCategory);
+    const exists = effectiveExpenseCategoryOptions.some(
+      (option) => normalizeExpenseCategoryValue(option.value) === normalizedCurrent,
+    );
+    if (!exists) {
+      setExpenseFilterCategory('ALL');
+    }
+  }, [effectiveExpenseCategoryOptions, expenseFilterCategory]);
 
   useEffect(() => {
     if (selectedStoreEmployees.length === 0) {
@@ -2103,7 +2281,7 @@ export default function App() {
     }
 
     void refreshDashboardData();
-  }, [isAdmin, isOnline, refreshDashboardData, session?.accessToken]);
+  }, [isAdmin, isOnline, session?.accessToken]);
 
   useEffect(() => {
     void syncQueue();
@@ -2428,8 +2606,8 @@ export default function App() {
       return;
     }
 
-    if (!cashBoxInput || !sharesInput) {
-      setStatusMessage('أدخل قيمة الصندوق والحصص قبل الحفظ.');
+    if (!cashBoxInput || !sharesInput || !actualRemainingInput.trim()) {
+      setStatusMessage('أدخل قيمة الصندوق والحصص والمبلغ المتبقي الفعلي قبل الحفظ.');
       return;
     }
 
@@ -2438,6 +2616,11 @@ export default function App() {
     const businessDate = createdAt.slice(0, 10);
     const cashBoxAmount = parseNumberInput(cashBoxInput);
     const sharesAmount = parseNumberInput(sharesInput);
+    const actualRemainingAmount = Number(parseNumberInput(actualRemainingInput).toFixed(2));
+    if (actualRemainingAmount < 0) {
+      setStatusMessage('المبلغ المتبقي الفعلي يجب أن يكون صفراً أو أكبر.');
+      return;
+    }
     const distributedAmount = Number((cashBoxAmount + sharesAmount).toFixed(2));
     const carryForwardAmount = Number(Math.max(todayExpectedRemaining - distributedAmount, 0).toFixed(2));
 
@@ -2521,6 +2704,7 @@ export default function App() {
       businessDate,
       cashBoxAmount,
       sharesAmount,
+      actualRemainingAmount,
       expectedRevenue: todayExpectedRemaining,
       note: settlementNoteInput.trim() || undefined,
       syncedAt: createdAt,
@@ -2543,6 +2727,7 @@ export default function App() {
 
     setCashBoxInput('');
     setSharesInput('');
+    setActualRemainingInput('');
     setSettlementNoteInput('');
     setPosCashCarryAmount(carryForwardAmount);
     setSettlementActualInputs({});
@@ -2593,10 +2778,47 @@ export default function App() {
   const resetExpenseForm = () => {
     setExpenseEditingId(null);
     setExpenseDateInput(new Date().toISOString().slice(0, 10));
-    setExpenseCategoryInput('RAW_MATERIALS');
+    setExpenseCategoryInput(effectiveExpenseCategoryOptions[0]?.value ?? 'OTHER');
     setExpenseDescriptionInput('');
     setExpenseAmountInput('');
     setExpenseNoteInput('');
+  };
+
+  const addExpenseCategoryOption = () => {
+    if (!isAdmin) {
+      setStatusMessage('إضافة أنواع المصاريف متاحة للأدمن فقط.');
+      return;
+    }
+
+    const label = newExpenseCategoryLabelInput.trim();
+    if (!label) {
+      setStatusMessage('اكتب اسم نوع المصروف أولاً.');
+      return;
+    }
+
+    const existing = effectiveExpenseCategoryOptions.find((option) => {
+      const normalizedOptionValue = normalizeExpenseCategoryValue(option.value).toLowerCase();
+      const normalizedOptionLabel = option.label.trim().toLowerCase();
+      const normalizedInput = normalizeExpenseCategoryValue(label).toLowerCase();
+      return normalizedOptionValue === normalizedInput || normalizedOptionLabel === normalizedInput;
+    });
+
+    if (existing) {
+      setExpenseCategoryInput(existing.value);
+      setNewExpenseCategoryLabelInput('');
+      setStatusMessage(`نوع المصروف "${existing.label}" موجود مسبقاً.`);
+      return;
+    }
+
+    const nextOption: ExpenseCategoryOption = {
+      value: label,
+      label,
+    };
+
+    setExpenseCategoryOptions((previous) => mergeExpenseCategoryOptions([...previous, nextOption]));
+    setExpenseCategoryInput(nextOption.value);
+    setNewExpenseCategoryLabelInput('');
+    setStatusMessage(`تمت إضافة نوع مصروف جديد: ${label}.`);
   };
 
   const beginExpenseEdit = (item: ExpenseRow) => {
@@ -2637,6 +2859,7 @@ export default function App() {
       return;
     }
 
+    const expenseCategoryValue = normalizeExpenseCategoryValue(expenseCategoryInput) || 'OTHER';
     const now = new Date().toISOString();
 
     if (!expenseEditingId) {
@@ -2645,7 +2868,7 @@ export default function App() {
         clientExpenseId,
         storeId: effectiveStoreId,
         expenseDate: expenseDateInput,
-        category: expenseCategoryInput,
+        category: expenseCategoryValue,
         description: expenseDescriptionInput.trim(),
         amount,
         note: expenseNoteInput.trim() || undefined,
@@ -2696,7 +2919,7 @@ export default function App() {
 
     const updatePayload: UpdateExpensePayload = {
       expenseDate: expenseDateInput,
-      category: expenseCategoryInput,
+      category: expenseCategoryValue,
       description: expenseDescriptionInput.trim(),
       amount,
       note: expenseNoteInput.trim() || undefined,
@@ -3476,7 +3699,7 @@ export default function App() {
       ['التاريخ', 'الفئة', 'الوصف', 'المبلغ', 'الحالة'],
       filteredExpenseRows.map((item) => [
         item.expenseDate,
-        EXPENSE_CATEGORY_OPTIONS.find((entry) => entry.value === item.category)?.label ?? item.category,
+        toExpenseCategoryLabel(item.category),
         item.description,
         item.amount,
         item.synced ? 'متزامن' : 'معلق',
@@ -3568,8 +3791,10 @@ export default function App() {
 
           <View style={styles.loginDemoBox}>
             <Text style={styles.loginDemoTitle}>حسابات تجريبية</Text>
-            <Text style={styles.loginDemoText}>admin / Admin@123</Text>
-            <Text style={styles.loginDemoText}>cashier.main / Cashier@123</Text>
+            <Text style={styles.loginDemoText}>مها / abcd</Text>
+            <Text style={styles.loginDemoText}>محافظة / 0000</Text>
+            <Text style={styles.loginDemoText}>فرقان / 1111</Text>
+            <Text style={styles.loginDemoText}>اندلس / 5555</Text>
           </View>
 
           <Text style={styles.loginStatus}>{statusMessage}</Text>
@@ -3607,7 +3832,7 @@ export default function App() {
               </View>
               {isAdmin && (
                 <Pressable style={styles.adminButton} onPress={() => setActiveScreen('admin')}>
-                  <Text style={styles.adminButtonText}>لوحة الأرباح</Text>
+                  <Text style={styles.adminButtonText}>لوحة التسوية</Text>
                 </Pressable>
               )}
               <Pressable
@@ -4176,7 +4401,7 @@ export default function App() {
                   </View>
 
                   <View style={styles.categoryRow}>
-                    {EXPENSE_CATEGORY_OPTIONS.map((option) => {
+                    {effectiveExpenseCategoryOptions.map((option) => {
                       const selected = expenseCategoryInput === option.value;
                       return (
                         <Pressable
@@ -4196,6 +4421,20 @@ export default function App() {
                       );
                     })}
                   </View>
+                  {isAdmin ? (
+                    <View style={styles.inputRow}>
+                      <TextInput
+                        style={styles.input}
+                        value={newExpenseCategoryLabelInput}
+                        onChangeText={setNewExpenseCategoryLabelInput}
+                        placeholder="نوع مصروف جديد"
+                        placeholderTextColor="#d7b3c4"
+                      />
+                      <Pressable style={styles.smallRefreshButton} onPress={addExpenseCategoryOption}>
+                        <Text style={styles.smallRefreshText}>+ إضافة النوع</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
 
                   <TextInput
                     style={styles.inputFull}
@@ -4276,7 +4515,7 @@ export default function App() {
                         الكل
                       </Text>
                     </Pressable>
-                    {EXPENSE_CATEGORY_OPTIONS.map((option) => {
+                    {effectiveExpenseCategoryOptions.map((option) => {
                       const selected = expenseFilterCategory === option.value;
                       return (
                         <Pressable
@@ -4304,9 +4543,7 @@ export default function App() {
                       <View key={item.clientExpenseId} style={styles.orderRow}>
                         <View style={styles.orderRowMain}>
                           <Text style={styles.orderRowId}>{item.description}</Text>
-                          <Text style={styles.orderRowItems}>
-                            {EXPENSE_CATEGORY_OPTIONS.find((entry) => entry.value === item.category)?.label}
-                          </Text>
+                          <Text style={styles.orderRowItems}>{toExpenseCategoryLabel(item.category)}</Text>
                         </View>
                         <View style={styles.orderRowMain}>
                           <Text style={styles.orderRowTotal}>{formatMoney(item.amount)}</Text>
@@ -4670,8 +4907,27 @@ export default function App() {
                       placeholderTextColor="#d7b3c4"
                     />
                   </View>
+                  <TextInput
+                    style={styles.inputFull}
+                    value={actualRemainingInput}
+                    onChangeText={setActualRemainingInput}
+                    keyboardType="decimal-pad"
+                    placeholder="المبلغ المتبقي الفعلي مع الكاشير"
+                    placeholderTextColor="#d7b3c4"
+                  />
                   <Text style={styles.orderRowMeta}>
                     المتبقي الذي سيُرحّل تلقائياً للمدوّر: {formatMoney(settlementCarryForwardAmount)}
+                  </Text>
+                  <Text
+                    style={
+                      settlementDifferenceAmount === 0
+                        ? styles.settlementDiffNeutral
+                        : settlementDifferenceAmount > 0
+                          ? styles.settlementDiffPositive
+                          : styles.settlementDiffNegative
+                    }
+                  >
+                    فرق التسوية (الفعلي - المتوقع): {formatMoney(settlementDifferenceAmount)}
                   </Text>
                   {settlementOverDistributedAmount > 0 ? (
                     <Text style={styles.pendingText}>
@@ -4787,6 +5043,22 @@ export default function App() {
                             حصص: {formatMoney(item.sharesAmount)}
                           </Text>
                         </View>
+                        <View style={styles.orderRowMain}>
+                          <Text style={styles.orderRowMeta}>
+                            متبقي فعلي: {formatMoney(item.actualRemainingAmount)}
+                          </Text>
+                          <Text
+                            style={
+                              item.differenceAmount === 0
+                                ? styles.settlementDiffNeutral
+                                : item.differenceAmount > 0
+                                  ? styles.settlementDiffPositive
+                                  : styles.settlementDiffNegative
+                            }
+                          >
+                            فرق: {formatMoney(item.differenceAmount)}
+                          </Text>
+                        </View>
                       </View>
                     ))
                   )}
@@ -4801,31 +5073,55 @@ export default function App() {
                 ) : (
                   <>
                     <View style={styles.sectionHeaderInline}>
-                      <Text style={styles.sectionTitle}>لوحة أرباح الفروع</Text>
+                      <Text style={styles.sectionTitle}>لوحة تسوية الفروع</Text>
                       <Pressable style={styles.smallRefreshButton} onPress={() => void refreshDashboardData()}>
                         <Text style={styles.smallRefreshText}>تحديث</Text>
                       </Pressable>
                     </View>
 
+                    <View style={styles.inputRow}>
+                      <TextInput
+                        style={styles.input}
+                        value={adminFromDateInput}
+                        onChangeText={setAdminFromDateInput}
+                        placeholder="من تاريخ (اختياري)"
+                        placeholderTextColor="#d7b3c4"
+                      />
+                      <TextInput
+                        style={styles.input}
+                        value={adminToDateInput}
+                        onChangeText={setAdminToDateInput}
+                        placeholder="إلى تاريخ (اختياري)"
+                        placeholderTextColor="#d7b3c4"
+                      />
+                    </View>
+                    <Text style={styles.orderRowMeta}>
+                      التقرير يحسب الحصص/الصندوق/الفرق بين المتبقي المتوقع والفعلي ضمن الفترة المحددة.
+                    </Text>
+
                     <View style={styles.metricsGrid}>
                       <View style={styles.metricCard}>
-                        <Text style={styles.metricLabel}>طلبات</Text>
-                        <Text style={styles.metricValue}>{effectiveSummary.ordersCount}</Text>
-                      </View>
-                      <View style={styles.metricCard}>
-                        <Text style={styles.metricLabel}>مبيعات مكتملة</Text>
+                        <Text style={styles.metricLabel}>إجمالي الحصص</Text>
                         <Text style={styles.metricValue}>
-                          {formatMoney(effectiveSummary.completedRevenue)}
+                          {formatMoney(effectiveDashboardTotals.sharesAmount)}
                         </Text>
                       </View>
                       <View style={styles.metricCard}>
-                        <Text style={styles.metricLabel}>حصص</Text>
-                        <Text style={styles.metricValue}>{formatMoney(effectiveSummary.sharesAmount)}</Text>
+                        <Text style={styles.metricLabel}>إجمالي الصندوق</Text>
+                        <Text style={styles.metricValue}>
+                          {formatMoney(effectiveDashboardTotals.cashBoxAmount)}
+                        </Text>
+                      </View>
+                      <View style={styles.metricCard}>
+                        <Text style={styles.metricLabel}>المتبقي المتوقع</Text>
+                        <Text style={styles.metricValue}>
+                          {formatMoney(effectiveDashboardTotals.expectedCarryForwardAmount)}
+                        </Text>
                       </View>
                       <View style={styles.metricCardHighlight}>
-                        <Text style={styles.metricLabelHighlight}>صافي الربح</Text>
+                        <Text style={styles.metricLabelHighlight}>فرق التسوية</Text>
                         <Text style={styles.metricValueHighlight}>
-                          {formatMoney(effectiveSummary.netProfit)}
+                          {formatMoney(effectiveDashboardTotals.settlementDifferenceAmount)}
                         </Text>
                       </View>
                     </View>
@@ -4838,14 +5134,32 @@ export default function App() {
                         <View key={summary.storeId} style={styles.dashboardRow}>
                           <View style={styles.orderRowMain}>
                             <Text style={styles.dashboardStoreName}>{summary.storeName}</Text>
-                            <Text style={styles.orderRowItems}>{summary.ordersCount} طلب</Text>
+                            <Text
+                              style={
+                                summary.settlementDifferenceAmount === 0
+                                  ? styles.settlementDiffNeutral
+                                  : summary.settlementDifferenceAmount > 0
+                                    ? styles.settlementDiffPositive
+                                    : styles.settlementDiffNegative
+                              }
+                            >
+                              فرق: {formatMoney(summary.settlementDifferenceAmount)}
+                            </Text>
                           </View>
                           <View style={styles.orderRowMain}>
                             <Text style={styles.orderRowMeta}>
-                              مبيعات: {formatMoney(summary.completedRevenue)}
+                              حصص: {formatMoney(summary.sharesAmount)}
                             </Text>
                             <Text style={styles.orderRowMeta}>
-                              ربح: {formatMoney(summary.netProfit)}
+                              صندوق: {formatMoney(summary.cashBoxAmount)}
+                            </Text>
+                          </View>
+                          <View style={styles.orderRowMain}>
+                            <Text style={styles.orderRowMeta}>
+                              متبقي متوقع: {formatMoney(summary.expectedCarryForwardAmount)}
+                            </Text>
+                            <Text style={styles.orderRowMeta}>
+                              متبقي فعلي: {formatMoney(summary.actualRemainingAmount)}
                             </Text>
                           </View>
                         </View>

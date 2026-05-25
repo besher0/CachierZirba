@@ -1,6 +1,5 @@
-﻿import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+﻿import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { DateRangeQueryDto } from '../../common/dto/date-range-query.dto';
-import { ExpenseCategory } from '../enums/expense-category.enum';
 
 export class ListExpensesQueryDto extends DateRangeQueryDto {
   @IsOptional()
@@ -8,10 +7,12 @@ export class ListExpensesQueryDto extends DateRangeQueryDto {
   storeId?: string;
 
   @IsOptional()
-  @IsEnum(ExpenseCategory)
-  category?: ExpenseCategory;
+  @IsString()
+  @MaxLength(80)
+  category?: string;
 
   @IsOptional()
   @IsString()
   description?: string;
 }
+

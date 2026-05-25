@@ -34,6 +34,11 @@ export class CreateDailySettlementDto {
   @Min(0)
   sharesAmount: number;
 
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  actualRemainingAmount: number;
+
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })

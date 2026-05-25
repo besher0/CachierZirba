@@ -3,12 +3,7 @@ export type OrderStatus = 'COMPLETED' | 'REFUNDED';
 export type PaymentMethod = 'CASH' | 'CARD' | 'MIXED';
 
 export type UserRole = 'ADMIN' | 'CASHIER';
-export type ExpenseCategory =
-  | 'RAW_MATERIALS'
-  | 'UTILITIES'
-  | 'SALARIES'
-  | 'MARKETING'
-  | 'OTHER';
+export type ExpenseCategory = 'CLEANING' | 'DRINKS' | 'OTHER' | (string & {});
 
 export interface AuthUser {
   id: string;
@@ -109,6 +104,7 @@ export interface CreateDailySettlementPayload {
   businessDate: string;
   cashBoxAmount: number;
   sharesAmount: number;
+  actualRemainingAmount: number;
   expectedRevenue?: number;
   note?: string;
   syncedAt: string;
@@ -341,6 +337,9 @@ export interface DashboardStoreSummary {
   refundAmount: number;
   sharesAmount: number;
   cashBoxAmount: number;
+  expectedCarryForwardAmount: number;
+  actualRemainingAmount: number;
+  settlementDifferenceAmount: number;
   netProfit: number;
 }
 
@@ -351,6 +350,9 @@ export interface DashboardResponse {
     refundAmount: number;
     sharesAmount: number;
     cashBoxAmount: number;
+    expectedCarryForwardAmount: number;
+    actualRemainingAmount: number;
+    settlementDifferenceAmount: number;
     netProfit: number;
   };
   stores: DashboardStoreSummary[];

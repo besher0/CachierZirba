@@ -1,7 +1,6 @@
 ﻿import { Type } from 'class-transformer';
 import {
   IsDateString,
-  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -11,7 +10,6 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { ExpenseCategory } from '../enums/expense-category.enum';
 
 export class CreateExpenseDto {
   @IsString()
@@ -26,8 +24,10 @@ export class CreateExpenseDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
   expenseDate: string;
 
-  @IsEnum(ExpenseCategory)
-  category: ExpenseCategory;
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
+  category: string;
 
   @IsString()
   @IsNotEmpty()

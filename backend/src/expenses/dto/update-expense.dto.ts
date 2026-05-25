@@ -1,7 +1,6 @@
 ﻿import { Type } from 'class-transformer';
 import {
   IsDateString,
-  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
@@ -9,7 +8,6 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { ExpenseCategory } from '../enums/expense-category.enum';
 
 export class UpdateExpenseDto {
   @IsOptional()
@@ -18,8 +16,9 @@ export class UpdateExpenseDto {
   expenseDate?: string;
 
   @IsOptional()
-  @IsEnum(ExpenseCategory)
-  category?: ExpenseCategory;
+  @IsString()
+  @MaxLength(80)
+  category?: string;
 
   @IsOptional()
   @IsString()
@@ -41,3 +40,4 @@ export class UpdateExpenseDto {
   @IsDateString()
   syncedAt?: string;
 }
+

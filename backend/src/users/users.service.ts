@@ -49,84 +49,99 @@ export class UsersService implements OnModuleInit {
 
   private async seedDefaults(): Promise<void> {
     const stores = await this.storesService.findAll();
-    const mainStore =
-      stores.find((store) => store.code === 'ZIRBA_MAIN') ?? null;
-    const mallStore =
-      stores.find((store) => store.code === 'ZIRBA_MALL') ?? null;
-    const basharStore =
-      stores.find((store) => store.code === 'ZIRBA_BASHAR') ?? null;
+    const mainStore = stores.find((store) => store.code === 'ZIRBA_MAIN') ?? null;
+    const mallStore = stores.find((store) => store.code === 'ZIRBA_MALL') ?? null;
+    const andalusStore = stores.find((store) => store.code === 'ZIRBA_BASHAR') ?? null;
 
-    const count = await this.userRepository.count();
-    if (count === 0) {
-      const passwordHashAdmin = await hash('Admin@123', 10);
-      const passwordHashCashier = await hash('Cashier@123', 10);
+    await this.ensureAccount({
+      username: 'مها',
+      password: 'abcd',
+      displayName: 'مها',
+      role: UserRole.ADMIN,
+      storeId: null,
+      legacyUsernames: ['admin'],
+    });
 
-      const users = this.userRepository.create([
-        {
-          username: 'admin',
-          passwordHash: passwordHashAdmin,
-          role: UserRole.ADMIN,
-          displayName: 'مدير النظام',
-          storeId: null,
-          isActive: true,
-        },
-        {
-          username: 'cashier.main',
-          passwordHash: passwordHashCashier,
-          role: UserRole.CASHIER,
-          displayName: 'كاشير الفرع الرئيسي',
-          storeId: mainStore?.id ?? null,
-          isActive: true,
-        },
-        {
-          username: 'cashier.mall',
-          passwordHash: passwordHashCashier,
-          role: UserRole.CASHIER,
-          displayName: 'كاشير فرع المول',
-          storeId: mallStore?.id ?? null,
-          isActive: true,
-        },
-      ]);
-
-      await this.userRepository.save(users);
-    }
-
-    await this.ensureCashierAccount({
-      username: 'بشر',
+    await this.ensureAccount({
+      username: 'محافظة',
       password: '0000',
-      displayName: 'كاشير محل بشر',
-      storeId: basharStore?.id ?? null,
+      displayName: 'كاشير محافظة',
+      role: UserRole.CASHIER,
+      storeId: mainStore?.id ?? null,
+      legacyUsernames: ['cashier.main'],
+    });
+
+    await this.ensureAccount({
+      username: 'فرقان',
+      password: '1111',
+      displayName: 'كاشير فرقان',
+      role: UserRole.CASHIER,
+      storeId: mallStore?.id ?? null,
+      legacyUsernames: ['cashier.mall'],
+    });
+
+    await this.ensureAccount({
+      username: 'اندلس',
+      password: '5555',
+      displayName: 'كاشير اندلس',
+      role: UserRole.CASHIER,
+      storeId: andalusStore?.id ?? null,
+      legacyUsernames: ['بشر'],
     });
   }
 
-  private async ensureCashierAccount({
+  private normalizeUsername(value: string): string {
+    return value.trim().toLowerCase();
+  }
+
+  private async ensureAccount({
     username,
     password,
     displayName,
+    role,
     storeId,
+    legacyUsernames = [],
   }: {
     username: string;
     password: string;
     displayName: string;
+    role: UserRole;
     storeId: string | null;
+    legacyUsernames?: string[];
   }): Promise<void> {
-    const existingUser = await this.userRepository.findOne({
-      where: { username },
+    const normalizedUsername = this.normalizeUsername(username);
+    const normalizedLegacyUsernames = legacyUsernames.map((entry) =>
+      this.normalizeUsername(entry),
+    );
+
+    const existingPrimary = await this.userRepository.findOne({
+      where: { username: normalizedUsername },
     });
-    if (existingUser) {
-      return;
+
+    const legacyUsers = normalizedLegacyUsernames.length
+      ? await this.userRepository.find({
+          where: normalizedLegacyUsernames.map((entry) => ({ username: entry })),
+        })
+      : [];
+
+    const account = existingPrimary ?? legacyUsers[0] ?? this.userRepository.create();
+    account.username = normalizedUsername;
+    account.passwordHash = await hash(password, 10);
+    account.role = role;
+    account.displayName = displayName;
+    account.storeId = role === UserRole.ADMIN ? null : storeId;
+    account.isActive = true;
+
+    const savedAccount = await this.userRepository.save(account);
+
+    const legacyDuplicates = legacyUsers.filter((entry) => entry.id !== savedAccount.id);
+    for (const duplicate of legacyDuplicates) {
+      if (!duplicate.isActive) {
+        continue;
+      }
+
+      duplicate.isActive = false;
+      await this.userRepository.save(duplicate);
     }
-
-    const passwordHash = await hash(password, 10);
-    const user = this.userRepository.create({
-      username,
-      passwordHash,
-      role: UserRole.CASHIER,
-      displayName,
-      storeId,
-      isActive: true,
-    });
-
-    await this.userRepository.save(user);
   }
 }
