@@ -13,12 +13,13 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
-import DraggableFlatList, { RenderItemParams } from 'react-native-draggable-flatlist';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { DraggableGrid } from 'react-native-draggable-grid';
 import {
   ActivityIndicator,
+  Animated,
   Image,
   Modal,
   PanResponder,
@@ -233,7 +234,7 @@ const moneyFormatter = new Intl.NumberFormat('ar-SY', {
 });
 
 const BRAND_NAME = 'ZERBE';
-const BRAND_SIGNATURE = 'SKEIKE HANNA';
+const BRAND_SIGNATURE = 'SHEIKH HANNA';
 const BRAND_CATEGORY = 'PATISSERIE';
 const BRAND_FULL = `${BRAND_SIGNATURE} ${BRAND_CATEGORY}`;
 const EXPORT_FILE_PREFIX = 'zerbe';
@@ -241,6 +242,14 @@ const CLICK_SOUND_SOURCE = require('./assets/click.wav');
 const MISC_CART_ITEM_ID = '__MISC__';
 const MISC_CART_ITEM_NAME = 'منوعات';
 const PRODUCT_ORDER_STORAGE_KEY = `${STORAGE_KEYS.products}.orderByStore.v1`;
+const POS_PRODUCT_COLUMNS_DESKTOP = 3;
+const POS_PRODUCT_COLUMNS_MOBILE = 5;
+
+type PosProductGridItem = LocalProduct & {
+  key: string;
+  disabledDrag?: boolean;
+  disabledReSorted?: boolean;
+};
 
 const TapSoundContext = createContext<() => void>(() => {});
 type AppPressableProps = ComponentProps<typeof RNPressable>;
@@ -969,6 +978,7 @@ export default function App() {
   const isPortrait = height >= width;
   const isPortraitMobile = !isDesktop && height >= width;
   const showPageSwitchControls = !isDesktop || isPortrait;
+  const mobileNavDrawerWidth = Math.min(Math.max(width * 0.78, 260), 360);
   const tapPlayer = useAudioPlayer(CLICK_SOUND_SOURCE);
 
   const playTapSound = useCallback(() => {
@@ -1008,6 +1018,8 @@ export default function App() {
   const [pendingAmountValue, setPendingAmountValue] = useState<number | null>(null);
   const [posCashCarryAmount, setPosCashCarryAmount] = useState(0);
   const [isRefundMode, setIsRefundMode] = useState(false);
+  const [isPosProductReordering, setIsPosProductReordering] = useState(false);
+  const [activePosProductKey, setActivePosProductKey] = useState<string | null>(null);
 
   const [cashBoxInput, setCashBoxInput] = useState('');
   const [sharesInput, setSharesInput] = useState('');
@@ -1076,6 +1088,9 @@ export default function App() {
   const [adminDatePickerTarget, setAdminDatePickerTarget] = useState<'from' | 'to' | null>(null);
   const [adminDatePickerValue, setAdminDatePickerValue] = useState(new Date());
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isMobileNavVisible, setIsMobileNavVisible] = useState(false);
+  const mobileNavTranslateX = useRef(new Animated.Value(420)).current;
+  const mobileNavBackdropOpacity = useRef(new Animated.Value(0)).current;
 
   const authToken = session?.accessToken ?? '';
   const isAdmin = session?.user.role === 'ADMIN';
@@ -1110,6 +1125,74 @@ export default function App() {
     [isAdmin, navItems],
   );
 
+  const closeMobileNav = useCallback(() => {
+    if (!isMobileNavVisible) {
+      setIsMobileNavOpen(false);
+      return;
+    }
+
+    setIsMobileNavOpen(false);
+    Animated.parallel([
+      Animated.timing(mobileNavTranslateX, {
+        toValue: mobileNavDrawerWidth + 32,
+        duration: 210,
+        useNativeDriver: true,
+      }),
+      Animated.timing(mobileNavBackdropOpacity, {
+        toValue: 0,
+        duration: 210,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setIsMobileNavVisible(false);
+      }
+    });
+  }, [
+    isMobileNavVisible,
+    mobileNavBackdropOpacity,
+    mobileNavDrawerWidth,
+    mobileNavTranslateX,
+  ]);
+
+  const openMobileNav = useCallback(() => {
+    if (isDesktop || isMobileNavOpen) {
+      return;
+    }
+
+    setIsMobileNavVisible(true);
+    setIsMobileNavOpen(true);
+    mobileNavTranslateX.setValue(mobileNavDrawerWidth + 32);
+    mobileNavBackdropOpacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(mobileNavTranslateX, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(mobileNavBackdropOpacity, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [
+    isDesktop,
+    isMobileNavOpen,
+    mobileNavBackdropOpacity,
+    mobileNavDrawerWidth,
+    mobileNavTranslateX,
+  ]);
+
+  const toggleMobileNav = useCallback(() => {
+    if (isMobileNavOpen) {
+      closeMobileNav();
+      return;
+    }
+
+    openMobileNav();
+  }, [closeMobileNav, isMobileNavOpen, openMobileNav]);
+
   const activeScreenLabel = useMemo(() => {
     if (activeScreen === 'admin') {
       return 'لوحة التسوية';
@@ -1142,7 +1225,14 @@ export default function App() {
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gestureState) => {
-          if (isDesktop || selectedOrderInvoice !== null) {
+          if (
+            isDesktop ||
+            selectedOrderInvoice !== null ||
+            isMobileNavOpen ||
+            isMobileNavVisible ||
+            activeScreen === 'pos' ||
+            isPosProductReordering
+          ) {
             return false;
           }
 
@@ -1163,7 +1253,15 @@ export default function App() {
           moveScreenBySwipe('NEXT');
         },
       }),
-    [isDesktop, moveScreenBySwipe, selectedOrderInvoice],
+    [
+      activeScreen,
+      isDesktop,
+      isMobileNavOpen,
+      isMobileNavVisible,
+      isPosProductReordering,
+      moveScreenBySwipe,
+      selectedOrderInvoice,
+    ],
   );
 
   const canSwitchStore = isAdmin;
@@ -1181,6 +1279,24 @@ export default function App() {
     () => sortProductsByLocalOrder(products, orderedProductIdsForStore),
     [orderedProductIdsForStore, products],
   );
+  const posProductGridData = useMemo<PosProductGridItem[]>(
+    () => posProducts.map((item) => ({ ...item, key: item.id })),
+    [posProducts],
+  );
+  const posProductColumns = useMemo(() => {
+    if (isPosSplit) {
+      return POS_PRODUCT_COLUMNS_DESKTOP;
+    }
+
+    return width < 520 ? POS_PRODUCT_COLUMNS_MOBILE : POS_PRODUCT_COLUMNS_DESKTOP;
+  }, [isPosSplit, width]);
+  const posProductItemHeight = useMemo(() => {
+    if (posProductColumns === POS_PRODUCT_COLUMNS_MOBILE) {
+      return 128;
+    }
+
+    return isPosSplit ? 112 : 108;
+  }, [isPosSplit, posProductColumns]);
 
   const subtotal = useMemo(
     () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0),
@@ -2608,13 +2724,22 @@ export default function App() {
 
   useEffect(() => {
     setIsMobileNavOpen(false);
+    setIsMobileNavVisible(false);
   }, [activeScreen]);
 
   useEffect(() => {
-    if (isDesktop && isMobileNavOpen) {
+    if (isDesktop) {
       setIsMobileNavOpen(false);
+      setIsMobileNavVisible(false);
     }
-  }, [isDesktop, isMobileNavOpen]);
+  }, [isDesktop]);
+
+  useEffect(() => {
+    if (!isMobileNavVisible) {
+      mobileNavTranslateX.setValue(mobileNavDrawerWidth + 32);
+      mobileNavBackdropOpacity.setValue(0);
+    }
+  }, [isMobileNavVisible, mobileNavBackdropOpacity, mobileNavDrawerWidth, mobileNavTranslateX]);
 
   useEffect(() => {
     if (isCashier && assignedStoreId) {
@@ -4372,14 +4497,14 @@ export default function App() {
   if (isBootstrapping) {
     return (
       <TapSoundContext.Provider value={playTapSound}>
-        <GestureHandlerRootView style={styles.flexOne}>
+        <View style={styles.flexOne}>
           <View style={styles.bootRoot}>
             <StatusBar style="dark" />
             {renderPastelBackdrop()}
             <ActivityIndicator size="large" color="#ec4899" />
             <Text style={styles.bootText}>يتم تجهيز نظام {BRAND_NAME}...</Text>
           </View>
-        </GestureHandlerRootView>
+        </View>
       </TapSoundContext.Provider>
     );
   }
@@ -4387,7 +4512,7 @@ export default function App() {
   if (!session) {
     return (
       <TapSoundContext.Provider value={playTapSound}>
-        <GestureHandlerRootView style={styles.flexOne}>
+        <View style={styles.flexOne}>
           <View style={styles.loginRoot}>
             <StatusBar style="dark" />
             {renderPastelBackdrop()}
@@ -4437,14 +4562,14 @@ export default function App() {
               <Text style={styles.loginStatus}>{statusMessage}</Text>
             </View>
           </View>
-        </GestureHandlerRootView>
+        </View>
       </TapSoundContext.Provider>
     );
   }
 
   return (
     <TapSoundContext.Provider value={playTapSound}>
-      <GestureHandlerRootView style={styles.flexOne}>
+      <View style={styles.flexOne}>
         <View style={styles.appRoot}>
           <StatusBar style="dark" />
           {renderPastelBackdrop()}
@@ -4458,43 +4583,66 @@ export default function App() {
           ]}
           {...swipePanResponder.panHandlers}
         >
-          <View style={styles.headerRow}>
+          <View style={[styles.headerRow, !isDesktop && styles.headerRowMobile]}>
             <View style={styles.userBlock}>
-              <Text style={styles.title}>{BRAND_NAME}</Text>
-              <Text style={styles.subtitleBrand}>{BRAND_FULL}</Text>
-              <Text style={styles.subtitle}>مرحباً {session.user.displayName}</Text>
-              <Text style={styles.subtitleSmall}>
+              <Text style={[styles.title, !isDesktop && styles.titleMobile]}>{BRAND_NAME}</Text>
+              <Text style={[styles.subtitleBrand, !isDesktop && styles.subtitleBrandMobile]}>{BRAND_FULL}</Text>
+              <Text style={[styles.subtitle, !isDesktop && styles.subtitleMobile]}>مرحباً {session.user.displayName}</Text>
+              <Text style={[styles.subtitleSmall, !isDesktop && styles.subtitleSmallMobile]}>
                 {isAdmin ? 'صلاحية: إدارة عامة' : 'صلاحية: كاشير فرع'}
               </Text>
             </View>
-            <View style={styles.headerActions}>
-              <View style={[styles.badge, isOnline ? styles.badgeOnline : styles.badgeOffline]}>
-                <Text style={styles.badgeText}>{isOnline ? 'متصل' : 'أوفلاين'}</Text>
+            <View style={[styles.headerActions, !isDesktop && styles.headerActionsMobile]}>
+              <View
+                style={[
+                  styles.badge,
+                  !isDesktop && styles.badgeMobile,
+                  isOnline ? styles.badgeOnline : styles.badgeOffline,
+                ]}
+              >
+                <Text style={[styles.badgeText, !isDesktop && styles.badgeTextMobile]}>
+                  {isOnline ? 'متصل' : 'أوفلاين'}
+                </Text>
               </View>
               {!isDesktop && (
                 <Pressable
-                  style={styles.mobileNavButton}
-                  onPress={() => setIsMobileNavOpen(true)}
+                  style={[
+                    styles.mobileNavButton,
+                    !isDesktop && styles.headerActionButtonMobile,
+                    isMobileNavOpen && styles.mobileNavButtonActive,
+                  ]}
+                  onPress={toggleMobileNav}
                 >
-                  <Text style={styles.mobileNavButtonText}>☰ الصفحات</Text>
+                  <Text
+                    style={[
+                      styles.mobileNavButtonText,
+                      !isDesktop && styles.headerActionButtonTextMobile,
+                      isMobileNavOpen && styles.mobileNavButtonTextActive,
+                    ]}
+                  >
+                    {isMobileNavOpen ? '✕ إغلاق الصفحات' : '☰ الصفحات'}
+                  </Text>
                 </Pressable>
               )}
               {isAdmin && (
-                <Pressable style={styles.adminButton} onPress={() => setActiveScreen('admin')}>
-                  <Text style={styles.adminButtonText}>لوحة التسوية</Text>
+                <Pressable
+                  style={[styles.adminButton, !isDesktop && styles.headerActionButtonMobile]}
+                  onPress={() => setActiveScreen('admin')}
+                >
+                  <Text style={[styles.adminButtonText, !isDesktop && styles.headerActionButtonTextMobile]}>
+                    لوحة التسوية
+                  </Text>
                 </Pressable>
               )}
               <Pressable
-                style={styles.logoutButton}
+                style={[styles.logoutButton, !isDesktop && styles.headerActionButtonMobile]}
                 onPress={() => logout('تم تسجيل الخروج بنجاح.')}
               >
-                <Text style={styles.logoutButtonText}>خروج</Text>
+                <Text style={[styles.logoutButtonText, !isDesktop && styles.headerActionButtonTextMobile]}>
+                  خروج
+                </Text>
               </Pressable>
             </View>
-          </View>
-
-          <View style={styles.searchRow}>
-            <Text style={styles.searchPlaceholder}>ابحث عن طلب، منتج، أو حركة...</Text>
           </View>
 
           <View style={styles.storeRow}>
@@ -4545,57 +4693,80 @@ export default function App() {
                     <Text style={styles.emptyText}>لا يوجد منتجات بعد. أضف منتجات من صفحة التوريدات.</Text>
                   ) : (
                     <>
-                      <Text style={styles.orderRowMeta}>اضغط على المنتج للإضافة. سحب مطوّل على ↕ لتغيير الترتيب.</Text>
-                      <DraggableFlatList
-                        data={posProducts}
-                        keyExtractor={(item) => item.id}
-                        onDragEnd={handlePosProductDragEnd}
-                        renderItem={({ item, drag, isActive }: RenderItemParams<LocalProduct>) => (
-                          <View
-                            style={[
-                              styles.productCardCompact,
-                              !isPosSplit && styles.productCardCompactMobile,
-                              isActive && styles.productCardDragging,
-                            ]}
-                          >
-                            <View style={styles.productCardHeadRow}>
+                      <Text style={styles.orderRowMeta}>اضغط للإضافة. ضغط مطوّل على البطاقة نفسها للسحب الحر وتغيير الترتيب.</Text>
+                      <DraggableGrid
+                        numColumns={posProductColumns}
+                        data={posProductGridData}
+                        renderItem={(item: PosProductGridItem) => {
+                          const isMiscItem =
+                            item.id === MISC_CART_ITEM_ID || item.name === MISC_CART_ITEM_NAME;
+                          const priceLabel = isMiscItem ? 'سعر متغير' : formatMoney(item.price);
+                          const isDisabled = isPosProductReordering;
+
+                          return (
+                            <View
+                              style={[
+                                styles.productCardCompact,
+                                !isPosSplit && styles.productCardCompactMobile,
+                                activePosProductKey === item.id && styles.productCardDragging,
+                              ]}
+                            >
+                              <View style={styles.productCardHeadRow}>
+                                <View style={styles.dragHandle}>
+                                  <Text style={styles.dragHintText}>سحب</Text>
+                                </View>
+                                <Pressable
+                                  style={styles.smallButtonGhostCompact}
+                                  onPress={() => decreaseProductInCart(item.id)}
+                                  disabled={isDisabled || isMiscItem}
+                                >
+                                  <Text style={styles.smallButtonGhostText}>-</Text>
+                                </Pressable>
+                              </View>
                               <Pressable
-                                style={styles.dragHandleButton}
-                                onLongPress={drag}
-                                delayLongPress={140}
+                                style={[styles.productTapArea, isDisabled && styles.productTapAreaDragging]}
+                                onPress={() => {
+                                  if (isDisabled) {
+                                    return;
+                                  }
+                                  if (isMiscItem) {
+                                    addMiscAmountToCart();
+                                    return;
+                                  }
+                                  addProductToCart(item.id);
+                                }}
+                                disabled={isDisabled}
                               >
-                                <Text style={styles.dragHandleText}>↕</Text>
-                              </Pressable>
-                              <Pressable
-                                style={styles.smallButtonGhostCompact}
-                                onPress={() => decreaseProductInCart(item.id)}
-                              >
-                                <Text style={styles.smallButtonGhostText}>-</Text>
+                                <Text style={styles.productName} numberOfLines={2}>
+                                  {item.name}
+                                </Text>
+                                <Text style={styles.productPrice}>{priceLabel}</Text>
                               </Pressable>
                             </View>
-                            <Pressable
-                              style={styles.productTapArea}
-                              onPress={() => addProductToCart(item.id)}
-                            >
-                              <Text style={styles.productName} numberOfLines={2}>
-                                {item.name}
-                              </Text>
-                              <Text style={styles.productPrice}>{formatMoney(item.price)}</Text>
-                            </Pressable>
-                          </View>
-                        )}
-                        numColumns={3}
-                        scrollEnabled={false}
-                        contentContainerStyle={styles.productsGridCompact}
-                        columnWrapperStyle={styles.productGridRow}
-                        activationDistance={14}
+                          );
+                        }}
+                        onDragStart={() => {
+                          setIsPosProductReordering(true);
+                        }}
+                        onDragItemActive={(item: PosProductGridItem) => {
+                          setActivePosProductKey(item.id);
+                        }}
+                        onDragRelease={(data: PosProductGridItem[]) => {
+                          setIsPosProductReordering(false);
+                          setActivePosProductKey(null);
+                          const normalized = data.map(({ key, ...rest }: PosProductGridItem) => rest as LocalProduct);
+                          handlePosProductDragEnd({ data: normalized });
+                        }}
+                        itemHeight={posProductItemHeight}
+                        style={styles.posProductsGrid}
+                        delayLongPress={140}
                       />
                     </>
                   )}
                 </View>
 
                 <View style={[styles.posControlPane, !isPosSplit && styles.posControlPaneMobile]}>
-                  <View style={[styles.section, styles.posSection]}>
+                  <View style={[styles.section, styles.posSection, styles.posPadSection]}>
                     <Text style={[styles.sectionTitle, styles.posSectionTitle]}>لوحة البيع</Text>
                     <View style={styles.padDisplayBox}>
                       <Text style={styles.padDisplayLabel}>الإدخال الحالي</Text>
@@ -5894,21 +6065,32 @@ export default function App() {
                 )}
               </View>
             )}
-
             <Modal
-              visible={isMobileNavOpen}
+              visible={isMobileNavVisible}
               transparent
-              animationType="fade"
-              onRequestClose={() => setIsMobileNavOpen(false)}
+              animationType="none"
+              statusBarTranslucent
+              onRequestClose={closeMobileNav}
             >
-              <View style={styles.invoiceOverlay}>
-                <View style={styles.mobileNavModalCard}>
+              <View style={styles.mobileNavOverlayRoot}>
+                <Pressable style={styles.mobileNavBackdropTap} onPress={closeMobileNav}>
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[styles.mobileNavBackdrop, { opacity: mobileNavBackdropOpacity }]}
+                  />
+                </Pressable>
+                <Animated.View
+                  style={[
+                    styles.mobileNavDrawer,
+                    {
+                      width: mobileNavDrawerWidth,
+                      transform: [{ translateX: mobileNavTranslateX }],
+                    },
+                  ]}
+                >
                   <View style={styles.sectionHeaderInline}>
                     <Text style={styles.sectionTitle}>الصفحات</Text>
-                    <Pressable
-                      style={styles.smallRefreshButton}
-                      onPress={() => setIsMobileNavOpen(false)}
-                    >
+                    <Pressable style={styles.smallRefreshButton} onPress={closeMobileNav}>
                       <Text style={styles.smallRefreshText}>إغلاق</Text>
                     </Pressable>
                   </View>
@@ -5922,7 +6104,7 @@ export default function App() {
                         ]}
                         onPress={() => {
                           setActiveScreen(item.key as AppScreenKey);
-                          setIsMobileNavOpen(false);
+                          closeMobileNav();
                         }}
                       >
                         <Text
@@ -5944,7 +6126,7 @@ export default function App() {
                       </Pressable>
                     ))}
                   </ScrollView>
-                </View>
+                </Animated.View>
               </View>
             </Modal>
 
@@ -6251,10 +6433,9 @@ export default function App() {
             </Modal>
 
             <View style={styles.footerStatus}>
-              <Text style={styles.footerStatusText}>{statusMessage}</Text>
-              <Text style={styles.footerStatusMeta}>
-                عمليات بانتظار المزامنة: {queue.length}
-                {isSyncing ? ' - جاري الرفع...' : ''}
+              <Text style={styles.footerStatusText} numberOfLines={1}>
+                {statusMessage} | عمليات بانتظار المزامنة: {queue.length}
+                {isSyncing ? ' | جاري الرفع...' : ''}
               </Text>
             </View>
           </ScrollView>
@@ -6296,7 +6477,7 @@ export default function App() {
         )}
           </View>
         </View>
-      </GestureHandlerRootView>
+      </View>
     </TapSoundContext.Provider>
   );
 }
@@ -6627,6 +6808,10 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     gap: 10,
   },
+  headerRowMobile: {
+    marginBottom: 8,
+    gap: 6,
+  },
   userBlock: {
     flex: 1,
   },
@@ -6638,6 +6823,10 @@ const styles = StyleSheet.create({
     fontFamily: 'serif',
     letterSpacing: 1.4,
   },
+  titleMobile: {
+    fontSize: 22,
+    letterSpacing: 1.05,
+  },
   subtitleBrand: {
     fontSize: 11,
     color: '#ec4899',
@@ -6646,11 +6835,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1,
   },
+  subtitleBrandMobile: {
+    fontSize: 9,
+    marginTop: -2,
+    letterSpacing: 0.75,
+  },
   subtitle: {
     fontSize: 13,
     color: '#ae7ca1',
     marginTop: 4,
     textAlign: 'right',
+  },
+  subtitleMobile: {
+    fontSize: 11,
+    marginTop: 2,
   },
   subtitleSmall: {
     fontSize: 11,
@@ -6658,9 +6856,24 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: 'right',
   },
+  subtitleSmallMobile: {
+    fontSize: 9,
+    marginTop: 1,
+  },
   headerActions: {
     alignItems: 'flex-end',
     gap: 8,
+  },
+  headerActionsMobile: {
+    gap: 5,
+  },
+  headerActionButtonMobile: {
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  headerActionButtonTextMobile: {
+    fontSize: 12,
   },
   mobileNavButton: {
     backgroundColor: '#f8e8ee',
@@ -6668,9 +6881,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
+  mobileNavButtonActive: {
+    backgroundColor: '#ec4899',
+  },
   mobileNavButtonText: {
     color: '#9d174d',
     fontWeight: '700',
+  },
+  mobileNavButtonTextActive: {
+    color: '#ffffff',
   },
   adminButton: {
     backgroundColor: '#f8e8ee',
@@ -6687,6 +6906,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
+  badgeMobile: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
   badgeOnline: {
     backgroundColor: '#f8e8ee',
   },
@@ -6697,6 +6920,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#9d174d',
   },
+  badgeTextMobile: {
+    fontSize: 12,
+  },
   logoutButton: {
     backgroundColor: '#fbe8ee',
     borderRadius: 10,
@@ -6706,19 +6932,6 @@ const styles = StyleSheet.create({
   logoutButtonText: {
     color: '#831843',
     fontWeight: '700',
-  },
-  searchRow: {
-    backgroundColor: '#fdeef4',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  searchPlaceholder: {
-    textAlign: 'right',
-    color: '#7c4f68',
-    fontWeight: '700',
-    fontSize: 14,
   },
   content: {
     paddingBottom: 40,
@@ -6810,9 +7023,9 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
   },
   posControlPane: {
-    flex: 1.05,
+    flex: 0.94,
     width: '50%',
-    gap: 6,
+    gap: 3,
   },
   posControlPaneMobile: {
     width: '100%',
@@ -6827,63 +7040,86 @@ const styles = StyleSheet.create({
     flex: 0,
   },
   posSection: {
-    padding: 7,
+    padding: 5,
     borderColor: '#f0d3e0',
     boxShadow: '0px 2px 6px rgba(198, 107, 144, 0.06)',
     elevation: 1,
   },
+  posPadSection: {
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
   posSectionTitle: {
-    fontSize: 15,
-    marginBottom: 8,
+    fontSize: 13,
+    marginBottom: 5,
   },
-  productsGridCompact: {
-    gap: 4,
-  },
-  productGridRow: {
-    justifyContent: 'space-between',
+  posProductsGrid: {
+    width: '60%',
+    overflow: 'hidden',
   },
   productCardCompact: {
-    width: '32%',
+    width: '100%',
+    height: '100%',
+    maxWidth: '100%',
+    maxHeight: '100%',
+    alignSelf: 'stretch',
     minWidth: 0,
     backgroundColor: '#fbe8ee',
     borderRadius: 10,
-    padding: 5,
+    padding: 4,
     borderWidth: 1,
     borderColor: '#efcad4',
-    marginBottom: 5,
+    marginBottom: 0,
+    overflow: 'hidden',
+    justifyContent: 'space-between',
   },
   productCardCompactMobile: {
-    width: '32%',
+    width: '40%',
+    height: '100%',
     minWidth: 0,
   },
   productCardDragging: {
-    opacity: 0.85,
+    opacity: 0.92,
     borderColor: '#db2777',
+    backgroundColor: '#ffe1ee',
+    elevation: 2,
+    transform: [{ scale: 1.02 }],
   },
   productCardHeadRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 2,
+    flexShrink: 0,
   },
-  dragHandleButton: {
+  dragHintText: {
+    color: '#9d174d',
+    fontWeight: '800',
+    fontSize: 9,
     backgroundColor: '#f8e8ee',
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#efcad4',
-    paddingVertical: 2,
-    paddingHorizontal: 6,
-  },
-  dragHandleText: {
-    color: '#9d174d',
-    fontWeight: '800',
-    fontSize: 12,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
   },
   productTapArea: {
     borderRadius: 8,
     backgroundColor: '#fff6fa',
-    paddingHorizontal: 5,
+    paddingHorizontal: 4,
     paddingVertical: 4,
+    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
+    justifyContent: 'space-between',
+    overflow: 'hidden',
+  },
+  productTapAreaDragging: {
+    backgroundColor: '#ffe5f0',
+  },
+  dragHandle: {
+    alignSelf: 'flex-start',
   },
   productCard: {
     width: '48%',
@@ -6896,15 +7132,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 12,
     lineHeight: 16,
-    minHeight: 32,
+    minHeight: 30,
     textAlign: 'right',
+    flexShrink: 1,
   },
   productPrice: {
     color: '#db2777',
-    marginTop: 5,
+    marginTop: 4,
     fontWeight: '800',
     fontSize: 12,
     textAlign: 'right',
+    flexShrink: 0,
   },
   productActions: {
     flexDirection: 'row',
@@ -6972,11 +7210,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   cartListContainer: {
-    minHeight: 88,
-    maxHeight: 210,
+    minHeight: 112,
+    maxHeight: 260,
   },
   cartListScroll: {
-    maxHeight: 210,
+    maxHeight: 260,
   },
   cartItemName: {
     flex: 1,
@@ -7028,45 +7266,45 @@ const styles = StyleSheet.create({
   },
   padDisplayBox: {
     backgroundColor: '#fdf2f6',
-    borderRadius: 9,
-    paddingVertical: 5,
-    paddingHorizontal: 7,
+    borderRadius: 7,
+    paddingVertical: 3,
+    paddingHorizontal: 5,
   },
   padDisplayLabel: {
     color: '#b88bad',
     textAlign: 'right',
     fontWeight: '600',
-    fontSize: 11,
+    fontSize: 9,
   },
   padDisplayValue: {
     color: '#9d174d',
     textAlign: 'right',
     fontWeight: '900',
-    fontSize: 16,
-    marginTop: 2,
+    fontSize: 14,
+    marginTop: 1,
   },
   padMetaRow: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
-    marginTop: 4,
-    marginBottom: 3,
+    marginTop: 1,
+    marginBottom: 1,
   },
   padMetaText: {
     color: '#ae7ca1',
     fontWeight: '700',
-    fontSize: 10,
+    fontSize: 8.5,
   },
   padGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 5,
+    gap: 3,
   },
   padKey: {
-    width: '31.5%',
-    minWidth: 40,
+    width: '31%',
+    minWidth: 34,
     backgroundColor: '#f8e8ee',
-    borderRadius: 8,
-    paddingVertical: 5,
+    borderRadius: 6,
+    paddingVertical: 3,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#efcad4',
@@ -7074,27 +7312,27 @@ const styles = StyleSheet.create({
   padKeyText: {
     color: '#831843',
     fontWeight: '900',
-    fontSize: 14,
+    fontSize: 12,
     fontVariant: ['tabular-nums'],
   },
   padActionRow: {
-    marginTop: 6,
+    marginTop: 3,
     flexDirection: 'row-reverse',
-    gap: 5,
+    gap: 3,
   },
   padActionButton: {
     flex: 1,
     backgroundColor: '#f8e8ee',
-    borderRadius: 8,
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 7,
+    paddingVertical: 5,
   },
   padActionButtonPrimary: {
     flex: 1,
     backgroundColor: '#ec4899',
-    borderRadius: 8,
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 7,
+    paddingVertical: 5,
   },
   padActionButtonDanger: {
     backgroundColor: '#fdecef',
@@ -7104,40 +7342,40 @@ const styles = StyleSheet.create({
   padActionText: {
     color: '#831843',
     fontWeight: '800',
-    fontSize: 12,
+    fontSize: 10,
   },
   padActionTextPrimary: {
     color: '#ffffff',
     fontWeight: '800',
-    fontSize: 12,
+    fontSize: 10,
   },
   padClearButton: {
-    marginTop: 6,
+    marginTop: 4,
     backgroundColor: '#fdeef4',
-    borderRadius: 8,
+    borderRadius: 6,
     alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: 4,
   },
   padClearText: {
     color: '#975985',
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 10,
   },
   inputFull: {
-    marginTop: 10,
+    marginTop: 6,
     backgroundColor: '#fdf2f6',
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 11,
+    paddingVertical: 9,
     color: '#6a1234',
     textAlign: 'right',
-    fontSize: 16,
+    fontSize: 15,
     borderWidth: 1,
     borderColor: '#efcadb',
   },
   summaryRow: {
-    marginTop: 12,
-    gap: 4,
+    marginTop: 8,
+    gap: 3,
   },
   summaryText: {
     color: '#9a5e88',
@@ -7146,15 +7384,15 @@ const styles = StyleSheet.create({
   },
   summaryTextStrong: {
     color: '#9d174d',
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
     textAlign: 'right',
   },
   primaryButton: {
-    marginTop: 12,
+    marginTop: 8,
     backgroundColor: '#ec4899',
     borderRadius: 12,
-    paddingVertical: 13,
+    paddingVertical: 9,
     alignItems: 'center',
   },
   buttonDisabled: {
@@ -7163,21 +7401,21 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: '#ffffff',
     fontWeight: '800',
-    fontSize: 16,
+    fontSize: 15,
   },
   cancelOrderButton: {
-    marginTop: 8,
+    marginTop: 5,
     backgroundColor: '#fdecef',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#efcad4',
-    paddingVertical: 12,
+    paddingVertical: 8,
     alignItems: 'center',
   },
   cancelOrderButtonText: {
     color: '#db2777',
     fontWeight: '800',
-    fontSize: 15,
+    fontSize: 14,
   },
   secondaryButton: {
     marginTop: 12,
@@ -7631,17 +7869,32 @@ const styles = StyleSheet.create({
     borderColor: '#f0d8e4',
     gap: 8,
   },
-  mobileNavModalCard: {
+  mobileNavOverlayRoot: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  mobileNavBackdropTap: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mobileNavBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(20, 20, 20, 0.42)',
+  },
+  mobileNavDrawer: {
     backgroundColor: '#fffafd',
-    borderRadius: 16,
+    borderTopLeftRadius: 18,
+    borderBottomLeftRadius: 18,
     padding: 14,
-    borderWidth: 1,
+    borderLeftWidth: 1,
     borderColor: '#f0d8e4',
-    maxHeight: '80%',
+    height: '100%',
     gap: 8,
+    boxShadow: '-4px 0px 16px rgba(0, 0, 0, 0.12)',
+    elevation: 8,
   },
   mobileNavList: {
-    maxHeight: 340,
+    flex: 1,
   },
   mobileNavItem: {
     borderRadius: 12,
@@ -7689,21 +7942,16 @@ const styles = StyleSheet.create({
   },
   footerStatus: {
     backgroundColor: '#9d174d',
-    borderRadius: 14,
-    padding: 12,
-    marginTop: 6,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 4,
   },
   footerStatusText: {
     color: '#fff3f8',
     textAlign: 'right',
     fontWeight: '600',
-    fontSize: 14,
-  },
-  footerStatusMeta: {
-    color: '#eeced9',
-    textAlign: 'right',
-    marginTop: 4,
-    fontSize: 13,
+    fontSize: 12,
   },
 });
 
