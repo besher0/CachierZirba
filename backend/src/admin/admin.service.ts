@@ -20,6 +20,7 @@ interface SettlementAggRow {
   storeId: string;
   cashBoxAmount: string;
   sharesAmount: string;
+  expectedRevenue: string;
   expectedCarryForwardAmount: string;
   actualRemainingAmount: string;
 }
@@ -108,8 +109,9 @@ export class AdminService {
         settlementAgg?.expectedCarryForwardAmount,
       );
       const actualRemainingAmount = this.parseNumber(settlementAgg?.actualRemainingAmount);
+      const expectedRevenue = this.parseNumber(settlementAgg?.expectedRevenue);
       const settlementDifferenceAmount = Number(
-        (actualRemainingAmount - expectedCarryForwardAmount).toFixed(2),
+        (actualRemainingAmount - expectedRevenue).toFixed(2),
       );
       const netProfit = completedRevenue - refundAmount - sharesAmount;
 
@@ -175,17 +177,18 @@ export class AdminService {
     const cashBoxAmount = settlements.reduce((sum, item) => sum + item.cashBoxAmount, 0);
     const expectedCarryForwardAmount = settlements.reduce((sum, item) => {
       const expectedCarryForward = Math.max(
-        item.expectedRevenue - item.cashBoxAmount - item.sharesAmount,
+        item.actualRemainingAmount - item.cashBoxAmount - item.sharesAmount,
         0,
       );
       return sum + expectedCarryForward;
     }, 0);
+    const expectedRevenue = settlements.reduce((sum, item) => sum + item.expectedRevenue, 0);
     const actualRemainingAmount = settlements.reduce(
       (sum, item) => sum + item.actualRemainingAmount,
       0,
     );
     const settlementDifferenceAmount = Number(
-      (actualRemainingAmount - expectedCarryForwardAmount).toFixed(2),
+      (actualRemainingAmount - expectedRevenue).toFixed(2),
     );
 
     return {
@@ -298,8 +301,9 @@ export class AdminService {
       .select('s.storeId', 'storeId')
       .addSelect('SUM(s.cashBoxAmount)', 'cashBoxAmount')
       .addSelect('SUM(s.sharesAmount)', 'sharesAmount')
+      .addSelect('SUM(s.expectedRevenue)', 'expectedRevenue')
       .addSelect(
-        'SUM(CASE WHEN (s.expectedRevenue - s.cashBoxAmount - s.sharesAmount) > 0 THEN (s.expectedRevenue - s.cashBoxAmount - s.sharesAmount) ELSE 0 END)',
+        'SUM(CASE WHEN (s.actualRemainingAmount - s.cashBoxAmount - s.sharesAmount) > 0 THEN (s.actualRemainingAmount - s.cashBoxAmount - s.sharesAmount) ELSE 0 END)',
         'expectedCarryForwardAmount',
       )
       .addSelect('SUM(s.actualRemainingAmount)', 'actualRemainingAmount')
