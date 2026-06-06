@@ -22,19 +22,24 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.besher1.zerbepatisserie"
+      "package": "com.besher1.zerbepatisserie",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "c683cd15-dd3e-48af-a2f2-c32093837820"
-      }
-    },
     "plugins": [
       "@react-native-community/datetimepicker",
       "expo-audio"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fe87eedd-e285-469a-ba97-ae206af09503"
+      }
+    },
+    "owner": "besher11"
   }
 }

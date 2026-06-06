@@ -435,7 +435,10 @@ export function PosScreen() {
                                     x{formatQuantity(item.quantity)}
                                   </Text>
                                   <Text style={styles.cartItemPrice}>
-                                    {formatMoney(item.price * item.quantity)}
+                                    {formatMoney(
+                                      item.lineTotal ??
+                                        item.price * item.quantity,
+                                    )}
                                   </Text>
                                 </View>
                               ))}

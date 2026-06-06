@@ -556,7 +556,11 @@ export function useAppController() {
   }, [isPosSplit]);
 
   const subtotal = useMemo(
-    () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    () =>
+      cart.reduce(
+        (sum, item) => sum + (item.lineTotal ?? item.price * item.quantity),
+        0,
+      ),
     [cart],
   );
 
@@ -2591,6 +2595,7 @@ export function useAppController() {
     }
 
     let quantityToAdd = 1;
+    let fixedLineTotalToAdd: number | undefined;
     let operationMessage = "";
 
     if (pendingMultiplier && pendingMultiplier > 0) {
@@ -2623,6 +2628,7 @@ export function useAppController() {
         return;
       }
 
+      fixedLineTotalToAdd = pendingAmountValue;
       operationMessage = `تمت إضافة ${product.name} بقيمة ${formatMoney(
         pendingAmountValue,
       )} (كمية ${quantityToAdd}).`;
@@ -2653,12 +2659,28 @@ export function useAppController() {
       const found = previous.find((item) => item.id === product.id);
 
       if (!found) {
-        return [...previous, { ...product, quantity: quantityToAdd }];
+        return [
+          ...previous,
+          {
+            ...product,
+            quantity: quantityToAdd,
+            lineTotal: fixedLineTotalToAdd,
+          },
+        ];
       }
 
       return previous.map((item) =>
         item.id === product.id
-          ? { ...item, quantity: item.quantity + quantityToAdd }
+          ? {
+              ...item,
+              quantity: item.quantity + quantityToAdd,
+              lineTotal:
+                item.lineTotal !== undefined ||
+                fixedLineTotalToAdd !== undefined
+                  ? (item.lineTotal ?? item.price * item.quantity) +
+                    (fixedLineTotalToAdd ?? product.price * quantityToAdd)
+                  : undefined,
+            }
           : item,
       );
     });
@@ -2715,11 +2737,26 @@ export function useAppController() {
   const decreaseProductInCart = (productId: string) => {
     setCart((previous) =>
       previous
-        .map((item) =>
-          item.id === productId
-            ? { ...item, quantity: Math.max(item.quantity - 1, 0) }
-            : item,
-        )
+        .map((item) => {
+          if (item.id !== productId) {
+            return item;
+          }
+
+          const quantity = Math.max(item.quantity - 1, 0);
+          return {
+            ...item,
+            quantity,
+            lineTotal:
+              item.lineTotal === undefined
+                ? undefined
+                : quantity === 0
+                ? 0
+                : Math.max(
+                    item.lineTotal - item.price,
+                    0,
+                  ),
+          };
+        })
         .filter((item) => item.quantity > 0),
     );
   };
@@ -2772,7 +2809,7 @@ export function useAppController() {
         productName: item.name,
         quantity: item.quantity,
         unitPrice: item.price,
-        lineTotal: item.quantity * item.price,
+        lineTotal: item.lineTotal ?? item.quantity * item.price,
       })),
       orderedAt,
     };

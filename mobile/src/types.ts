@@ -373,6 +373,7 @@ export interface DashboardResponse {
 
 export interface CartItem extends ProductTemplate {
   quantity: number;
+  lineTotal?: number;
 }
 
 export interface LoginPayload {
