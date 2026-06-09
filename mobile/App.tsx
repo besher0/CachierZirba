@@ -61,9 +61,9 @@ export default function App() {
                   isPortraitMobile && styles.mainPanePortraitMobile,
                 ]}
                 {...swipePanResponder.panHandlers}
-              >
-                <AppHeader />
-                <StoreSwitcher />
+                >
+                  <AppHeader />
+                {appScreenContext.activeScreen !== "pos" && <StoreSwitcher />}
                 <MobilePageIndicator />
 
                 <ScrollView

@@ -1,7 +1,49 @@
 // @ts-nocheck
+import { useContext, useEffect, useState } from "react";
+import { Platform } from "react-native";
+import { TapSoundContext } from "../components/TapPressable";
 import { useAppScreenContext } from "./AppScreenContext";
+import { StoreSwitcher } from "./StoreSwitcher";
+
+const keyboardDigitMap: Record<string, string> = {
+  "0": "0",
+  "1": "1",
+  "2": "2",
+  "3": "3",
+  "4": "4",
+  "5": "5",
+  "6": "6",
+  "7": "7",
+  "8": "8",
+  "9": "9",
+  "٠": "0",
+  "١": "1",
+  "٢": "2",
+  "٣": "3",
+  "٤": "4",
+  "٥": "5",
+  "٦": "6",
+  "٧": "7",
+  "٨": "8",
+  "٩": "9",
+  "۰": "0",
+  "۱": "1",
+  "۲": "2",
+  "۳": "3",
+  "۴": "4",
+  "۵": "5",
+  "۶": "6",
+  "۷": "7",
+  "۸": "8",
+  "۹": "9",
+};
 
 export function PosScreen() {
+  const playTapSound = useContext(TapSoundContext);
+  const [keyboardPressedKey, setKeyboardPressedKey] = useState<string | null>(
+    null,
+  );
+  const [posProductsPaneWidth, setPosProductsPaneWidth] = useState(0);
   const {
     DraggableGrid,
     LocalProduct,
@@ -145,6 +187,75 @@ export function PosScreen() {
     x,
   } = useAppScreenContext() as any;
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+
+    const getPadToken = (event: KeyboardEvent) => {
+      const digit = keyboardDigitMap[event.key];
+      if (digit) {
+        return digit;
+      }
+
+      if (event.key === "." || event.code === "NumpadDecimal") {
+        return ".";
+      }
+
+      return null;
+    };
+
+    const isEditableTarget = (target: EventTarget | null) => {
+      const element = target as HTMLElement | null;
+      return (
+        element?.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(element?.tagName ?? "")
+      );
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        isEditableTarget(event.target)
+      ) {
+        return;
+      }
+
+      const token = getPadToken(event);
+      if (!token) {
+        return;
+      }
+
+      event.preventDefault();
+      pushPadToken(token);
+      playTapSound();
+      setKeyboardPressedKey(token);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      const token = getPadToken(event);
+      if (token) {
+        setKeyboardPressedKey((current) =>
+          current === token ? null : current,
+        );
+      }
+    };
+
+    const clearKeyboardPressedKey = () => setKeyboardPressedKey(null);
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", clearKeyboardPressedKey);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", clearKeyboardPressedKey);
+    };
+  }, [playTapSound, pushPadToken]);
+
   return (
 <View
                     style={[
@@ -154,11 +265,26 @@ export function PosScreen() {
                   >
                     <View
                       style={[
+                        styles.posProductsColumn,
+                        !isPosSplit && styles.posProductsColumnMobile,
+                      ]}
+                    >
+                      <StoreSwitcher />
+                    <View
+                      style={[
                         styles.section,
                         styles.posSection,
                         styles.posProductsPane,
                         !isPosSplit && styles.posProductsPaneMobile,
                       ]}
+                      onLayout={(event) => {
+                        const nextWidth = Math.round(
+                          event.nativeEvent.layout.width,
+                        );
+                        setPosProductsPaneWidth((current) =>
+                          current === nextWidth ? current : nextWidth,
+                        );
+                      }}
                     >
                       <Text
                         style={[styles.sectionTitle, styles.posSectionTitle]}
@@ -175,10 +301,12 @@ export function PosScreen() {
                             اضغط للإضافة. ضغط مطوّل على البطاقة نفسها للسحب الحر
                             وتغيير الترتيب.
                           </Text>
-                          <DraggableGrid
-                            numColumns={posProductColumns}
-                            data={posProductGridData}
-                            renderItem={(item: PosProductGridItem) => {
+                          {posProductsPaneWidth > 0 && (
+                            <DraggableGrid
+                              key={`pos-products-${posProductColumns}-${posProductsPaneWidth}`}
+                              numColumns={posProductColumns}
+                              data={posProductGridData}
+                              renderItem={(item: PosProductGridItem) => {
                               const isMiscItem =
                                 item.id === MISC_CART_ITEM_ID ||
                                 item.name === MISC_CART_ITEM_NAME;
@@ -245,29 +373,39 @@ export function PosScreen() {
                                   </Pressable>
                                 </View>
                               );
-                            }}
-                            onDragStart={() => {
-                              setIsPosProductReordering(true);
-                            }}
-                            onDragItemActive={(item: PosProductGridItem) => {
-                              setIsPosProductReordering(true);
-                              setActivePosProductKey(item.id);
-                            }}
-                            onDragRelease={(data: PosProductGridItem[]) => {
-                              setIsPosProductReordering(false);
-                              setActivePosProductKey(null);
-                              const normalized = data.map(
-                                ({ key, ...rest }: PosProductGridItem) =>
-                                  rest as LocalProduct,
-                              );
-                              handlePosProductDragEnd({ data: normalized });
-                            }}
-                            itemHeight={posProductItemHeight}
-                            style={styles.posProductsGrid}
-                            delayLongPress={140}
-                          />
+                              }}
+                              onDragStart={() => {
+                                setIsPosProductReordering(true);
+                              }}
+                              onDragItemActive={(item: PosProductGridItem) => {
+                                setIsPosProductReordering(true);
+                                setActivePosProductKey(item.id);
+                              }}
+                              onDragRelease={(data: PosProductGridItem[]) => {
+                                setIsPosProductReordering(false);
+                                setActivePosProductKey(null);
+                                const normalized = data.map(
+                                  ({ key, ...rest }: PosProductGridItem) =>
+                                    rest as LocalProduct,
+                                );
+                                handlePosProductDragEnd({ data: normalized });
+                              }}
+                              itemHeight={posProductItemHeight}
+                              style={[
+                                styles.posProductsGrid,
+                                {
+                                  minHeight:
+                                    Math.ceil(
+                                      posProducts.length / posProductColumns,
+                                    ) * posProductItemHeight,
+                                },
+                              ]}
+                              delayLongPress={140}
+                            />
+                          )}
                         </>
                       )}
+                    </View>
                     </View>
 
                     <View
@@ -338,7 +476,11 @@ export function PosScreen() {
                           ].map((key) => (
                             <Pressable
                               key={key}
-                              style={styles.padKey}
+                              style={[
+                                styles.padKey,
+                                keyboardPressedKey === key &&
+                                  styles.padKeyKeyboardPressed,
+                              ]}
                               onPress={() => pushPadToken(key)}
                             >
                               <Text style={styles.padKeyText}>{key}</Text>

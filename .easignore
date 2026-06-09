@@ -1,0 +1,24 @@
+# Dependencies and generated output
+node_modules/
+backend/node_modules/
+backend/dist/
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/.eas-inspect/
+mobile/web-build/
+
+# Native build caches
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+
+# Files not required by the mobile build
+backend/
+.git/
+.vscode/
+*.db
+login.json
+.env
+.env.*
+*.log

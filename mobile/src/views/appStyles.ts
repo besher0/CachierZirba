@@ -534,24 +534,35 @@ export const styles = StyleSheet.create({
   },
   posWorkspace: {
     flexDirection: "row-reverse",
-    alignItems: "stretch",
-    gap: 8,
+    alignItems: "flex-start",
+    gap: 12,
   },
   posWorkspaceMobile: {
     flexDirection: "column",
   },
+  posProductsColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  posProductsColumnMobile: {
+    width: "100%",
+    flex: 0,
+  },
   posControlPane: {
-    flex: 0.94,
-    width: "50%",
+    width: 340,
+    flexGrow: 0,
+    flexShrink: 0,
     gap: 3,
+    alignSelf: "flex-start",
+    marginTop: -16,
   },
   posControlPaneMobile: {
     width: "100%",
     flex: 0,
+    marginTop: 0,
   },
   posProductsPane: {
-    flex: 1.2,
-    width: "50%",
+    width: "100%",
   },
   posProductsPaneMobile: {
     width: "100%",
@@ -564,7 +575,7 @@ export const styles = StyleSheet.create({
     elevation: 1,
   },
   posPadSection: {
-    paddingTop: 4,
+    paddingTop: 14,
     paddingBottom: 4,
   },
   posSectionTitle: {
@@ -827,6 +838,11 @@ export const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: "#efcad4",
+  },
+  padKeyKeyboardPressed: {
+    backgroundColor: "#f9a8d4",
+    borderColor: "#db2777",
+    transform: [{ scale: 0.96 }],
   },
   padKeyText: {
     color: "#831843",

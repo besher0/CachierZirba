@@ -181,7 +181,7 @@ export function useAppController() {
   const { width, height } = useWindowDimensions();
   const shortestSide = Math.min(width, height);
   const isDesktop = shortestSide >= 960;
-  const isPosSplit = width >= 980;
+  const isPosSplit = width >= 760;
   const isPortrait = height >= width;
   const isPortraitMobile = !isDesktop && height >= width;
   const showPageSwitchControls = !isDesktop || isPortrait;
