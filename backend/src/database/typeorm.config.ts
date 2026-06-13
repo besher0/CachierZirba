@@ -1,6 +1,7 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { DataSourceOptions } from 'typeorm';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
+import { CreateEmployeeTables1783000000000 } from './migrations/1783000000000-CreateEmployeeTables';
 import { Expense } from '../expenses/entities/expense.entity';
 import { EmployeeAbsence } from '../employees/entities/employee-absence.entity';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
@@ -44,7 +45,8 @@ export function createTypeOrmOptions(
         rejectUnauthorized: false,
       },
       entities,
-      migrations,
+      migrations: migrations ?? [CreateEmployeeTables1783000000000],
+      migrationsRun: migrations === undefined,
       synchronize,
     };
   }
