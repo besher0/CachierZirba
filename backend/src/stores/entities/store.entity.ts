@@ -11,6 +11,7 @@ import { DailySettlement } from '../../daily-settlements/entities/daily-settleme
 import { Expense } from '../../expenses/entities/expense.entity';
 import { Order } from '../../orders/entities/order.entity';
 import { Purchase } from '../../purchases/entities/purchase.entity';
+import { InventoryAdjustment } from '../../inventory-adjustments/entities/inventory-adjustment.entity';
 
 @Entity('stores')
 @Unique('UQ_store_code', ['code'])
@@ -38,6 +39,9 @@ export class Store {
 
   @OneToMany(() => Purchase, (purchase) => purchase.store)
   purchases: Purchase[];
+
+  @OneToMany(() => InventoryAdjustment, (adjustment) => adjustment.store)
+  inventoryAdjustments: InventoryAdjustment[];
 
   @CreateDateColumn()
   createdAt: Date;

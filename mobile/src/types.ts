@@ -200,6 +200,28 @@ export interface ApiPurchase extends CreatePurchasePayload {
   updatedAt: string;
 }
 
+export interface CreateInventoryAdjustmentPayload {
+  clientAdjustmentId: string;
+  storeId: string;
+  productClientId: string;
+  actualQuantity: number;
+  adjustedAt: string;
+  syncedAt: string;
+}
+
+export interface LocalInventoryAdjustment
+  extends CreateInventoryAdjustmentPayload {
+  synced: boolean;
+  createdLocallyAt: string;
+}
+
+export interface ApiInventoryAdjustment
+  extends CreateInventoryAdjustmentPayload {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Employee {
   id: string;
   storeId: string;
@@ -303,6 +325,7 @@ interface SyncJobBase {
     | 'EXPENSE'
     | 'PURCHASE'
     | 'PRODUCT'
+    | 'INVENTORY_ADJUSTMENT'
     | 'EMPLOYEE'
     | 'EMPLOYEE_ABSENCE'
     | 'EMPLOYEE_WITHDRAWAL';
@@ -384,6 +407,12 @@ export interface ProductDeleteSyncJob extends SyncJobBase {
   payload: { clientProductId: string };
 }
 
+export interface InventoryAdjustmentCreateSyncJob extends SyncJobBase {
+  action: 'CREATE';
+  entity: 'INVENTORY_ADJUSTMENT';
+  payload: CreateInventoryAdjustmentPayload;
+}
+
 export interface EmployeeCreateSyncJob extends SyncJobBase {
   action: 'CREATE';
   entity: 'EMPLOYEE';
@@ -428,6 +457,7 @@ export type SyncJob =
   | ProductCreateSyncJob
   | ProductUpdateSyncJob
   | ProductDeleteSyncJob
+  | InventoryAdjustmentCreateSyncJob
   | EmployeeCreateSyncJob
   | EmployeeAbsenceCreateSyncJob
   | EmployeeAbsenceDeleteSyncJob

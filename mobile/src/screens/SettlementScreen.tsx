@@ -15,6 +15,7 @@ export function SettlementScreen() {
     businessDate,
     cashBoxAmount,
     cashBoxInput,
+    commitInventoryAdjustment,
     d7b3c4,
     decimal,
     diffQty,
@@ -25,6 +26,7 @@ export function SettlementScreen() {
     input,
     inputFull,
     inputRow,
+    isAdmin,
     item,
     key,
     keyboardType,
@@ -52,7 +54,7 @@ export function SettlementScreen() {
     productId,
     productName,
     productSalesSummaryRows,
-    refreshDailySettlementsData,
+    refreshSettlementData,
     refundedQty,
     row,
     secondaryButton,
@@ -115,7 +117,17 @@ export function SettlementScreen() {
   return (
 <>
                     <View style={styles.section}>
-                      <Text style={styles.sectionTitle}>تسوية اليوم</Text>
+                      <View style={styles.sectionHeaderInline}>
+                        <Text style={styles.sectionTitle}>تسوية اليوم</Text>
+                        <Pressable
+                          style={styles.smallRefreshButton}
+                          onPress={() => void refreshSettlementData()}
+                        >
+                          <Text style={styles.smallRefreshText}>
+                            تحديث الكل
+                          </Text>
+                        </Pressable>
+                      </View>
                       <View style={styles.settlementStatsGrid}>
                         <View style={styles.settlementStatCard}>
                           <Text style={styles.settlementStatLabel}>
@@ -289,6 +301,13 @@ export function SettlementScreen() {
                       <Text style={styles.storeTableTitle}>
                         تدقيق مخزون منتجات القطعة
                       </Text>
+                      {isAdmin ? (
+                        <Text style={styles.orderRowMeta}>
+                          أدخل الرصيد الفعلي، ثم غادر الخانة لاعتماده كمخزون
+                          جديد. لا يُسجل كتوريد ولا يدخل في الحساب المالي
+                          للتسوية.
+                        </Text>
+                      ) : null}
                       {pieceStockAuditRows.length === 0 ? (
                         <Text style={styles.emptyText}>
                           لا يوجد منتجات قطعة للتدقيق.
@@ -315,6 +334,11 @@ export function SettlementScreen() {
                                   value,
                                 )
                               }
+                              onBlur={() => {
+                                if (isAdmin) {
+                                  void commitInventoryAdjustment(row.productId);
+                                }
+                              }}
                               keyboardType="decimal-pad"
                               placeholder="أدخل العدد الفعلي (قطعة)"
                               placeholderTextColor="#d7b3c4"
@@ -332,7 +356,7 @@ export function SettlementScreen() {
                                 الفرق: {row.diffQty}
                               </Text>
                             ) : null}
-                            {row.adjustmentAmount !== null ? (
+                            {!isAdmin && row.adjustmentAmount !== null ? (
                               <Text style={styles.orderRowMeta}>
                                 قيمة الفرق المحتسبة على المبيعات:{" "}
                                 {formatMoney(row.adjustmentAmount)}
@@ -343,10 +367,18 @@ export function SettlementScreen() {
                       )}
 
                       <View style={styles.summaryRow}>
-                        <Text style={styles.summaryText}>
-                          ملاحظة: الفرق الموجب يولد إرجاع تلقائي، والفرق السالب
-                          يولد بيع تلقائي وتُضاف قيمته للمبيعات بعد التحصيل.
-                        </Text>
+                        {isAdmin ? (
+                          <Text style={styles.summaryText}>
+                            ضبط الأدمن يغيّر المخزون فقط، ولا ينشئ حركة بيع أو
+                            إرجاع ولا يغيّر التوريدات أو نتيجة التسوية.
+                          </Text>
+                        ) : (
+                          <Text style={styles.summaryText}>
+                            ملاحظة: الفرق الموجب يولد إرجاع تلقائي، والفرق
+                            السالب يولد بيع تلقائي وتُضاف قيمته للمبيعات بعد
+                            التحصيل.
+                          </Text>
+                        )}
                       </View>
 
                       <Pressable
@@ -364,7 +396,7 @@ export function SettlementScreen() {
                         <Text style={styles.sectionTitle}>أرشيف التسويات</Text>
                         <Pressable
                           style={styles.smallRefreshButton}
-                          onPress={() => void refreshDailySettlementsData()}
+                          onPress={() => void refreshSettlementData()}
                         >
                           <Text style={styles.smallRefreshText}>تحديث</Text>
                         </Pressable>

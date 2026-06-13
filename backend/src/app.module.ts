@@ -10,6 +10,7 @@ import { RolesGuard } from './auth/guards/roles.guard';
 import { DailySettlementsModule } from './daily-settlements/daily-settlements.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { EmployeesModule } from './employees/employees.module';
+import { InventoryAdjustmentsModule } from './inventory-adjustments/inventory-adjustments.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
@@ -30,6 +31,7 @@ import { createTypeOrmOptions } from './database/typeorm.config';
     PurchasesModule,
     ExpensesModule,
     EmployeesModule,
+    InventoryAdjustmentsModule,
     UploadsModule,
     AdminModule,
   ],

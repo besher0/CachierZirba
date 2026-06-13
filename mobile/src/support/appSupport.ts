@@ -69,6 +69,7 @@ export interface ExpenseRow {
   localImageUri?: string;
   note?: string;
   synced: boolean;
+  occurredAt: string;
 }
 
 export interface PurchaseRow {
@@ -80,6 +81,7 @@ export interface PurchaseRow {
   totalCost: number;
   note?: string;
   synced: boolean;
+  occurredAt: string;
 }
 
 export interface ExpenseCategoryOption {
@@ -785,6 +787,7 @@ export function mapApiExpenseToRow(item: ApiExpense): ExpenseRow {
     imageUrl: item.imageUrl,
     note: item.note,
     synced: true,
+    occurredAt: item.createdAt,
   };
 }
 
@@ -799,6 +802,7 @@ export function mapLocalExpenseToRow(item: LocalExpense): ExpenseRow {
     localImageUri: item.localImageUri,
     note: item.note,
     synced: item.synced,
+    occurredAt: item.createdLocallyAt,
   };
 }
 
@@ -812,6 +816,7 @@ export function mapApiPurchaseToRow(item: ApiPurchase): PurchaseRow {
     totalCost: item.totalCost,
     note: item.note,
     synced: true,
+    occurredAt: item.createdAt,
   };
 }
 
@@ -825,6 +830,7 @@ export function mapLocalPurchaseToRow(item: LocalPurchase): PurchaseRow {
     totalCost: item.totalCost,
     note: item.note,
     synced: item.synced,
+    occurredAt: item.createdLocallyAt,
   };
 }
 
@@ -834,6 +840,7 @@ export function mergeSyncJobs(previous: SyncJob[], incoming: SyncJob): SyncJob[]
     entity !== "EXPENSE" &&
     entity !== "PURCHASE" &&
     entity !== "PRODUCT" &&
+    entity !== "INVENTORY_ADJUSTMENT" &&
     entity !== "EMPLOYEE" &&
     entity !== "EMPLOYEE_ABSENCE" &&
     entity !== "EMPLOYEE_WITHDRAWAL"

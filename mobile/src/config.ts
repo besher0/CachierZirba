@@ -190,6 +190,7 @@ export const STORAGE_KEYS = {
   expenses: 'zirba.cached.expenses.v1',
   expenseCategories: 'zirba.cached.expenseCategories.v1',
   purchases: 'zirba.cached.purchases.v1',
+  inventoryAdjustments: 'zirba.cached.inventoryAdjustments.v1',
   products: 'zirba.cached.products.v1',
   employees: 'zirba.cached.employees.v1',
   employeeAbsences: 'zirba.cached.employeeAbsences.v1',

@@ -47,6 +47,7 @@ import {
   fetchEmployees,
   fetchEmployeeWithdrawals,
   fetchExpenses,
+  fetchInventoryAdjustments,
   fetchMe,
   fetchOrders,
   fetchProducts,
@@ -61,6 +62,7 @@ import {
   postEmployeeAbsence,
   postEmployeeWithdrawal,
   postExpense,
+  postInventoryAdjustment,
   postOrder,
   postProduct,
   postPurchase,
@@ -69,6 +71,7 @@ import {
 import {
   ApiDailySettlement,
   ApiExpense,
+  ApiInventoryAdjustment,
   ApiOrder,
   ApiProduct,
   ApiPurchase,
@@ -80,6 +83,7 @@ import {
   CreateEmployeePayload,
   CreateEmployeeWithdrawalPayload,
   CreateExpensePayload,
+  CreateInventoryAdjustmentPayload,
   CreateOrderPayload,
   CreateProductPayload,
   CreatePurchasePayload,
@@ -92,6 +96,7 @@ import {
   ExpenseCategory,
   LocalDailySettlement,
   LocalExpense,
+  LocalInventoryAdjustment,
   LocalOrder,
   LocalProduct,
   LocalPurchase,
@@ -221,6 +226,10 @@ export function useAppController() {
   const [isOnline, setIsOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const isSyncingRef = useRef(false);
+  const settlementRefreshPromiseRef = useRef<{
+    key: string;
+    promise: Promise<void>;
+  } | null>(null);
   const [statusMessage, setStatusMessage] = useState("جاهز للعمل.");
 
   const [stores, setStores] = useState<Store[]>([]);
@@ -232,6 +241,9 @@ export function useAppController() {
   >([]);
   const [expenses, setExpenses] = useState<LocalExpense[]>([]);
   const [purchases, setPurchases] = useState<LocalPurchase[]>([]);
+  const [inventoryAdjustments, setInventoryAdjustments] = useState<
+    LocalInventoryAdjustment[]
+  >([]);
   const [queue, setQueue] = useState<SyncJob[]>([]);
 
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -267,6 +279,9 @@ export function useAppController() {
   >([]);
   const [remoteExpenses, setRemoteExpenses] = useState<ApiExpense[]>([]);
   const [remotePurchases, setRemotePurchases] = useState<ApiPurchase[]>([]);
+  const [remoteInventoryAdjustments, setRemoteInventoryAdjustments] = useState<
+    ApiInventoryAdjustment[]
+  >([]);
   const [selectedOrderInvoice, setSelectedOrderInvoice] =
     useState<OrderHistoryRow | null>(null);
   const [selectedSettlementDetail, setSelectedSettlementDetail] =
@@ -566,7 +581,7 @@ export function useAppController() {
       : POS_PRODUCT_COLUMNS_DESKTOP;
   }, [isPosSplit, width]);
   const posProductItemHeight = useMemo(() => {
-    return isPosSplit ? 112 : 120;
+    return isPosSplit ? 92 : 108;
   }, [isPosSplit]);
 
   const subtotal = useMemo(
@@ -661,74 +676,6 @@ export function useAppController() {
 
     return candidates.sort((a, b) => b.localeCompare(a))[0];
   }, [selectedStoreRemoteSettlements, selectedStoreSettlements]);
-
-  const ordersInCurrentCycle = useMemo(
-    () =>
-      selectedStoreOrders.filter((item) => {
-        if (item.orderedAt.slice(0, 10) !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const orderedAt = normalizeIsoTimestamp(item.orderedAt);
-        return orderedAt ? orderedAt > settlementCycleStartIso : true;
-      }),
-    [selectedStoreOrders, settlementCycleStartIso, todayDate],
-  );
-
-  const expensesInCurrentCycle = useMemo(
-    () =>
-      selectedStoreExpenses.filter((item) => {
-        if (item.expenseDate !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const createdAt = normalizeIsoTimestamp(item.createdLocallyAt);
-        return createdAt ? createdAt > settlementCycleStartIso : true;
-      }),
-    [selectedStoreExpenses, settlementCycleStartIso, todayDate],
-  );
-
-  const purchasesInCurrentCycle = useMemo(
-    () =>
-      selectedStorePurchases.filter((item) => {
-        if (item.purchaseDate !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const createdAt = normalizeIsoTimestamp(item.createdLocallyAt);
-        return createdAt ? createdAt > settlementCycleStartIso : true;
-      }),
-    [selectedStorePurchases, settlementCycleStartIso, todayDate],
-  );
-
-  const withdrawalsInCurrentCycle = useMemo(
-    () =>
-      selectedStoreWithdrawals.filter((item) => {
-        if (item.withdrawalDate !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const createdAt = normalizeIsoTimestamp(item.createdAt);
-        return createdAt ? createdAt > settlementCycleStartIso : true;
-      }),
-    [selectedStoreWithdrawals, settlementCycleStartIso, todayDate],
-  );
 
   const carryInAmount = useMemo(
     () => Number(Math.abs(posCashCarryAmount).toFixed(2)),
@@ -896,6 +843,107 @@ export function useAppController() {
     selectedStoreId,
     selectedStorePurchases,
   ]);
+
+  const mergedInventoryAdjustments = useMemo(() => {
+    const rows = new Map<
+      string,
+      ApiInventoryAdjustment | LocalInventoryAdjustment
+    >();
+
+    remoteInventoryAdjustments
+      .filter((item) => item.storeId === selectedStoreId)
+      .forEach((item) => rows.set(item.clientAdjustmentId, item));
+    inventoryAdjustments
+      .filter((item) => item.storeId === selectedStoreId)
+      .forEach((item) => rows.set(item.clientAdjustmentId, item));
+
+    return Array.from(rows.values()).sort((a, b) =>
+      b.adjustedAt.localeCompare(a.adjustedAt),
+    );
+  }, [inventoryAdjustments, remoteInventoryAdjustments, selectedStoreId]);
+
+  const latestInventoryAdjustmentByProduct = useMemo(() => {
+    const latest = new Map<
+      string,
+      ApiInventoryAdjustment | LocalInventoryAdjustment
+    >();
+
+    mergedInventoryAdjustments.forEach((item) => {
+      if (!latest.has(item.productClientId)) {
+        latest.set(item.productClientId, item);
+      }
+    });
+
+    return latest;
+  }, [mergedInventoryAdjustments]);
+
+  const ordersInCurrentCycle = useMemo(
+    () =>
+      allMergedOrderRows.filter((item) => {
+        if (item.orderedAt.slice(0, 10) !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const orderedAt = normalizeIsoTimestamp(item.orderedAt);
+        return orderedAt ? orderedAt > settlementCycleStartIso : true;
+      }),
+    [allMergedOrderRows, settlementCycleStartIso, todayDate],
+  );
+
+  const expensesInCurrentCycle = useMemo(
+    () =>
+      mergedExpenseRows.filter((item) => {
+        if (item.expenseDate !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const occurredAt = normalizeIsoTimestamp(item.occurredAt);
+        return occurredAt ? occurredAt > settlementCycleStartIso : true;
+      }),
+    [mergedExpenseRows, settlementCycleStartIso, todayDate],
+  );
+
+  const purchasesInCurrentCycle = useMemo(
+    () =>
+      mergedPurchaseRows.filter((item) => {
+        if (item.purchaseDate !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const occurredAt = normalizeIsoTimestamp(item.occurredAt);
+        return occurredAt ? occurredAt > settlementCycleStartIso : true;
+      }),
+    [mergedPurchaseRows, settlementCycleStartIso, todayDate],
+  );
+
+  const withdrawalsInCurrentCycle = useMemo(
+    () =>
+      selectedStoreWithdrawals.filter((item) => {
+        if (item.withdrawalDate !== todayDate) {
+          return false;
+        }
+
+        if (!settlementCycleStartIso) {
+          return true;
+        }
+
+        const createdAt = normalizeIsoTimestamp(item.createdAt);
+        return createdAt ? createdAt > settlementCycleStartIso : true;
+      }),
+    [selectedStoreWithdrawals, settlementCycleStartIso, todayDate],
+  );
 
   const filteredExpenseRows = useMemo(
     () =>
@@ -1078,22 +1126,50 @@ export function useAppController() {
 
     mergedPurchaseRows.forEach((entry) => {
       const key = normalizeProductKey(entry.productName);
-      purchasedByProduct.set(
-        key,
-        (purchasedByProduct.get(key) ?? 0) + entry.quantity,
-      );
-
       if (entry.purchaseDate === todayDate) {
         todayReceivedByProduct.set(
           key,
           (todayReceivedByProduct.get(key) ?? 0) + entry.quantity,
         );
       }
+
+      const product = products.find(
+        (item) => normalizeProductKey(item.name) === key,
+      );
+      const adjustment = product
+        ? latestInventoryAdjustmentByProduct.get(product.clientProductId)
+        : undefined;
+      const purchaseTime = normalizeIsoTimestamp(entry.occurredAt);
+      const adjustmentTime = normalizeIsoTimestamp(adjustment?.adjustedAt);
+      if (
+        adjustmentTime &&
+        purchaseTime &&
+        purchaseTime <= adjustmentTime
+      ) {
+        return;
+      }
+
+      purchasedByProduct.set(
+        key,
+        (purchasedByProduct.get(key) ?? 0) + entry.quantity,
+      );
     });
 
     allMergedOrderRows.forEach((order) => {
       order.items.forEach((item) => {
         const key = normalizeProductKey(item.productName);
+        const product = products.find(
+          (entry) => normalizeProductKey(entry.name) === key,
+        );
+        const adjustment = product
+          ? latestInventoryAdjustmentByProduct.get(product.clientProductId)
+          : undefined;
+        const orderTime = normalizeIsoTimestamp(order.orderedAt);
+        const adjustmentTime = normalizeIsoTimestamp(adjustment?.adjustedAt);
+        if (adjustmentTime && orderTime && orderTime <= adjustmentTime) {
+          return;
+        }
+
         if (order.status === "REFUNDED") {
           refundedByProduct.set(
             key,
@@ -1110,7 +1186,12 @@ export function useAppController() {
       const purchased = purchasedByProduct.get(key) ?? 0;
       const sold = soldByProduct.get(key) ?? 0;
       const refunded = refundedByProduct.get(key) ?? 0;
-      const remainingQty = Number((purchased - sold + refunded).toFixed(3));
+      const inventoryBaseline =
+        latestInventoryAdjustmentByProduct.get(product.clientProductId)
+          ?.actualQuantity ?? 0;
+      const remainingQty = Number(
+        (inventoryBaseline + purchased - sold + refunded).toFixed(3),
+      );
       const loggedToday = Number(
         (todayReceivedByProduct.get(key) ?? 0).toFixed(3),
       );
@@ -1131,6 +1212,7 @@ export function useAppController() {
     });
   }, [
     allMergedOrderRows,
+    latestInventoryAdjustmentByProduct,
     mergedPurchaseRows,
     products,
     todayDate,
@@ -1344,31 +1426,36 @@ export function useAppController() {
     [productSupplyRows, settlementActualInputs],
   );
 
+  const financialStockAuditRows = useMemo(
+    () => (isAdmin ? [] : pieceStockAuditRows),
+    [isAdmin, pieceStockAuditRows],
+  );
+
   const auditNetSalesAmount = useMemo(
-    () => getAuditNetSalesAmount(pieceStockAuditRows),
-    [pieceStockAuditRows],
+    () => getAuditNetSalesAmount(financialStockAuditRows),
+    [financialStockAuditRows],
   );
 
   const auditSalesAmount = useMemo(
     () =>
       Number(
-        pieceStockAuditRows
+        financialStockAuditRows
           .filter((row) => row.diffQty !== null && row.diffQty < 0)
           .reduce((sum, row) => sum + Math.max(row.adjustmentAmount ?? 0, 0), 0)
           .toFixed(2),
       ),
-    [pieceStockAuditRows],
+    [financialStockAuditRows],
   );
 
   const auditRefundAmount = useMemo(
     () =>
       Number(
-        pieceStockAuditRows
+        financialStockAuditRows
           .filter((row) => row.diffQty !== null && row.diffQty > 0)
           .reduce((sum, row) => sum + Math.abs(row.adjustmentAmount ?? 0), 0)
           .toFixed(2),
       ),
-    [pieceStockAuditRows],
+    [financialStockAuditRows],
   );
 
   const settlementSalesTotalWithAudit = useMemo(
@@ -1399,7 +1486,7 @@ export function useAppController() {
         byProduct.set(row.productId, { ...row });
       });
 
-      pieceStockAuditRows.forEach((row) => {
+      financialStockAuditRows.forEach((row) => {
         if (row.diffQty === null || row.diffQty === 0) {
           return;
         }
@@ -1437,7 +1524,7 @@ export function useAppController() {
         netAmount: Number(row.netAmount.toFixed(2)),
       }));
     },
-    [pieceStockAuditRows, productSalesSummaryRows],
+    [financialStockAuditRows, productSalesSummaryRows],
   );
 
   const settlementExpectedRevenueAmount = useMemo(
@@ -1509,6 +1596,7 @@ export function useAppController() {
     setRemoteSettlements([]);
     setRemoteExpenses([]);
     setRemotePurchases([]);
+    setRemoteInventoryAdjustments([]);
     setActiveScreen("pos");
     setStatusMessage(message);
   }, []);
@@ -1590,6 +1678,21 @@ export function useAppController() {
       return next;
     });
   }, []);
+
+  const markInventoryAdjustmentSynced = useCallback(
+    (clientAdjustmentId: string) => {
+      setInventoryAdjustments((previous) => {
+        const next = previous.map((item) =>
+          item.clientAdjustmentId === clientAdjustmentId
+            ? { ...item, synced: true }
+            : item,
+        );
+        void saveArray(STORAGE_KEYS.inventoryAdjustments, next);
+        return next;
+      });
+    },
+    [],
+  );
 
   const markEmployeeSynced = useCallback((referenceId: string) => {
     setEmployees((previous) => {
@@ -1717,12 +1820,14 @@ export function useAppController() {
     }
 
     try {
-      const [purchaseData, orderData] = await Promise.all([
+      const [purchaseData, orderData, adjustmentData] = await Promise.all([
         fetchPurchases(authToken, { storeId: selectedStoreId }),
         fetchOrders(authToken, { storeId: selectedStoreId }),
+        fetchInventoryAdjustments(authToken, { storeId: selectedStoreId }),
       ]);
       setRemotePurchases(purchaseData);
       setRemoteOrders(orderData);
+      setRemoteInventoryAdjustments(adjustmentData);
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث بيانات المخزون من السيرفر.");
     }
@@ -1876,6 +1981,47 @@ export function useAppController() {
       handleApiFailure(error, "تعذر تحديث كتالوج المنتجات من السيرفر.");
     }
   }, [authToken, handleApiFailure, isOnline, queue]);
+
+  const refreshSettlementData = useCallback(async () => {
+    if (!authToken || !selectedStoreId || !isOnline) {
+      return;
+    }
+
+    const refreshKey = `${authToken}:${selectedStoreId}`;
+    if (settlementRefreshPromiseRef.current?.key === refreshKey) {
+      await settlementRefreshPromiseRef.current.promise;
+      return;
+    }
+
+    const refreshPromise = Promise.all([
+      refreshInventoryData(),
+      refreshDailySettlementsData(),
+      refreshEmployeesData(),
+      refreshExpensesData(),
+      refreshProductsData(),
+    ]).then(() => undefined);
+    settlementRefreshPromiseRef.current = {
+      key: refreshKey,
+      promise: refreshPromise,
+    };
+
+    try {
+      await refreshPromise;
+    } finally {
+      if (settlementRefreshPromiseRef.current?.promise === refreshPromise) {
+        settlementRefreshPromiseRef.current = null;
+      }
+    }
+  }, [
+    authToken,
+    isOnline,
+    refreshDailySettlementsData,
+    refreshEmployeesData,
+    refreshExpensesData,
+    refreshInventoryData,
+    refreshProductsData,
+    selectedStoreId,
+  ]);
 
   const refreshDashboardData = useCallback(async () => {
     if (!isOnline || !isAdmin || !authToken) {
@@ -2143,6 +2289,20 @@ export function useAppController() {
           markProductSynced(job.referenceId);
         } else if (entity === "PRODUCT" && action === "DELETE") {
           await deleteProduct(authToken, job.referenceId);
+        } else if (
+          entity === "INVENTORY_ADJUSTMENT" &&
+          action === "CREATE"
+        ) {
+          if (!isAdmin) {
+            remaining.push(job);
+            continue;
+          }
+          const adjustmentPayload =
+            job.payload as CreateInventoryAdjustmentPayload;
+          await postInventoryAdjustment(authToken, adjustmentPayload);
+          markInventoryAdjustmentSynced(
+            adjustmentPayload.clientAdjustmentId,
+          );
         } else if (entity === "EMPLOYEE" && action === "CREATE") {
           await postEmployee(authToken, job.payload as CreateEmployeePayload);
           markEmployeeSynced(job.referenceId);
@@ -2191,23 +2351,21 @@ export function useAppController() {
       setStatusMessage("تمت مزامنة كل العمليات المؤجلة.");
       await Promise.all([
         refreshDashboardData(),
-        refreshInventoryData(),
-        refreshDailySettlementsData(),
-        refreshEmployeesData(),
-        refreshExpensesData(),
-        refreshProductsData(),
+        refreshSettlementData(),
       ]);
       return;
     }
 
     setStatusMessage(`بقي ${remaining.length} عملية بانتظار المزامنة.`);
   }, [
+    isAdmin,
     isOnline,
     expenses,
     markExpenseSynced,
     markEmployeeAbsenceSynced,
     markEmployeeSynced,
     markEmployeeWithdrawalSynced,
+    markInventoryAdjustmentSynced,
     markOrderSynced,
     markProductSynced,
     markPurchaseSynced,
@@ -2215,12 +2373,8 @@ export function useAppController() {
     queue,
     authToken,
     logout,
-    refreshDailySettlementsData,
-    refreshEmployeesData,
-    refreshExpensesData,
-    refreshInventoryData,
-    refreshProductsData,
     refreshDashboardData,
+    refreshSettlementData,
   ]);
 
   const loginUser = useCallback(async () => {
@@ -2301,6 +2455,7 @@ export function useAppController() {
           cachedExpenses,
           cachedExpenseCategories,
           cachedPurchases,
+          cachedInventoryAdjustments,
           cachedProducts,
           cachedEmployees,
           cachedEmployeeAbsences,
@@ -2315,6 +2470,9 @@ export function useAppController() {
           loadArray<LocalExpense>(STORAGE_KEYS.expenses),
           loadArray<ExpenseCategoryOption>(STORAGE_KEYS.expenseCategories),
           loadArray<LocalPurchase>(STORAGE_KEYS.purchases),
+          loadArray<LocalInventoryAdjustment>(
+            STORAGE_KEYS.inventoryAdjustments,
+          ),
           loadArray<ProductTemplate | LocalProduct>(STORAGE_KEYS.products),
           loadArray<Employee>(STORAGE_KEYS.employees),
           loadArray<EmployeeAbsenceEntry>(STORAGE_KEYS.employeeAbsences),
@@ -2363,6 +2521,7 @@ export function useAppController() {
         setExpenses(cachedExpenses);
         setExpenseCategoryOptions(initialExpenseCategories);
         setPurchases(cachedPurchases);
+        setInventoryAdjustments(cachedInventoryAdjustments);
         setProducts(initialProducts);
         setEmployees(cachedEmployees);
         setEmployeeAbsences(cachedEmployeeAbsences);
@@ -2382,6 +2541,7 @@ export function useAppController() {
         setExpenses([]);
         setExpenseCategoryOptions(DEFAULT_EXPENSE_CATEGORY_OPTIONS);
         setPurchases([]);
+        setInventoryAdjustments([]);
         setProducts([]);
         setEmployees([]);
         setEmployeeAbsences([]);
@@ -2413,6 +2573,10 @@ export function useAppController() {
   useEffect(() => {
     void saveArray(STORAGE_KEYS.expenseCategories, expenseCategoryOptions);
   }, [expenseCategoryOptions]);
+
+  useEffect(() => {
+    void saveArray(STORAGE_KEYS.inventoryAdjustments, inventoryAdjustments);
+  }, [inventoryAdjustments]);
 
   useEffect(() => {
     void saveArray(STORAGE_KEYS.products, products);
@@ -2505,12 +2669,37 @@ export function useAppController() {
           },
         });
       });
+
+    if (isAdmin) {
+      inventoryAdjustments
+        .filter((item) => item.synced !== true)
+        .forEach((item) => {
+          enqueueJob({
+            id: makeId("job"),
+            referenceId: `${item.storeId}:${item.productClientId}`,
+            retries: 0,
+            createdAt: item.adjustedAt,
+            entity: "INVENTORY_ADJUSTMENT",
+            action: "CREATE",
+            payload: {
+              clientAdjustmentId: item.clientAdjustmentId,
+              storeId: item.storeId,
+              productClientId: item.productClientId,
+              actualQuantity: item.actualQuantity,
+              adjustedAt: item.adjustedAt,
+              syncedAt: item.syncedAt,
+            },
+          });
+        });
+    }
   }, [
     assignedStoreId,
     employeeAbsences,
     employeeWithdrawals,
     employees,
     enqueueJob,
+    inventoryAdjustments,
+    isAdmin,
     isBootstrapping,
     isCashier,
   ]);
@@ -2709,18 +2898,29 @@ export function useAppController() {
       return;
     }
 
-    void refreshInventoryData();
-    void refreshDailySettlementsData();
-    void refreshEmployeesData();
-    void refreshExpensesData();
-    void refreshProductsData();
+    void refreshSettlementData();
   }, [
     isOnline,
-    refreshDailySettlementsData,
-    refreshEmployeesData,
-    refreshExpensesData,
-    refreshInventoryData,
-    refreshProductsData,
+    refreshSettlementData,
+    selectedStoreId,
+    session?.accessToken,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isOnline ||
+      !session?.accessToken ||
+      !selectedStoreId ||
+      activeScreen !== "settlement"
+    ) {
+      return;
+    }
+
+    void refreshSettlementData();
+  }, [
+    activeScreen,
+    isOnline,
+    refreshSettlementData,
     selectedStoreId,
     session?.accessToken,
   ]);
@@ -3215,9 +3415,11 @@ export function useAppController() {
       sharesAmount,
     );
 
-    const adjustmentRows = pieceStockAuditRows.filter(
-      (row) => row.diffQty !== null && Math.abs(row.diffQty) > 0,
-    );
+    const adjustmentRows = isCashier
+      ? pieceStockAuditRows.filter(
+          (row) => row.diffQty !== null && Math.abs(row.diffQty) > 0,
+        )
+      : [];
     const { adjustmentRecords, adjustmentJobs } = buildSettlementAdjustmentOrders({
       adjustmentRows,
       products,
@@ -4454,6 +4656,133 @@ export function useAppController() {
     }));
   };
 
+  const commitInventoryAdjustment = async (productId: string) => {
+    if (!isAdmin || !session) {
+      return;
+    }
+
+    const rawValue = settlementActualInputs[productId]?.trim() ?? "";
+    if (!rawValue) {
+      return;
+    }
+    if (!/^\d+(?:\.\d+)?$/.test(rawValue)) {
+      setStatusMessage("أدخل كمية مخزون صحيحة قبل مغادرة الخانة.");
+      return;
+    }
+
+    const effectiveStoreId = selectedStoreId;
+    const product = products.find(
+      (item) => item.clientProductId === productId || item.id === productId,
+    );
+    const stockRow = productSupplyRows.find(
+      (item) => item.productId === productId,
+    );
+    if (!effectiveStoreId || !product || !stockRow) {
+      setStatusMessage("تعذر تحديد المنتج أو الفرع لضبط المخزون.");
+      return;
+    }
+
+    const actualQuantity = Number(parseNumberInput(rawValue).toFixed(3));
+    if (actualQuantity < 0) {
+      setStatusMessage("كمية المخزون الفعلية يجب أن تكون صفراً أو أكبر.");
+      return;
+    }
+
+    setSettlementActualInputs((previous) => {
+      const next = { ...previous };
+      delete next[productId];
+      return next;
+    });
+
+    if (actualQuantity === stockRow.remainingQty) {
+      setStatusMessage(`مخزون ${product.name} مطابق ولا يحتاج إلى ضبط.`);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const clientAdjustmentId = makeId("stock");
+    const payload: CreateInventoryAdjustmentPayload = {
+      clientAdjustmentId,
+      storeId: effectiveStoreId,
+      productClientId: product.clientProductId,
+      actualQuantity,
+      adjustedAt: now,
+      syncedAt: now,
+    };
+    const localAdjustment: LocalInventoryAdjustment = {
+      ...payload,
+      synced: false,
+      createdLocallyAt: now,
+    };
+    const queueReference = `${effectiveStoreId}:${product.clientProductId}`;
+    const syncJob: SyncJob = {
+      id: makeId("job"),
+      referenceId: queueReference,
+      retries: 0,
+      createdAt: now,
+      entity: "INVENTORY_ADJUSTMENT",
+      action: "CREATE",
+      payload,
+    };
+
+    setInventoryAdjustments((previous) => {
+      const withoutOlderPending = previous.filter(
+        (item) =>
+          !(
+            item.storeId === effectiveStoreId &&
+            item.productClientId === product.clientProductId &&
+            !item.synced
+          ),
+      );
+      const next = [localAdjustment, ...withoutOlderPending];
+      void saveArray(STORAGE_KEYS.inventoryAdjustments, next);
+      return next;
+    });
+    enqueueJob(syncJob);
+    setStatusMessage(
+      `تم اعتماد مخزون ${product.name}: ${formatQuantity(actualQuantity)}.`,
+    );
+
+    if (!isOnline || !authToken) {
+      setStatusMessage(
+        `تم ضبط مخزون ${product.name} محلياً وسيتم رفعه عند عودة الاتصال.`,
+      );
+      return;
+    }
+
+    try {
+      await postInventoryAdjustment(authToken, payload);
+      markInventoryAdjustmentSynced(clientAdjustmentId);
+      setQueue((previous) => {
+        const next = previous.filter((job) => {
+          const entity = job.entity ?? job.type;
+          const jobPayload =
+            entity === "INVENTORY_ADJUSTMENT"
+              ? (job.payload as CreateInventoryAdjustmentPayload)
+              : null;
+          return !(
+            entity === "INVENTORY_ADJUSTMENT" &&
+            job.referenceId === queueReference &&
+            jobPayload?.clientAdjustmentId === clientAdjustmentId
+          );
+        });
+        void saveArray(STORAGE_KEYS.syncQueue, next);
+        return next;
+      });
+      setStatusMessage(
+        `تم ضبط مخزون ${product.name} إلى ${formatQuantity(actualQuantity)} ومزامنته.`,
+      );
+    } catch (error: unknown) {
+      if (error instanceof ApiError && error.status === 401) {
+        logout("انتهت الجلسة وتم حفظ ضبط المخزون محلياً.");
+        return;
+      }
+      setStatusMessage(
+        `تم ضبط مخزون ${product.name} محلياً وسيتم رفعه تلقائياً.`,
+      );
+    }
+  };
+
   const exportExpensesData = async () => {
     const csv = toCsv(
       ['التاريخ', 'الفئة', 'الوصف', 'المبلغ', 'الحالة'],
@@ -4539,6 +4868,7 @@ export function useAppController() {
     clearAdminDateFilters,
     clearExpenseImage,
     clearPad,
+    commitInventoryAdjustment,
     closeAdminDatePicker,
     closeMobileNav,
     confirmAdminDatePicker,
@@ -4634,6 +4964,7 @@ export function useAppController() {
     refreshOrdersData,
     refreshProductsData,
     refreshPurchasesData,
+    refreshSettlementData,
     registerTawasiSupply,
     removeEmployeeAbsence,
     removeEmployeeWithdrawal,
