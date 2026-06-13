@@ -16,6 +16,7 @@ import {
 import { DraggableGrid } from "react-native-draggable-grid";
 import {
   Animated,
+  AppState,
   Image,
   Modal,
   PanResponder,
@@ -112,6 +113,7 @@ import {
   UpdatePurchasePayload,
 } from "../types";
 import { exportCsv, toCsv } from "../utils/csv";
+import { correctLegacyUtcDateOnly } from "../utils/businessDate";
 import { styles } from "../views/appStyles";
 import {
   buildPieceStockAuditRows,
@@ -194,6 +196,54 @@ import {
 } from "../support/appSupport";
 
 const SYNC_RETRY_DELAY_MS = 60000;
+
+function correctCachedPurchaseDate(item: LocalPurchase): LocalPurchase {
+  const purchaseDate = correctLegacyUtcDateOnly(
+    item.purchaseDate,
+    item.createdLocallyAt || item.syncedAt,
+  );
+
+  return purchaseDate === item.purchaseDate
+    ? item
+    : {
+        ...item,
+        purchaseDate,
+      };
+}
+
+function correctPurchaseSyncJobDate(job: SyncJob): SyncJob {
+  const entity = job.entity ?? job.type;
+  const action = job.action ?? "CREATE";
+  if (
+    entity !== "PURCHASE" ||
+    (action !== "CREATE" && action !== "UPDATE")
+  ) {
+    return job;
+  }
+
+  const payload = job.payload as
+    | CreatePurchasePayload
+    | UpdatePurchasePayload;
+  if (!payload.purchaseDate) {
+    return job;
+  }
+
+  const purchaseDate = correctLegacyUtcDateOnly(
+    payload.purchaseDate,
+    payload.syncedAt ?? job.createdAt,
+  );
+  if (purchaseDate === payload.purchaseDate) {
+    return job;
+  }
+
+  return {
+    ...job,
+    payload: {
+      ...payload,
+      purchaseDate,
+    },
+  } as SyncJob;
+}
 
 export function useAppController() {
   const { width, height } = useWindowDimensions();
@@ -649,7 +699,27 @@ export function useAppController() {
     [remoteSettlements, selectedStoreId],
   );
 
-  const todayDate = useMemo(() => toIsoDateOnly(new Date()), []);
+  const [todayDate, setTodayDate] = useState(() => toIsoDateOnly(new Date()));
+
+  useEffect(() => {
+    const refreshTodayDate = () => {
+      const nextDate = toIsoDateOnly(new Date());
+      setTodayDate((currentDate) =>
+        currentDate === nextDate ? currentDate : nextDate,
+      );
+    };
+    const intervalId = setInterval(refreshTodayDate, 30000);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        refreshTodayDate();
+      }
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      subscription.remove();
+    };
+  }, []);
 
   const settlementCycleStartIso = useMemo(() => {
     const candidates: string[] = [];
@@ -2487,6 +2557,22 @@ export function useAppController() {
 
         const initialStores =
           cachedStores.length > 0 ? cachedStores : FALLBACK_STORES;
+        const correctedPurchases = cachedPurchases.map(
+          correctCachedPurchaseDate,
+        );
+        const correctedQueue = cachedQueue.map(correctPurchaseSyncJobDate);
+        if (
+          correctedPurchases.some(
+            (item, index) => item !== cachedPurchases[index],
+          )
+        ) {
+          await saveArray(STORAGE_KEYS.purchases, correctedPurchases);
+        }
+        if (
+          correctedQueue.some((item, index) => item !== cachedQueue[index])
+        ) {
+          await saveArray(STORAGE_KEYS.syncQueue, correctedQueue);
+        }
         const scopedStores =
           cachedSession?.user.role === "CASHIER" && cachedSession.user.storeId
             ? initialStores.filter(
@@ -2502,7 +2588,7 @@ export function useAppController() {
         const initialProducts =
           cachedProducts.length > 0
             ? cachedProducts.map((item) => toLocalProduct(item))
-            : buildProductsFromHistory(cachedPurchases, cachedOrders).map(
+            : buildProductsFromHistory(correctedPurchases, cachedOrders).map(
                 (item) => toLocalProduct(item),
               );
         const initialExpenseCategories = mergeExpenseCategoryOptions([
@@ -2520,14 +2606,14 @@ export function useAppController() {
         setDailySettlements(cachedSettlements);
         setExpenses(cachedExpenses);
         setExpenseCategoryOptions(initialExpenseCategories);
-        setPurchases(cachedPurchases);
+        setPurchases(correctedPurchases);
         setInventoryAdjustments(cachedInventoryAdjustments);
         setProducts(initialProducts);
         setEmployees(cachedEmployees);
         setEmployeeAbsences(cachedEmployeeAbsences);
         setEmployeeWithdrawals(cachedEmployeeWithdrawals);
         setProductOrderByStore(cachedProductOrderByStore ?? {});
-        setQueue(cachedQueue);
+        setQueue(correctedQueue);
         setSelectedStoreId(initialStoreId);
       } catch {
         if (!mounted) {
@@ -4150,8 +4236,9 @@ export function useAppController() {
       return;
     }
 
-    const now = new Date().toISOString();
-    const purchaseDate = now.slice(0, 10);
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const purchaseDate = toIsoDateOnly(nowDate);
 
     const localRecords: LocalPurchase[] = rowsToReceive.map((row) => {
       const payload: CreatePurchasePayload = {
@@ -4238,7 +4325,7 @@ export function useAppController() {
     }
 
     if (isOnline && authToken && queuedCount === 0) {
-      await refreshPurchasesData();
+      await refreshSettlementData();
       setStatusMessage(`تم استلام ${syncedCount} توريد اليوم على السيرفر.`);
       return;
     }
@@ -4275,7 +4362,8 @@ export function useAppController() {
       return;
     }
 
-    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
     const payload: CreatePurchasePayload = {
       clientPurchaseId: makeId('pur'),
       storeId: effectiveStoreId,
@@ -4283,7 +4371,7 @@ export function useAppController() {
       quantity: 1,
       unitCost: capitalAmount,
       totalCost: capitalAmount,
-      purchaseDate: now.slice(0, 10),
+      purchaseDate: toIsoDateOnly(nowDate),
       note: `تواصي | رأس المال: ${capitalAmount} | سعر المبيع: ${sellAmount}`,
       syncedAt: now,
     };

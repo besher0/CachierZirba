@@ -26,6 +26,7 @@ import {
   ProductTemplate,
   SyncJob,
 } from "../types";
+import { correctLegacyUtcDateOnly } from "../utils/businessDate";
 
 export interface OrderHistoryRow {
   clientOrderId: string;
@@ -809,7 +810,10 @@ export function mapLocalExpenseToRow(item: LocalExpense): ExpenseRow {
 export function mapApiPurchaseToRow(item: ApiPurchase): PurchaseRow {
   return {
     clientPurchaseId: item.clientPurchaseId,
-    purchaseDate: item.purchaseDate,
+    purchaseDate: correctLegacyUtcDateOnly(
+      item.purchaseDate,
+      item.syncedAt ?? item.createdAt,
+    ),
     productName: item.productName,
     quantity: item.quantity,
     unitCost: item.unitCost,
@@ -823,7 +827,10 @@ export function mapApiPurchaseToRow(item: ApiPurchase): PurchaseRow {
 export function mapLocalPurchaseToRow(item: LocalPurchase): PurchaseRow {
   return {
     clientPurchaseId: item.clientPurchaseId,
-    purchaseDate: item.purchaseDate,
+    purchaseDate: correctLegacyUtcDateOnly(
+      item.purchaseDate,
+      item.createdLocallyAt || item.syncedAt,
+    ),
     productName: item.productName,
     quantity: item.quantity,
     unitCost: item.unitCost,
