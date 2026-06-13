@@ -136,8 +136,12 @@ function resolveApiBaseCandidates(): string[] {
 
   append(configuredApiBaseUrl);
 
-  if (!configuredApiBaseUrl && !__DEV__) {
-    append(RENDER_API_FALLBACK_URL);
+  if (!__DEV__) {
+    if (!configuredApiBaseUrl) {
+      append(RENDER_API_FALLBACK_URL);
+    }
+
+    return candidates;
   }
 
   const inferredHost = inferMetroHost()?.toLowerCase() ?? null;

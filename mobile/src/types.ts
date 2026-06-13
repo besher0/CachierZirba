@@ -208,6 +208,7 @@ export interface Employee {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  synced?: boolean;
 }
 
 export interface EmployeeAbsenceEntry {
@@ -217,6 +218,7 @@ export interface EmployeeAbsenceEntry {
   absenceDate: string;
   note?: string;
   createdAt: string;
+  synced?: boolean;
 }
 
 export interface EmployeeWithdrawalEntry {
@@ -227,6 +229,53 @@ export interface EmployeeWithdrawalEntry {
   withdrawalDate: string;
   note?: string;
   createdAt: string;
+  synced?: boolean;
+}
+
+export interface CreateEmployeePayload {
+  clientEmployeeId: string;
+  storeId: string;
+  name: string;
+  weeklySalary: number;
+  isActive: boolean;
+  syncedAt: string;
+}
+
+export interface ApiEmployee extends CreateEmployeePayload {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateEmployeeAbsencePayload {
+  clientAbsenceId: string;
+  employeeClientId: string;
+  storeId: string;
+  absenceDate: string;
+  note?: string;
+  syncedAt: string;
+}
+
+export interface ApiEmployeeAbsence extends CreateEmployeeAbsencePayload {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateEmployeeWithdrawalPayload {
+  clientWithdrawalId: string;
+  employeeClientId: string;
+  storeId: string;
+  amount: number;
+  withdrawalDate: string;
+  note?: string;
+  syncedAt: string;
+}
+
+export interface ApiEmployeeWithdrawal extends CreateEmployeeWithdrawalPayload {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface EmployeeWeeklySnapshot {
@@ -248,7 +297,15 @@ interface SyncJobBase {
   retries: number;
   createdAt: string;
   action?: 'CREATE' | 'UPDATE' | 'DELETE';
-  entity?: 'ORDER' | 'DAILY_SETTLEMENT' | 'EXPENSE' | 'PURCHASE' | 'PRODUCT';
+  entity?:
+    | 'ORDER'
+    | 'DAILY_SETTLEMENT'
+    | 'EXPENSE'
+    | 'PURCHASE'
+    | 'PRODUCT'
+    | 'EMPLOYEE'
+    | 'EMPLOYEE_ABSENCE'
+    | 'EMPLOYEE_WITHDRAWAL';
 }
 
 export interface OrderCreateSyncJob extends SyncJobBase {
@@ -327,6 +384,36 @@ export interface ProductDeleteSyncJob extends SyncJobBase {
   payload: { clientProductId: string };
 }
 
+export interface EmployeeCreateSyncJob extends SyncJobBase {
+  action: 'CREATE';
+  entity: 'EMPLOYEE';
+  payload: CreateEmployeePayload;
+}
+
+export interface EmployeeAbsenceCreateSyncJob extends SyncJobBase {
+  action: 'CREATE';
+  entity: 'EMPLOYEE_ABSENCE';
+  payload: CreateEmployeeAbsencePayload;
+}
+
+export interface EmployeeAbsenceDeleteSyncJob extends SyncJobBase {
+  action: 'DELETE';
+  entity: 'EMPLOYEE_ABSENCE';
+  payload: { clientAbsenceId: string };
+}
+
+export interface EmployeeWithdrawalCreateSyncJob extends SyncJobBase {
+  action: 'CREATE';
+  entity: 'EMPLOYEE_WITHDRAWAL';
+  payload: CreateEmployeeWithdrawalPayload;
+}
+
+export interface EmployeeWithdrawalDeleteSyncJob extends SyncJobBase {
+  action: 'DELETE';
+  entity: 'EMPLOYEE_WITHDRAWAL';
+  payload: { clientWithdrawalId: string };
+}
+
 export type SyncJob =
   | LegacyOrderSyncJob
   | LegacyDailySettlementSyncJob
@@ -340,7 +427,12 @@ export type SyncJob =
   | PurchaseDeleteSyncJob
   | ProductCreateSyncJob
   | ProductUpdateSyncJob
-  | ProductDeleteSyncJob;
+  | ProductDeleteSyncJob
+  | EmployeeCreateSyncJob
+  | EmployeeAbsenceCreateSyncJob
+  | EmployeeAbsenceDeleteSyncJob
+  | EmployeeWithdrawalCreateSyncJob
+  | EmployeeWithdrawalDeleteSyncJob;
 
 export interface DashboardStoreSummary {
   storeId: string;

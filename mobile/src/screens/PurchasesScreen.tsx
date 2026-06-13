@@ -78,8 +78,8 @@ export function PurchasesScreen() {
     purchaseFilterTo,
     quantity,
     receiveTodaySupplies,
+    refreshInventoryData,
     refreshProductsData,
-    refreshPurchasesData,
     registerTawasiSupply,
     remainingQty,
     resetProductForm,
@@ -150,7 +150,7 @@ export function PurchasesScreen() {
                         <View style={styles.supplyHeaderActions}>
                           <Pressable
                             style={styles.smallRefreshButton}
-                            onPress={() => void refreshPurchasesData()}
+                            onPress={() => void refreshInventoryData()}
                           >
                             <Text style={styles.smallRefreshText}>تحديث</Text>
                           </Pressable>

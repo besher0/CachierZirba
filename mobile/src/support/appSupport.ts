@@ -830,7 +830,14 @@ export function mapLocalPurchaseToRow(item: LocalPurchase): PurchaseRow {
 
 export function mergeSyncJobs(previous: SyncJob[], incoming: SyncJob): SyncJob[] {
   const entity = incoming.entity ?? incoming.type;
-  if (entity !== "EXPENSE" && entity !== "PURCHASE" && entity !== "PRODUCT") {
+  if (
+    entity !== "EXPENSE" &&
+    entity !== "PURCHASE" &&
+    entity !== "PRODUCT" &&
+    entity !== "EMPLOYEE" &&
+    entity !== "EMPLOYEE_ABSENCE" &&
+    entity !== "EMPLOYEE_WITHDRAWAL"
+  ) {
     return [...previous, incoming];
   }
 
@@ -893,11 +900,15 @@ export function formatDateOnly(dateTimeIso: string): string {
 }
 
 export function dateFromIsoOnly(isoDate: string): Date {
-  return new Date(`${isoDate}T00:00:00`);
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 export function toIsoDateOnly(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export function addDays(date: Date, days: number): Date {

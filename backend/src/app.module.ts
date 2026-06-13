@@ -9,6 +9,7 @@ import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { DailySettlementsModule } from './daily-settlements/daily-settlements.module';
 import { ExpensesModule } from './expenses/expenses.module';
+import { EmployeesModule } from './employees/employees.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
@@ -28,6 +29,7 @@ import { createTypeOrmOptions } from './database/typeorm.config';
     ProductsModule,
     PurchasesModule,
     ExpensesModule,
+    EmployeesModule,
     UploadsModule,
     AdminModule,
   ],

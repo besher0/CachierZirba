@@ -2,6 +2,9 @@ import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { DataSourceOptions } from 'typeorm';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { Expense } from '../expenses/entities/expense.entity';
+import { EmployeeAbsence } from '../employees/entities/employee-absence.entity';
+import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
+import { Employee } from '../employees/entities/employee.entity';
 import { Order } from '../orders/entities/order.entity';
 import { Product } from '../products/entities/product.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
@@ -13,7 +16,18 @@ type DatabaseConfigOverrides = {
   synchronize?: boolean;
 };
 
-const entities = [Store, Order, DailySettlement, Expense, Purchase, Product, User];
+const entities = [
+  Store,
+  Order,
+  DailySettlement,
+  Expense,
+  Purchase,
+  Product,
+  User,
+  Employee,
+  EmployeeAbsence,
+  EmployeeWithdrawal,
+];
 
 export function createTypeOrmOptions(
   overrides: DatabaseConfigOverrides = {},

@@ -1,6 +1,9 @@
 import { API_BASE_URL, API_BASE_URL_CANDIDATES } from '../config';
 import {
   ApiExpense,
+  ApiEmployee,
+  ApiEmployeeAbsence,
+  ApiEmployeeWithdrawal,
   ApiDailySettlement,
   CloudinarySignatureResponse,
   ApiOrder,
@@ -8,6 +11,9 @@ import {
   ApiPurchase,
   AuthSession,
   CreateExpensePayload,
+  CreateEmployeeAbsencePayload,
+  CreateEmployeePayload,
+  CreateEmployeeWithdrawalPayload,
   CreateDailySettlementPayload,
   CreateOrderPayload,
   CreateProductPayload,
@@ -20,9 +26,13 @@ import {
   UpdatePurchasePayload,
 } from '../types';
 
-const REQUEST_TIMEOUT_MS = 30000;
-const DEFAULT_MAX_NETWORK_RETRIES = 2;
+const REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_MAX_NETWORK_RETRIES = 1;
 const RETRY_BASE_DELAY_MS = 500;
+const WRITE_REQUEST_OPTIONS = {
+  timeoutMs: REQUEST_TIMEOUT_MS,
+  maxNetworkRetries: 0,
+} as const;
 let lastReachableBaseUrl: string | null = null;
 
 export class ApiError extends Error {
@@ -248,6 +258,7 @@ export function postOrder(token: string, payload: CreateOrderPayload) {
     method: 'POST',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -256,6 +267,7 @@ export function postDailySettlement(token: string, payload: CreateDailySettlemen
     method: 'POST',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -281,6 +293,7 @@ export function postExpense(token: string, payload: CreateExpensePayload): Promi
     method: 'POST',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -293,6 +306,7 @@ export function patchExpense(
     method: 'PATCH',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -300,6 +314,7 @@ export function deleteExpense(token: string, clientExpenseId: string): Promise<{
   return request<{ deleted: true }>(`/expenses/${encodeURIComponent(clientExpenseId)}`, {
     method: 'DELETE',
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -310,6 +325,93 @@ export function fetchExpenses(
   return request<ApiExpense[]>(`/expenses${buildExpenseQuery(query)}`, { token });
 }
 
+export function fetchEmployees(token: string, query: ListQuery = {}): Promise<ApiEmployee[]> {
+  return request<ApiEmployee[]>(`/employees${buildListQuery(query)}`, { token });
+}
+
+export function postEmployee(
+  token: string,
+  payload: CreateEmployeePayload,
+): Promise<ApiEmployee> {
+  return request<ApiEmployee>('/employees', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+    ...WRITE_REQUEST_OPTIONS,
+  });
+}
+
+export function fetchEmployeeAbsences(
+  token: string,
+  query: ListQuery = {},
+): Promise<ApiEmployeeAbsence[]> {
+  return request<ApiEmployeeAbsence[]>(`/employees/absences${buildListQuery(query)}`, {
+    token,
+  });
+}
+
+export function postEmployeeAbsence(
+  token: string,
+  payload: CreateEmployeeAbsencePayload,
+): Promise<ApiEmployeeAbsence> {
+  return request<ApiEmployeeAbsence>('/employees/absences', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+    ...WRITE_REQUEST_OPTIONS,
+  });
+}
+
+export function deleteEmployeeAbsence(
+  token: string,
+  clientAbsenceId: string,
+): Promise<{ deleted: true }> {
+  return request<{ deleted: true }>(
+    `/employees/absences/${encodeURIComponent(clientAbsenceId)}`,
+    {
+      method: 'DELETE',
+      token,
+      ...WRITE_REQUEST_OPTIONS,
+    },
+  );
+}
+
+export function fetchEmployeeWithdrawals(
+  token: string,
+  query: ListQuery = {},
+): Promise<ApiEmployeeWithdrawal[]> {
+  return request<ApiEmployeeWithdrawal[]>(
+    `/employees/withdrawals${buildListQuery(query)}`,
+    { token },
+  );
+}
+
+export function postEmployeeWithdrawal(
+  token: string,
+  payload: CreateEmployeeWithdrawalPayload,
+): Promise<ApiEmployeeWithdrawal> {
+  return request<ApiEmployeeWithdrawal>('/employees/withdrawals', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+    ...WRITE_REQUEST_OPTIONS,
+  });
+}
+
+export function deleteEmployeeWithdrawal(
+  token: string,
+  clientWithdrawalId: string,
+): Promise<{ deleted: true }> {
+  return request<{ deleted: true }>(
+    `/employees/withdrawals/${encodeURIComponent(clientWithdrawalId)}`,
+    {
+      method: 'DELETE',
+      token,
+      ...WRITE_REQUEST_OPTIONS,
+    },
+  );
+}
+
 export function postPurchase(
   token: string,
   payload: CreatePurchasePayload,
@@ -318,6 +420,7 @@ export function postPurchase(
     method: 'POST',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -330,6 +433,7 @@ export function patchPurchase(
     method: 'PATCH',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -340,6 +444,7 @@ export function deletePurchase(
   return request<{ deleted: true }>(`/purchases/${encodeURIComponent(clientPurchaseId)}`, {
     method: 'DELETE',
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -362,6 +467,7 @@ export function fetchCloudinarySignature(
     method: 'POST',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -370,6 +476,7 @@ export function postProduct(token: string, payload: CreateProductPayload): Promi
     method: 'POST',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -382,6 +489,7 @@ export function patchProduct(
     method: 'PATCH',
     body: JSON.stringify(payload),
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }
 
@@ -392,5 +500,6 @@ export function deleteProduct(
   return request<{ deleted: true }>(`/products/${encodeURIComponent(clientProductId)}`, {
     method: 'DELETE',
     token,
+    ...WRITE_REQUEST_OPTIONS,
   });
 }

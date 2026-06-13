@@ -68,11 +68,13 @@ export function EmployeesScreen() {
     primaryButtonText,
     recentAbsenceRows,
     recentWithdrawalRows,
+    refreshEmployeesData,
     removeEmployeeAbsence,
     removeEmployeeWithdrawal,
     rowActionButtons,
     section,
     sectionActions,
+    sectionHeaderInline,
     sectionTitle,
     selected,
     selectedStoreEmployees,
@@ -85,6 +87,8 @@ export function EmployeesScreen() {
     setWithdrawalDateInput,
     setWithdrawalEmployeeIdInput,
     setWithdrawalNoteInput,
+    smallRefreshButton,
+    smallRefreshText,
     storeChip,
     storeChipSelected,
     storeChipText,
@@ -106,7 +110,15 @@ export function EmployeesScreen() {
   return (
 <>
                     <View style={styles.section}>
-                      <Text style={styles.sectionTitle}>إدارة الموظفين</Text>
+                      <View style={styles.sectionHeaderInline}>
+                        <Text style={styles.sectionTitle}>إدارة الموظفين</Text>
+                        <Pressable
+                          style={styles.smallRefreshButton}
+                          onPress={() => void refreshEmployeesData()}
+                        >
+                          <Text style={styles.smallRefreshText}>تحديث</Text>
+                        </Pressable>
+                      </View>
                       {!canManageInventory && (
                         <Text style={styles.emptyText}>
                           وضع القراءة فقط: إدارة الموظفين متاحة للكاشير أو
@@ -175,7 +187,11 @@ export function EmployeesScreen() {
                             </View>
                             <View style={styles.orderRowMain}>
                               <Text style={styles.orderRowMeta}>
-                                مستحق: {formatMoney(item.earnedAmount)}
+                                مستحق قبل السحوبات:{" "}
+                                {formatMoney(item.earnedAmount)}
+                              </Text>
+                              <Text style={styles.orderRowMeta}>
+                                السحوبات: {formatMoney(item.withdrawalsAmount)}
                               </Text>
                               <Text
                                 style={
@@ -184,7 +200,7 @@ export function EmployeesScreen() {
                                     : styles.pendingText
                                 }
                               >
-                                الرصيد: {formatMoney(item.balance)}
+                                المستحق النهائي: {formatMoney(item.balance)}
                               </Text>
                             </View>
                           </View>

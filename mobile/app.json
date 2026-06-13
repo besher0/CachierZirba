@@ -34,7 +34,8 @@
     },
     "plugins": [
       "@react-native-community/datetimepicker",
-      "expo-audio"
+      "expo-audio",
+      "./plugins/withExternalKeyboard"
     ],
     "extra": {
       "eas": {

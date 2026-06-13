@@ -1,9 +1,11 @@
 // @ts-nocheck
 import { useContext, useEffect, useState } from "react";
-import { Platform } from "react-native";
+import { DeviceEventEmitter, Platform } from "react-native";
 import { TapSoundContext } from "../components/TapPressable";
 import { useAppScreenContext } from "./AppScreenContext";
 import { StoreSwitcher } from "./StoreSwitcher";
+
+const EXTERNAL_KEYBOARD_EVENT = "externalKeyboardKey";
 
 const keyboardDigitMap: Record<string, string> = {
   "0": "0",
@@ -188,11 +190,44 @@ export function PosScreen() {
   } = useAppScreenContext() as any;
 
   useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+
+    const subscription = DeviceEventEmitter.addListener(
+      EXTERNAL_KEYBOARD_EVENT,
+      (event: { action?: string; key?: string }) => {
+        const key = event.key ?? "";
+
+        if (event.action === "up") {
+          setKeyboardPressedKey((current) => (current === key ? null : current));
+          return;
+        }
+
+        if (key === "BACKSPACE") {
+          backspacePad();
+        } else if (key === "CLEAR") {
+          clearPad();
+        } else if (key === "." || /^\d$/.test(key)) {
+          pushPadToken(key);
+        } else {
+          return;
+        }
+
+        playTapSound();
+        setKeyboardPressedKey(key);
+      },
+    );
+
+    return () => subscription.remove();
+  }, [backspacePad, clearPad, playTapSound, pushPadToken]);
+
+  useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
       return;
     }
 
-    const getPadToken = (event: KeyboardEvent) => {
+    const getPadCommand = (event: KeyboardEvent) => {
       const digit = keyboardDigitMap[event.key];
       if (digit) {
         return digit;
@@ -200,6 +235,14 @@ export function PosScreen() {
 
       if (event.key === "." || event.code === "NumpadDecimal") {
         return ".";
+      }
+
+      if (event.key === "Backspace" || event.key === "Delete") {
+        return "BACKSPACE";
+      }
+
+      if (event.key === "Escape") {
+        return "CLEAR";
       }
 
       return null;
@@ -223,22 +266,28 @@ export function PosScreen() {
         return;
       }
 
-      const token = getPadToken(event);
-      if (!token) {
+      const command = getPadCommand(event);
+      if (!command) {
         return;
       }
 
       event.preventDefault();
-      pushPadToken(token);
+      if (command === "BACKSPACE") {
+        backspacePad();
+      } else if (command === "CLEAR") {
+        clearPad();
+      } else {
+        pushPadToken(command);
+      }
       playTapSound();
-      setKeyboardPressedKey(token);
+      setKeyboardPressedKey(command);
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
-      const token = getPadToken(event);
-      if (token) {
+      const command = getPadCommand(event);
+      if (command) {
         setKeyboardPressedKey((current) =>
-          current === token ? null : current,
+          current === command ? null : current,
         );
       }
     };
@@ -254,7 +303,7 @@ export function PosScreen() {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", clearKeyboardPressedKey);
     };
-  }, [playTapSound, pushPadToken]);
+  }, [backspacePad, clearPad, playTapSound, pushPadToken]);
 
   return (
 <View
@@ -536,13 +585,21 @@ export function PosScreen() {
                           </Pressable>
                         </View>
                         <Pressable
-                          style={styles.padClearButton}
+                          style={[
+                            styles.padClearButton,
+                            keyboardPressedKey === "BACKSPACE" &&
+                              styles.padKeyKeyboardPressed,
+                          ]}
                           onPress={backspacePad}
                         >
                           <Text style={styles.padClearText}>حذف رقم</Text>
                         </Pressable>
                         <Pressable
-                          style={styles.padClearButton}
+                          style={[
+                            styles.padClearButton,
+                            keyboardPressedKey === "CLEAR" &&
+                              styles.padKeyKeyboardPressed,
+                          ]}
                           onPress={clearPad}
                         >
                           <Text style={styles.padClearText}>مسح</Text>

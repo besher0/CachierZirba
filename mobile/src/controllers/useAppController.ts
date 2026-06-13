@@ -36,11 +36,16 @@ import {
 } from "../config";
 import {
   ApiError,
+  deleteEmployeeAbsence,
+  deleteEmployeeWithdrawal,
   deleteExpense,
   deletePurchase,
   fetchCloudinarySignature,
   fetchDashboard,
   fetchDailySettlements,
+  fetchEmployeeAbsences,
+  fetchEmployees,
+  fetchEmployeeWithdrawals,
   fetchExpenses,
   fetchMe,
   fetchOrders,
@@ -52,6 +57,9 @@ import {
   patchExpense,
   patchPurchase,
   postDailySettlement,
+  postEmployee,
+  postEmployeeAbsence,
+  postEmployeeWithdrawal,
   postExpense,
   postOrder,
   postProduct,
@@ -68,6 +76,9 @@ import {
   AuthSession,
   CartItem,
   CreateDailySettlementPayload,
+  CreateEmployeeAbsencePayload,
+  CreateEmployeePayload,
+  CreateEmployeeWithdrawalPayload,
   CreateExpensePayload,
   CreateOrderPayload,
   CreateProductPayload,
@@ -177,6 +188,8 @@ import {
   uploadExpenseImageToCloudinary,
 } from "../support/appSupport";
 
+const SYNC_RETRY_DELAY_MS = 60000;
+
 export function useAppController() {
   const { width, height } = useWindowDimensions();
   const shortestSide = Math.min(width, height);
@@ -207,6 +220,7 @@ export function useAppController() {
   const [activeScreen, setActiveScreen] = useState<AppScreenKey>("pos");
   const [isOnline, setIsOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncingRef = useRef(false);
   const [statusMessage, setStatusMessage] = useState("جاهز للعمل.");
 
   const [stores, setStores] = useState<Store[]>([]);
@@ -262,7 +276,7 @@ export function useAppController() {
 
   const [expenseEditingId, setExpenseEditingId] = useState<string | null>(null);
   const [expenseDateInput, setExpenseDateInput] = useState(
-    new Date().toISOString().slice(0, 10),
+    toIsoDateOnly(new Date()),
   );
   const [expenseCategoryOptions, setExpenseCategoryOptions] = useState<
     ExpenseCategoryOption[]
@@ -318,13 +332,13 @@ export function useAppController() {
     useState("");
   const [absenceEmployeeIdInput, setAbsenceEmployeeIdInput] = useState("");
   const [absenceDateInput, setAbsenceDateInput] = useState(
-    new Date().toISOString().slice(0, 10),
+    toIsoDateOnly(new Date()),
   );
   const [absenceNoteInput, setAbsenceNoteInput] = useState("");
   const [withdrawalEmployeeIdInput, setWithdrawalEmployeeIdInput] =
     useState("");
   const [withdrawalDateInput, setWithdrawalDateInput] = useState(
-    new Date().toISOString().slice(0, 10),
+    toIsoDateOnly(new Date()),
   );
   const [withdrawalAmountInput, setWithdrawalAmountInput] = useState("");
   const [withdrawalNoteInput, setWithdrawalNoteInput] = useState("");
@@ -620,7 +634,7 @@ export function useAppController() {
     [remoteSettlements, selectedStoreId],
   );
 
-  const todayDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayDate = useMemo(() => toIsoDateOnly(new Date()), []);
 
   const settlementCycleStartIso = useMemo(() => {
     const candidates: string[] = [];
@@ -1077,7 +1091,7 @@ export function useAppController() {
       }
     });
 
-    selectedStoreOrders.forEach((order) => {
+    allMergedOrderRows.forEach((order) => {
       order.items.forEach((item) => {
         const key = normalizeProductKey(item.productName);
         if (order.status === "REFUNDED") {
@@ -1116,9 +1130,9 @@ export function useAppController() {
       };
     });
   }, [
+    allMergedOrderRows,
     mergedPurchaseRows,
     products,
-    selectedStoreOrders,
     todayDate,
     todaySupplyInputs,
   ]);
@@ -1577,6 +1591,36 @@ export function useAppController() {
     });
   }, []);
 
+  const markEmployeeSynced = useCallback((referenceId: string) => {
+    setEmployees((previous) => {
+      const next = previous.map((item) =>
+        item.id === referenceId ? { ...item, synced: true } : item,
+      );
+      void saveArray(STORAGE_KEYS.employees, next);
+      return next;
+    });
+  }, []);
+
+  const markEmployeeAbsenceSynced = useCallback((referenceId: string) => {
+    setEmployeeAbsences((previous) => {
+      const next = previous.map((item) =>
+        item.id === referenceId ? { ...item, synced: true } : item,
+      );
+      void saveArray(STORAGE_KEYS.employeeAbsences, next);
+      return next;
+    });
+  }, []);
+
+  const markEmployeeWithdrawalSynced = useCallback((referenceId: string) => {
+    setEmployeeWithdrawals((previous) => {
+      const next = previous.map((item) =>
+        item.id === referenceId ? { ...item, synced: true } : item,
+      );
+      void saveArray(STORAGE_KEYS.employeeWithdrawals, next);
+      return next;
+    });
+  }, []);
+
   const enqueueJob = useCallback((job: SyncJob) => {
     setQueue((previous) => {
       const next = mergeSyncJobs(previous, job);
@@ -1666,6 +1710,138 @@ export function useAppController() {
       handleApiFailure(error, "تعذر تحديث المشتريات من السيرفر.");
     }
   }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
+
+  const refreshInventoryData = useCallback(async () => {
+    if (!authToken || !selectedStoreId || !isOnline) {
+      return;
+    }
+
+    try {
+      const [purchaseData, orderData] = await Promise.all([
+        fetchPurchases(authToken, { storeId: selectedStoreId }),
+        fetchOrders(authToken, { storeId: selectedStoreId }),
+      ]);
+      setRemotePurchases(purchaseData);
+      setRemoteOrders(orderData);
+    } catch (error: unknown) {
+      handleApiFailure(error, "تعذر تحديث بيانات المخزون من السيرفر.");
+    }
+  }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
+
+  const refreshEmployeesData = useCallback(async () => {
+    if (!authToken || !selectedStoreId || !isOnline) {
+      return;
+    }
+
+    try {
+      const [remoteEmployees, remoteAbsences, remoteWithdrawals] =
+        await Promise.all([
+          fetchEmployees(authToken, { storeId: selectedStoreId }),
+          fetchEmployeeAbsences(authToken, { storeId: selectedStoreId }),
+          fetchEmployeeWithdrawals(authToken, { storeId: selectedStoreId }),
+        ]);
+      const pendingAbsenceDeletes = new Set(
+        queue
+          .filter(
+            (job) =>
+              job.entity === "EMPLOYEE_ABSENCE" && job.action === "DELETE",
+          )
+          .map((job) => job.referenceId),
+      );
+      const pendingWithdrawalDeletes = new Set(
+        queue
+          .filter(
+            (job) =>
+              job.entity === "EMPLOYEE_WITHDRAWAL" &&
+              job.action === "DELETE",
+          )
+          .map((job) => job.referenceId),
+      );
+
+      setEmployees((previous) => {
+        const selected = new Map<string, Employee>();
+        remoteEmployees.forEach((item) => {
+          selected.set(item.clientEmployeeId, {
+            id: item.clientEmployeeId,
+            storeId: item.storeId,
+            name: item.name,
+            weeklySalary: item.weeklySalary,
+            isActive: item.isActive,
+            createdAt: item.createdAt,
+            updatedAt: item.updatedAt,
+            synced: true,
+          });
+        });
+        previous
+          .filter(
+            (item) => item.storeId === selectedStoreId && item.synced !== true,
+          )
+          .forEach((item) => selected.set(item.id, item));
+
+        return [
+          ...previous.filter((item) => item.storeId !== selectedStoreId),
+          ...Array.from(selected.values()),
+        ].sort((a, b) => a.name.localeCompare(b.name, "ar"));
+      });
+
+      setEmployeeAbsences((previous) => {
+        const selected = new Map<string, EmployeeAbsenceEntry>();
+        remoteAbsences.forEach((item) => {
+          if (!pendingAbsenceDeletes.has(item.clientAbsenceId)) {
+            selected.set(item.clientAbsenceId, {
+              id: item.clientAbsenceId,
+              employeeId: item.employeeClientId,
+              storeId: item.storeId,
+              absenceDate: item.absenceDate,
+              note: item.note,
+              createdAt: item.createdAt,
+              synced: true,
+            });
+          }
+        });
+        previous
+          .filter(
+            (item) => item.storeId === selectedStoreId && item.synced !== true,
+          )
+          .forEach((item) => selected.set(item.id, item));
+
+        return [
+          ...previous.filter((item) => item.storeId !== selectedStoreId),
+          ...Array.from(selected.values()),
+        ].sort((a, b) => b.absenceDate.localeCompare(a.absenceDate));
+      });
+
+      setEmployeeWithdrawals((previous) => {
+        const selected = new Map<string, EmployeeWithdrawalEntry>();
+        remoteWithdrawals.forEach((item) => {
+          if (!pendingWithdrawalDeletes.has(item.clientWithdrawalId)) {
+            selected.set(item.clientWithdrawalId, {
+              id: item.clientWithdrawalId,
+              employeeId: item.employeeClientId,
+              storeId: item.storeId,
+              amount: item.amount,
+              withdrawalDate: item.withdrawalDate,
+              note: item.note,
+              createdAt: item.createdAt,
+              synced: true,
+            });
+          }
+        });
+        previous
+          .filter(
+            (item) => item.storeId === selectedStoreId && item.synced !== true,
+          )
+          .forEach((item) => selected.set(item.id, item));
+
+        return [
+          ...previous.filter((item) => item.storeId !== selectedStoreId),
+          ...Array.from(selected.values()),
+        ].sort((a, b) => b.withdrawalDate.localeCompare(a.withdrawalDate));
+      });
+    } catch (error: unknown) {
+      handleApiFailure(error, "تعذر تحديث بيانات الموظفين من السيرفر.");
+    }
+  }, [authToken, handleApiFailure, isOnline, queue, selectedStoreId]);
 
   const refreshProductsData = useCallback(async () => {
     if (!authToken || !isOnline) {
@@ -1846,10 +2022,11 @@ export function useAppController() {
   }, [authToken, isOnline, logout]);
 
   const syncQueue = useCallback(async () => {
-    if (!isOnline || isSyncing || queue.length === 0 || !authToken) {
+    if (!isOnline || isSyncingRef.current || queue.length === 0 || !authToken) {
       return;
     }
 
+    isSyncingRef.current = true;
     setIsSyncing(true);
     setStatusMessage("يتم حالياً مزامنة العمليات المحلية...");
 
@@ -1966,6 +2143,25 @@ export function useAppController() {
           markProductSynced(job.referenceId);
         } else if (entity === "PRODUCT" && action === "DELETE") {
           await deleteProduct(authToken, job.referenceId);
+        } else if (entity === "EMPLOYEE" && action === "CREATE") {
+          await postEmployee(authToken, job.payload as CreateEmployeePayload);
+          markEmployeeSynced(job.referenceId);
+        } else if (entity === "EMPLOYEE_ABSENCE" && action === "CREATE") {
+          await postEmployeeAbsence(
+            authToken,
+            job.payload as CreateEmployeeAbsencePayload,
+          );
+          markEmployeeAbsenceSynced(job.referenceId);
+        } else if (entity === "EMPLOYEE_ABSENCE" && action === "DELETE") {
+          await deleteEmployeeAbsence(authToken, job.referenceId);
+        } else if (entity === "EMPLOYEE_WITHDRAWAL" && action === "CREATE") {
+          await postEmployeeWithdrawal(
+            authToken,
+            job.payload as CreateEmployeeWithdrawalPayload,
+          );
+          markEmployeeWithdrawalSynced(job.referenceId);
+        } else if (entity === "EMPLOYEE_WITHDRAWAL" && action === "DELETE") {
+          await deleteEmployeeWithdrawal(authToken, job.referenceId);
         }
       } catch (error: unknown) {
         if (error instanceof ApiError && error.status === 401) {
@@ -1988,25 +2184,30 @@ export function useAppController() {
 
     setQueue(remaining);
     await saveArray(STORAGE_KEYS.syncQueue, remaining);
+    isSyncingRef.current = false;
     setIsSyncing(false);
 
     if (remaining.length === 0) {
       setStatusMessage("تمت مزامنة كل العمليات المؤجلة.");
-      await refreshDashboardData();
-      await refreshOrdersData();
-      await refreshDailySettlementsData();
-      await refreshExpensesData();
-      await refreshPurchasesData();
-      await refreshProductsData();
+      await Promise.all([
+        refreshDashboardData(),
+        refreshInventoryData(),
+        refreshDailySettlementsData(),
+        refreshEmployeesData(),
+        refreshExpensesData(),
+        refreshProductsData(),
+      ]);
       return;
     }
 
     setStatusMessage(`بقي ${remaining.length} عملية بانتظار المزامنة.`);
   }, [
     isOnline,
-    isSyncing,
     expenses,
     markExpenseSynced,
+    markEmployeeAbsenceSynced,
+    markEmployeeSynced,
+    markEmployeeWithdrawalSynced,
     markOrderSynced,
     markProductSynced,
     markPurchaseSynced,
@@ -2015,10 +2216,10 @@ export function useAppController() {
     authToken,
     logout,
     refreshDailySettlementsData,
+    refreshEmployeesData,
     refreshExpensesData,
-    refreshOrdersData,
+    refreshInventoryData,
     refreshProductsData,
-    refreshPurchasesData,
     refreshDashboardData,
   ]);
 
@@ -2234,6 +2435,87 @@ export function useAppController() {
   }, [employeeWithdrawals]);
 
   useEffect(() => {
+    if (isBootstrapping) {
+      return;
+    }
+
+    const canSyncStore = (storeId: string) =>
+      !isCashier || !assignedStoreId || storeId === assignedStoreId;
+
+    employees
+      .filter((item) => item.synced !== true && canSyncStore(item.storeId))
+      .forEach((item) => {
+        enqueueJob({
+          id: makeId("job"),
+          referenceId: item.id,
+          retries: 0,
+          createdAt: item.updatedAt,
+          entity: "EMPLOYEE",
+          action: "CREATE",
+          payload: {
+            clientEmployeeId: item.id,
+            storeId: item.storeId,
+            name: item.name,
+            weeklySalary: item.weeklySalary,
+            isActive: item.isActive,
+            syncedAt: item.updatedAt,
+          },
+        });
+      });
+
+    employeeAbsences
+      .filter((item) => item.synced !== true && canSyncStore(item.storeId))
+      .forEach((item) => {
+        enqueueJob({
+          id: makeId("job"),
+          referenceId: item.id,
+          retries: 0,
+          createdAt: item.createdAt,
+          entity: "EMPLOYEE_ABSENCE",
+          action: "CREATE",
+          payload: {
+            clientAbsenceId: item.id,
+            employeeClientId: item.employeeId,
+            storeId: item.storeId,
+            absenceDate: item.absenceDate,
+            note: item.note,
+            syncedAt: item.createdAt,
+          },
+        });
+      });
+
+    employeeWithdrawals
+      .filter((item) => item.synced !== true && canSyncStore(item.storeId))
+      .forEach((item) => {
+        enqueueJob({
+          id: makeId("job"),
+          referenceId: item.id,
+          retries: 0,
+          createdAt: item.createdAt,
+          entity: "EMPLOYEE_WITHDRAWAL",
+          action: "CREATE",
+          payload: {
+            clientWithdrawalId: item.id,
+            employeeClientId: item.employeeId,
+            storeId: item.storeId,
+            amount: item.amount,
+            withdrawalDate: item.withdrawalDate,
+            note: item.note,
+            syncedAt: item.createdAt,
+          },
+        });
+      });
+  }, [
+    assignedStoreId,
+    employeeAbsences,
+    employeeWithdrawals,
+    employees,
+    enqueueJob,
+    isBootstrapping,
+    isCashier,
+  ]);
+
+  useEffect(() => {
     let mounted = true;
 
     void NetInfo.fetch().then((state) => {
@@ -2427,18 +2709,18 @@ export function useAppController() {
       return;
     }
 
-    void refreshOrdersData();
+    void refreshInventoryData();
     void refreshDailySettlementsData();
+    void refreshEmployeesData();
     void refreshExpensesData();
-    void refreshPurchasesData();
     void refreshProductsData();
   }, [
     isOnline,
     refreshDailySettlementsData,
+    refreshEmployeesData,
     refreshExpensesData,
-    refreshOrdersData,
+    refreshInventoryData,
     refreshProductsData,
-    refreshPurchasesData,
     selectedStoreId,
     session?.accessToken,
   ]);
@@ -2470,9 +2752,40 @@ export function useAppController() {
     session?.accessToken,
   ]);
 
+  const syncQueueTrigger = useMemo(
+    () =>
+      JSON.stringify(
+        queue.map((job) => ({
+          ...job,
+          retries: 0,
+        })),
+      ),
+    [queue],
+  );
+
+  const syncQueueRef = useRef(syncQueue);
+
   useEffect(() => {
-    void syncQueue();
-  }, [queue, syncQueue]);
+    syncQueueRef.current = syncQueue;
+  }, [syncQueue]);
+
+  useEffect(() => {
+    void syncQueueRef.current();
+  }, [isOnline, session?.accessToken, syncQueueTrigger]);
+
+  useEffect(() => {
+    if (!isOnline || !session?.accessToken || queue.length === 0) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void syncQueueRef.current();
+    }, SYNC_RETRY_DELAY_MS);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isOnline, queue.length, session?.accessToken]);
 
   const pushPadToken = (token: string) => {
     setPosPadInput((previous) => {
@@ -3014,7 +3327,7 @@ export function useAppController() {
 
   const resetExpenseForm = () => {
     setExpenseEditingId(null);
-    setExpenseDateInput(new Date().toISOString().slice(0, 10));
+    setExpenseDateInput(toIsoDateOnly(new Date()));
     setExpenseCategoryInput(effectiveExpenseCategoryOptions[0]?.value ?? 'OTHER');
     setExpenseDescriptionInput('');
     setExpenseAmountInput('');
@@ -3907,11 +4220,28 @@ export function useAppController() {
       isActive: true,
       createdAt: now,
       updatedAt: now,
+      synced: false,
     };
 
     setEmployees((previous) =>
       [...previous, employee].sort((a, b) => a.name.localeCompare(b.name, 'ar')),
     );
+    enqueueJob({
+      id: makeId('job'),
+      referenceId: employee.id,
+      retries: 0,
+      createdAt: now,
+      entity: 'EMPLOYEE',
+      action: 'CREATE',
+      payload: {
+        clientEmployeeId: employee.id,
+        storeId: employee.storeId,
+        name: employee.name,
+        weeklySalary: employee.weeklySalary,
+        isActive: employee.isActive,
+        syncedAt: now,
+      },
+    });
     setEmployeeNameInput('');
     setEmployeeWeeklySalaryInput('');
     setAbsenceEmployeeIdInput((previous) => previous || employee.id);
@@ -3941,6 +4271,14 @@ export function useAppController() {
       return;
     }
 
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(absenceDateInput) ||
+      toIsoDateOnly(dateFromIsoOnly(absenceDateInput)) !== absenceDateInput
+    ) {
+      setStatusMessage('أدخل تاريخ غياب صحيح بصيغة YYYY-MM-DD.');
+      return;
+    }
+
     const duplicate = employeeAbsences.some(
       (item) => item.employeeId === absenceEmployeeIdInput && item.absenceDate === absenceDateInput,
     );
@@ -3957,11 +4295,32 @@ export function useAppController() {
       absenceDate: absenceDateInput,
       note: absenceNoteInput.trim() || undefined,
       createdAt: now,
+      synced: false,
     };
 
     setEmployeeAbsences((previous) => [nextEntry, ...previous]);
+    enqueueJob({
+      id: makeId('job'),
+      referenceId: nextEntry.id,
+      retries: 0,
+      createdAt: now,
+      entity: 'EMPLOYEE_ABSENCE',
+      action: 'CREATE',
+      payload: {
+        clientAbsenceId: nextEntry.id,
+        employeeClientId: nextEntry.employeeId,
+        storeId: nextEntry.storeId,
+        absenceDate: nextEntry.absenceDate,
+        note: nextEntry.note,
+        syncedAt: now,
+      },
+    });
     setAbsenceNoteInput('');
-    setStatusMessage('تم تسجيل الغياب.');
+    setStatusMessage(
+      absenceDateInput >= weekStartDate && absenceDateInput <= weekEndDate
+        ? 'تم تسجيل الغياب وتحديث المستحق.'
+        : `تم تسجيل الغياب، لكنه خارج أسبوع الحساب ${weekStartDate} إلى ${weekEndDate}.`,
+    );
   };
 
   const addEmployeeWithdrawal = () => {
@@ -3986,6 +4345,15 @@ export function useAppController() {
       return;
     }
 
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(withdrawalDateInput) ||
+      toIsoDateOnly(dateFromIsoOnly(withdrawalDateInput)) !==
+        withdrawalDateInput
+    ) {
+      setStatusMessage('أدخل تاريخ سحبة صحيح بصيغة YYYY-MM-DD.');
+      return;
+    }
+
     const amount = parseNumberInput(withdrawalAmountInput);
     if (amount <= 0) {
       setStatusMessage('أدخل مبلغ سحبة صحيح.');
@@ -4001,12 +4369,35 @@ export function useAppController() {
       withdrawalDate: withdrawalDateInput,
       note: withdrawalNoteInput.trim() || undefined,
       createdAt: now,
+      synced: false,
     };
 
     setEmployeeWithdrawals((previous) => [nextEntry, ...previous]);
+    enqueueJob({
+      id: makeId('job'),
+      referenceId: nextEntry.id,
+      retries: 0,
+      createdAt: now,
+      entity: 'EMPLOYEE_WITHDRAWAL',
+      action: 'CREATE',
+      payload: {
+        clientWithdrawalId: nextEntry.id,
+        employeeClientId: nextEntry.employeeId,
+        storeId: nextEntry.storeId,
+        amount: nextEntry.amount,
+        withdrawalDate: nextEntry.withdrawalDate,
+        note: nextEntry.note,
+        syncedAt: now,
+      },
+    });
     setWithdrawalAmountInput('');
     setWithdrawalNoteInput('');
-    setStatusMessage('تم تسجيل السحبة.');
+    setStatusMessage(
+      withdrawalDateInput >= weekStartDate &&
+        withdrawalDateInput <= weekEndDate
+        ? 'تم تسجيل السحبة وتحديث المستحق النهائي.'
+        : `تم تسجيل السحبة، لكنها خارج أسبوع الحساب ${weekStartDate} إلى ${weekEndDate}.`,
+    );
   };
 
   const removeEmployeeAbsence = (entryId: string) => {
@@ -4014,7 +4405,19 @@ export function useAppController() {
       return;
     }
 
+    const entry = employeeAbsences.find((item) => item.id === entryId);
     setEmployeeAbsences((previous) => previous.filter((item) => item.id !== entryId));
+    if (entry) {
+      enqueueJob({
+        id: makeId('job'),
+        referenceId: entryId,
+        retries: 0,
+        createdAt: new Date().toISOString(),
+        entity: 'EMPLOYEE_ABSENCE',
+        action: 'DELETE',
+        payload: { clientAbsenceId: entryId },
+      });
+    }
     setStatusMessage('تم حذف قيد الغياب.');
   };
 
@@ -4023,7 +4426,19 @@ export function useAppController() {
       return;
     }
 
+    const entry = employeeWithdrawals.find((item) => item.id === entryId);
     setEmployeeWithdrawals((previous) => previous.filter((item) => item.id !== entryId));
+    if (entry) {
+      enqueueJob({
+        id: makeId('job'),
+        referenceId: entryId,
+        retries: 0,
+        createdAt: new Date().toISOString(),
+        entity: 'EMPLOYEE_WITHDRAWAL',
+        action: 'DELETE',
+        payload: { clientWithdrawalId: entryId },
+      });
+    }
     setStatusMessage('تم حذف قيد السحبة.');
   };
 
@@ -4213,7 +4628,9 @@ export function useAppController() {
     recentWithdrawalRows,
     refreshDailySettlementsData,
     refreshDashboardData,
+    refreshEmployeesData,
     refreshExpensesData,
+    refreshInventoryData,
     refreshOrdersData,
     refreshProductsData,
     refreshPurchasesData,
