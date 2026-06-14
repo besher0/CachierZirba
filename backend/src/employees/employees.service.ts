@@ -4,9 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreateEmployeeAbsenceDto } from './dto/create-employee-absence.dto';
 import { CreateEmployeeWithdrawalDto } from './dto/create-employee-withdrawal.dto';
@@ -54,7 +55,7 @@ export class EmployeesService {
         }),
       );
     } catch (error: unknown) {
-      if (this.isUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findEmployeeByClientId(dto.clientEmployeeId);
       }
       throw error;
@@ -95,7 +96,7 @@ export class EmployeesService {
         }),
       );
     } catch (error: unknown) {
-      if (this.isUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findAbsenceByClientId(dto.clientAbsenceId);
       }
       throw error;
@@ -152,7 +153,7 @@ export class EmployeesService {
         }),
       );
     } catch (error: unknown) {
-      if (this.isUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findWithdrawalByClientId(dto.clientWithdrawalId);
       }
       throw error;
@@ -249,15 +250,4 @@ export class EmployeesService {
     return record;
   }
 
-  private isUniqueConstraintError(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) {
-      return false;
-    }
-
-    const candidate = error as QueryFailedError & { message?: string; code?: string };
-    return (
-      candidate.code === '23505' ||
-      candidate.message?.includes('UNIQUE constraint failed') === true
-    );
-  }
 }

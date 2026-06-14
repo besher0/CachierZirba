@@ -195,7 +195,20 @@ import {
   uploadExpenseImageToCloudinary,
 } from "../support/appSupport";
 
-const SYNC_RETRY_DELAY_MS = 60000;
+const SYNC_RETRY_DELAY_MS = 10000;
+const MAX_SYNC_JOB_RETRIES = 5;
+
+class UnsupportedSyncOperationError extends Error {}
+
+function isPermanentSyncError(error: unknown): boolean {
+  return (
+    error instanceof UnsupportedSyncOperationError ||
+    (error instanceof ApiError &&
+      error.status >= 400 &&
+      error.status < 500 &&
+      ![401, 408, 409, 429].includes(error.status))
+  );
+}
 
 function correctCachedPurchaseDate(item: LocalPurchase): LocalPurchase {
   const purchaseDate = correctLegacyUtcDateOnly(
@@ -276,6 +289,9 @@ export function useAppController() {
   const [isOnline, setIsOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const isSyncingRef = useRef(false);
+  const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
+  const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  const hasLoadedCashCarryRef = useRef(false);
   const settlementRefreshPromiseRef = useRef<{
     key: string;
     promise: Promise<void>;
@@ -305,7 +321,9 @@ export function useAppController() {
   const [pendingAmountValue, setPendingAmountValue] = useState<number | null>(
     null,
   );
-  const [posCashCarryAmount, setPosCashCarryAmount] = useState(0);
+  const [cashCarryByStore, setCashCarryByStore] = useState<
+    Record<string, number>
+  >({});
   const [isRefundMode, setIsRefundMode] = useState(false);
   const [isPosProductReordering, setIsPosProductReordering] = useState(false);
   const [activePosProductKey, setActivePosProductKey] = useState<string | null>(
@@ -671,7 +689,10 @@ export function useAppController() {
   );
 
   const selectedStorePurchases = useMemo(
-    () => purchases.filter((item) => item.storeId === selectedStoreId),
+    () =>
+      purchases.filter(
+        (item) => item.storeId === selectedStoreId && item.synced !== true,
+      ),
     [purchases, selectedStoreId],
   );
 
@@ -748,8 +769,11 @@ export function useAppController() {
   }, [selectedStoreRemoteSettlements, selectedStoreSettlements]);
 
   const carryInAmount = useMemo(
-    () => Number(Math.abs(posCashCarryAmount).toFixed(2)),
-    [posCashCarryAmount],
+    () =>
+      Number(
+        Math.abs(cashCarryByStore[selectedStoreId] ?? 0).toFixed(2),
+      ),
+    [cashCarryByStore, selectedStoreId],
   );
 
   const recentAbsenceRows = useMemo(
@@ -775,9 +799,11 @@ export function useAppController() {
       .filter((item) => item.storeId === selectedStoreId)
       .forEach((item) => rows.set(item.clientOrderId, mapApiOrderToRow(item)));
 
-    selectedStoreOrders.forEach((item) =>
-      rows.set(item.clientOrderId, mapLocalOrderToRow(item)),
-    );
+    selectedStoreOrders
+      .filter((item) => item.synced !== true)
+      .forEach((item) =>
+        rows.set(item.clientOrderId, mapLocalOrderToRow(item)),
+      );
 
     return Array.from(rows.values()).sort((a, b) =>
       b.orderedAt.localeCompare(a.orderedAt),
@@ -924,7 +950,10 @@ export function useAppController() {
       .filter((item) => item.storeId === selectedStoreId)
       .forEach((item) => rows.set(item.clientAdjustmentId, item));
     inventoryAdjustments
-      .filter((item) => item.storeId === selectedStoreId)
+      .filter(
+        (item) =>
+          item.storeId === selectedStoreId && item.synced !== true,
+      )
       .forEach((item) => rows.set(item.clientAdjustmentId, item));
 
     return Array.from(rows.values()).sort((a, b) =>
@@ -1724,12 +1753,24 @@ export function useAppController() {
 
   const markPurchaseSynced = useCallback((referenceId: string) => {
     setPurchases((previous) => {
-      const next = previous.map((item) =>
-        item.clientPurchaseId === referenceId
-          ? { ...item, synced: true }
-          : item,
+      const next = previous.filter(
+        (item) => item.clientPurchaseId !== referenceId,
       );
       void saveArray(STORAGE_KEYS.purchases, next);
+      return next;
+    });
+  }, []);
+
+  const replaceRemotePurchases = useCallback((data: ApiPurchase[]) => {
+    const remoteIds = new Set(data.map((item) => item.clientPurchaseId));
+    setRemotePurchases(data);
+    setPurchases((previous) => {
+      const next = previous.filter(
+        (item) => item.synced !== true && !remoteIds.has(item.clientPurchaseId),
+      );
+      if (next.length !== previous.length) {
+        void saveArray(STORAGE_KEYS.purchases, next);
+      }
       return next;
     });
   }, []);
@@ -1752,13 +1793,26 @@ export function useAppController() {
   const markInventoryAdjustmentSynced = useCallback(
     (clientAdjustmentId: string) => {
       setInventoryAdjustments((previous) => {
-        const next = previous.map((item) =>
-          item.clientAdjustmentId === clientAdjustmentId
-            ? { ...item, synced: true }
-            : item,
+        const next = previous.filter(
+          (item) => item.clientAdjustmentId !== clientAdjustmentId,
         );
         void saveArray(STORAGE_KEYS.inventoryAdjustments, next);
         return next;
+      });
+    },
+    [],
+  );
+
+  const upsertRemoteInventoryAdjustment = useCallback(
+    (adjustment: ApiInventoryAdjustment) => {
+      setRemoteInventoryAdjustments((previous) => {
+        const rows = new Map(
+          previous.map((item) => [item.clientAdjustmentId, item]),
+        );
+        rows.set(adjustment.clientAdjustmentId, adjustment);
+        return Array.from(rows.values()).sort((a, b) =>
+          b.adjustedAt.localeCompare(a.adjustedAt),
+        );
       });
     },
     [],
@@ -1794,13 +1848,23 @@ export function useAppController() {
     });
   }, []);
 
+  const persistSyncQueue = useCallback((next: SyncJob[]) => {
+    syncQueuePersistenceRef.current = syncQueuePersistenceRef.current
+      .catch(() => undefined)
+      .then(() => saveArray(STORAGE_KEYS.syncQueue, next));
+  }, []);
+
   const enqueueJob = useCallback((job: SyncJob) => {
     setQueue((previous) => {
-      const next = mergeSyncJobs(previous, job);
-      void saveArray(STORAGE_KEYS.syncQueue, next);
+      const next = mergeSyncJobs(
+        previous,
+        job,
+        inFlightSyncJobIdsRef.current,
+      );
+      persistSyncQueue(next);
       return next;
     });
-  }, []);
+  }, [persistSyncQueue]);
 
   const refreshStoresData = useCallback(async () => {
     if (!authToken) {
@@ -1878,11 +1942,17 @@ export function useAppController() {
       const data = await fetchPurchases(authToken, {
         storeId: selectedStoreId,
       });
-      setRemotePurchases(data);
+      replaceRemotePurchases(data);
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث المشتريات من السيرفر.");
     }
-  }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
+  }, [
+    authToken,
+    handleApiFailure,
+    isOnline,
+    replaceRemotePurchases,
+    selectedStoreId,
+  ]);
 
   const refreshInventoryData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
@@ -1895,13 +1965,19 @@ export function useAppController() {
         fetchOrders(authToken, { storeId: selectedStoreId }),
         fetchInventoryAdjustments(authToken, { storeId: selectedStoreId }),
       ]);
-      setRemotePurchases(purchaseData);
+      replaceRemotePurchases(purchaseData);
       setRemoteOrders(orderData);
       setRemoteInventoryAdjustments(adjustmentData);
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث بيانات المخزون من السيرفر.");
     }
-  }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
+  }, [
+    authToken,
+    handleApiFailure,
+    isOnline,
+    replaceRemotePurchases,
+    selectedStoreId,
+  ]);
 
   const refreshEmployeesData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
@@ -2242,18 +2318,35 @@ export function useAppController() {
       return;
     }
 
+    const jobsToSync = queue.filter(
+      (job) => job.retries < MAX_SYNC_JOB_RETRIES,
+    );
+    if (jobsToSync.length === 0) {
+      setStatusMessage(
+        `يوجد ${queue.length} عملية متوقفة بسبب خطأ دائم وتحتاج إلى تعديل البيانات قبل إعادة المحاولة.`,
+      );
+      return;
+    }
+
     isSyncingRef.current = true;
     setIsSyncing(true);
     setStatusMessage("يتم حالياً مزامنة العمليات المحلية...");
+    const inventoryAdjustmentsOnly = jobsToSync.every(
+      (job) => (job.entity ?? job.type) === "INVENTORY_ADJUSTMENT",
+    );
+    const completedJobIds = new Set<string>();
+    const retryJobs = new Map<string, SyncJob>();
+    let stoppedForConnection = false;
+    let stoppedForAuthentication = false;
 
-    const remaining: SyncJob[] = [];
-
-    for (let index = 0; index < queue.length; index += 1) {
-      const job = queue[index];
+    for (let index = 0; index < jobsToSync.length; index += 1) {
+      const job = jobsToSync[index];
+      inFlightSyncJobIdsRef.current.add(job.id);
 
       try {
         const entity = job.entity ?? job.type;
         const action = job.action ?? "CREATE";
+        let handled = true;
 
         if (entity === "ORDER") {
           await postOrder(authToken, job.payload as CreateOrderPayload);
@@ -2364,12 +2457,16 @@ export function useAppController() {
           action === "CREATE"
         ) {
           if (!isAdmin) {
-            remaining.push(job);
+            retryJobs.set(job.id, job);
             continue;
           }
           const adjustmentPayload =
             job.payload as CreateInventoryAdjustmentPayload;
-          await postInventoryAdjustment(authToken, adjustmentPayload);
+          const adjustment = await postInventoryAdjustment(
+            authToken,
+            adjustmentPayload,
+          );
+          upsertRemoteInventoryAdjustment(adjustment);
           markInventoryAdjustmentSynced(
             adjustmentPayload.clientAdjustmentId,
           );
@@ -2392,33 +2489,75 @@ export function useAppController() {
           markEmployeeWithdrawalSynced(job.referenceId);
         } else if (entity === "EMPLOYEE_WITHDRAWAL" && action === "DELETE") {
           await deleteEmployeeWithdrawal(authToken, job.referenceId);
+        } else {
+          handled = false;
         }
+
+        if (!handled) {
+          throw new UnsupportedSyncOperationError(
+            `Unsupported sync operation: ${entity ?? "UNKNOWN"}/${action}`,
+          );
+        }
+
+        completedJobIds.add(job.id);
       } catch (error: unknown) {
         if (error instanceof ApiError && error.status === 401) {
-          remaining.push(...queue.slice(index));
+          stoppedForAuthentication = true;
           logout("انتهت الجلسة أثناء المزامنة. الرجاء تسجيل الدخول مجدداً.");
           break;
         }
 
         if (isLikelyNetworkError(error)) {
-          remaining.push(...queue.slice(index));
+          stoppedForConnection = true;
           break;
         }
 
-        remaining.push({
+        const entity = job.entity ?? job.type;
+        const action = job.action ?? "CREATE";
+        if (
+          error instanceof ApiError &&
+          error.status === 404 &&
+          action === "DELETE"
+        ) {
+          completedJobIds.add(job.id);
+          continue;
+        }
+
+        retryJobs.set(job.id, {
           ...job,
-          retries: job.retries + 1,
+          retries: isPermanentSyncError(error)
+            ? MAX_SYNC_JOB_RETRIES
+            : Math.min(job.retries + 1, MAX_SYNC_JOB_RETRIES - 1),
         });
+      } finally {
+        inFlightSyncJobIdsRef.current.delete(job.id);
       }
     }
 
-    setQueue(remaining);
-    await saveArray(STORAGE_KEYS.syncQueue, remaining);
+    setQueue((currentQueue) => {
+      const next = currentQueue.flatMap((currentJob) => {
+        if (completedJobIds.has(currentJob.id)) {
+          return [];
+        }
+
+        const retryJob = retryJobs.get(currentJob.id);
+        return retryJob ? [retryJob] : [currentJob];
+      });
+      persistSyncQueue(next);
+      return next;
+    });
     isSyncingRef.current = false;
     setIsSyncing(false);
 
-    if (remaining.length === 0) {
-      setStatusMessage("تمت مزامنة كل العمليات المؤجلة.");
+    const snapshotRemainingCount =
+      jobsToSync.length - completedJobIds.size;
+    if (snapshotRemainingCount === 0) {
+      setStatusMessage(
+        `تمت مزامنة ${completedJobIds.size} عملية مؤجلة بنجاح.`,
+      );
+      if (inventoryAdjustmentsOnly) {
+        return;
+      }
       await Promise.all([
         refreshDashboardData(),
         refreshSettlementData(),
@@ -2426,7 +2565,15 @@ export function useAppController() {
       return;
     }
 
-    setStatusMessage(`بقي ${remaining.length} عملية بانتظار المزامنة.`);
+    if (stoppedForAuthentication) {
+      return;
+    }
+
+    setStatusMessage(
+      stoppedForConnection
+        ? `توقف الاتصال بعد مزامنة ${completedJobIds.size} عملية، وستُستكمل البقية تلقائياً.`
+        : `تمت مزامنة ${completedJobIds.size} عملية، وبقي ${snapshotRemainingCount} عملية معلقة.`,
+    );
   }, [
     isAdmin,
     isOnline,
@@ -2436,10 +2583,12 @@ export function useAppController() {
     markEmployeeSynced,
     markEmployeeWithdrawalSynced,
     markInventoryAdjustmentSynced,
+    upsertRemoteInventoryAdjustment,
     markOrderSynced,
     markProductSynced,
     markPurchaseSynced,
     markSettlementSynced,
+    persistSyncQueue,
     queue,
     authToken,
     logout,
@@ -2530,6 +2679,7 @@ export function useAppController() {
           cachedEmployees,
           cachedEmployeeAbsences,
           cachedEmployeeWithdrawals,
+          cachedCashCarryByStore,
           cachedProductOrderByStore,
           cachedQueue,
         ] = await Promise.all([
@@ -2547,6 +2697,7 @@ export function useAppController() {
           loadArray<Employee>(STORAGE_KEYS.employees),
           loadArray<EmployeeAbsenceEntry>(STORAGE_KEYS.employeeAbsences),
           loadArray<EmployeeWithdrawalEntry>(STORAGE_KEYS.employeeWithdrawals),
+          loadObject<Record<string, number>>(STORAGE_KEYS.cashCarryByStore),
           loadObject<Record<string, string[]>>(PRODUCT_ORDER_STORAGE_KEY),
           loadArray<SyncJob>(STORAGE_KEYS.syncQueue),
         ]);
@@ -2557,11 +2708,12 @@ export function useAppController() {
 
         const initialStores =
           cachedStores.length > 0 ? cachedStores : FALLBACK_STORES;
-        const correctedPurchases = cachedPurchases.map(
-          correctCachedPurchaseDate,
-        );
+        const correctedPurchases = cachedPurchases
+          .map(correctCachedPurchaseDate)
+          .filter((item) => item.synced !== true);
         const correctedQueue = cachedQueue.map(correctPurchaseSyncJobDate);
         if (
+          correctedPurchases.length !== cachedPurchases.length ||
           correctedPurchases.some(
             (item, index) => item !== cachedPurchases[index],
           )
@@ -2612,6 +2764,8 @@ export function useAppController() {
         setEmployees(cachedEmployees);
         setEmployeeAbsences(cachedEmployeeAbsences);
         setEmployeeWithdrawals(cachedEmployeeWithdrawals);
+        hasLoadedCashCarryRef.current = true;
+        setCashCarryByStore(cachedCashCarryByStore ?? {});
         setProductOrderByStore(cachedProductOrderByStore ?? {});
         setQueue(correctedQueue);
         setSelectedStoreId(initialStoreId);
@@ -2632,6 +2786,8 @@ export function useAppController() {
         setEmployees([]);
         setEmployeeAbsences([]);
         setEmployeeWithdrawals([]);
+        hasLoadedCashCarryRef.current = true;
+        setCashCarryByStore({});
         setProductOrderByStore({});
         setQueue([]);
         setSelectedStoreId(FALLBACK_STORES[0]?.id ?? "");
@@ -2683,6 +2839,13 @@ export function useAppController() {
   useEffect(() => {
     void saveArray(STORAGE_KEYS.employeeWithdrawals, employeeWithdrawals);
   }, [employeeWithdrawals]);
+
+  useEffect(() => {
+    if (isBootstrapping || !hasLoadedCashCarryRef.current) {
+      return;
+    }
+    void saveObject(STORAGE_KEYS.cashCarryByStore, cashCarryByStore);
+  }, [cashCarryByStore, isBootstrapping]);
 
   useEffect(() => {
     if (isBootstrapping) {
@@ -2860,7 +3023,10 @@ export function useAppController() {
   useEffect(() => {
     setTodaySupplyInputs({});
     setSettlementActualInputs({});
+    setCashBoxInput("");
+    setSharesInput("");
     setActualRemainingInput("");
+    setSettlementNoteInput("");
     setTawasiCapitalInput("");
     setTawasiSellPriceInput("");
     setSelectedOrderInvoice(null);
@@ -3012,6 +3178,32 @@ export function useAppController() {
   ]);
 
   useEffect(() => {
+    if (
+      !isOnline ||
+      !session?.accessToken ||
+      !selectedStoreId ||
+      activeScreen !== "purchases"
+    ) {
+      return;
+    }
+
+    void refreshInventoryData();
+    const intervalId = setInterval(() => {
+      void refreshInventoryData();
+    }, 20000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [
+    activeScreen,
+    isOnline,
+    refreshInventoryData,
+    selectedStoreId,
+    session?.accessToken,
+  ]);
+
+  useEffect(() => {
     if (!session || !isOnline) {
       return;
     }
@@ -3060,7 +3252,11 @@ export function useAppController() {
   }, [isOnline, session?.accessToken, syncQueueTrigger]);
 
   useEffect(() => {
-    if (!isOnline || !session?.accessToken || queue.length === 0) {
+    if (
+      !isOnline ||
+      !session?.accessToken ||
+      !queue.some((job) => job.retries < MAX_SYNC_JOB_RETRIES)
+    ) {
       return;
     }
 
@@ -3156,9 +3352,20 @@ export function useAppController() {
       return;
     }
 
-    setPosCashCarryAmount((previous) =>
-      Number((previous + cashValue).toFixed(2)),
-    );
+    const effectiveStoreId = isCashier
+      ? assignedStoreId ?? ""
+      : selectedStoreId;
+    if (!effectiveStoreId) {
+      setStatusMessage("اختر الفرع قبل إضافة الكاش المدوّر.");
+      return;
+    }
+
+    setCashCarryByStore((previous) => ({
+      ...previous,
+      [effectiveStoreId]: Number(
+        ((previous[effectiveStoreId] ?? 0) + cashValue).toFixed(2),
+      ),
+    }));
     setCashBoxInput((previous) => {
       const previousValue = parseNumberInput(previous);
       return String(Number((previousValue + cashValue).toFixed(2)));
@@ -3554,7 +3761,10 @@ export function useAppController() {
     setSharesInput('');
     setActualRemainingInput('');
     setSettlementNoteInput('');
-    setPosCashCarryAmount(carryForwardAmount);
+    setCashCarryByStore((previous) => ({
+      ...previous,
+      [effectiveStoreId]: carryForwardAmount,
+    }));
     setSettlementActualInputs({});
 
     const syncJob: SyncJob = {
@@ -4826,12 +5036,12 @@ export function useAppController() {
       void saveArray(STORAGE_KEYS.inventoryAdjustments, next);
       return next;
     });
-    enqueueJob(syncJob);
     setStatusMessage(
       `تم اعتماد مخزون ${product.name}: ${formatQuantity(actualQuantity)}.`,
     );
 
     if (!isOnline || !authToken) {
+      enqueueJob(syncJob);
       setStatusMessage(
         `تم ضبط مخزون ${product.name} محلياً وسيتم رفعه عند عودة الاتصال.`,
       );
@@ -4839,28 +5049,27 @@ export function useAppController() {
     }
 
     try {
-      await postInventoryAdjustment(authToken, payload);
+      const adjustment = await postInventoryAdjustment(authToken, payload);
+      upsertRemoteInventoryAdjustment(adjustment);
       markInventoryAdjustmentSynced(clientAdjustmentId);
       setQueue((previous) => {
-        const next = previous.filter((job) => {
-          const entity = job.entity ?? job.type;
-          const jobPayload =
-            entity === "INVENTORY_ADJUSTMENT"
-              ? (job.payload as CreateInventoryAdjustmentPayload)
-              : null;
-          return !(
-            entity === "INVENTORY_ADJUSTMENT" &&
-            job.referenceId === queueReference &&
-            jobPayload?.clientAdjustmentId === clientAdjustmentId
-          );
-        });
-        void saveArray(STORAGE_KEYS.syncQueue, next);
+        const next = previous.filter(
+          (job) =>
+            !(
+              (job.entity ?? job.type) === "INVENTORY_ADJUSTMENT" &&
+              job.referenceId === queueReference
+            ),
+        );
+        if (next.length !== previous.length) {
+          persistSyncQueue(next);
+        }
         return next;
       });
       setStatusMessage(
         `تم ضبط مخزون ${product.name} إلى ${formatQuantity(actualQuantity)} ومزامنته.`,
       );
     } catch (error: unknown) {
+      enqueueJob(syncJob);
       if (error instanceof ApiError && error.status === 401) {
         logout("انتهت الجلسة وتم حفظ ضبط المخزون محلياً.");
         return;

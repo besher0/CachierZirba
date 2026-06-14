@@ -1,8 +1,9 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -48,7 +49,7 @@ export class OrdersService {
       const saved = await this.orderRepository.save(order);
       return this.findById(saved.id);
     } catch (error: unknown) {
-      if (this.isSqliteUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findByClientOrderId(dto.clientOrderId);
       }
       throw error;
@@ -105,15 +106,6 @@ export class OrdersService {
     }
 
     return order;
-  }
-
-  private isSqliteUniqueConstraintError(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) {
-      return false;
-    }
-
-    const candidate = error as QueryFailedError & { message?: string };
-    return candidate.message?.includes('UNIQUE constraint failed') ?? false;
   }
 
   private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {

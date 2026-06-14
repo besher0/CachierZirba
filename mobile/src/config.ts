@@ -195,6 +195,7 @@ export const STORAGE_KEYS = {
   employees: 'zirba.cached.employees.v1',
   employeeAbsences: 'zirba.cached.employeeAbsences.v1',
   employeeWithdrawals: 'zirba.cached.employeeWithdrawals.v1',
+  cashCarryByStore: 'zirba.cached.cashCarryByStore.v1',
   syncQueue: 'zirba.sync.queue.v1',
 } as const;
 

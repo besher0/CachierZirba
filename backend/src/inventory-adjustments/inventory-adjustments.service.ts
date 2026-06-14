@@ -4,9 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import { ListInventoryAdjustmentsQueryDto } from './dto/list-inventory-adjustments-query.dto';
@@ -49,7 +50,7 @@ export class InventoryAdjustmentsService {
       const saved = await this.adjustmentRepository.save(record);
       return this.findById(saved.id);
     } catch (error: unknown) {
-      if (this.isUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findByClientAdjustmentId(dto.clientAdjustmentId);
       }
       throw error;
@@ -118,17 +119,4 @@ export class InventoryAdjustmentsService {
     return requestedStoreId;
   }
 
-  private isUniqueConstraintError(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) {
-      return false;
-    }
-    const candidate = error as QueryFailedError & {
-      code?: string;
-      message?: string;
-    };
-    return (
-      candidate.code === '23505' ||
-      candidate.message?.includes('UNIQUE constraint failed') === true
-    );
-  }
 }

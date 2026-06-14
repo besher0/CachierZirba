@@ -35,6 +35,10 @@ const WRITE_REQUEST_OPTIONS = {
   timeoutMs: REQUEST_TIMEOUT_MS,
   maxNetworkRetries: 0,
 } as const;
+const INVENTORY_WRITE_REQUEST_OPTIONS = {
+  timeoutMs: 8000,
+  maxNetworkRetries: 0,
+} as const;
 let lastReachableBaseUrl: string | null = null;
 
 export class ApiError extends Error {
@@ -475,7 +479,7 @@ export function postInventoryAdjustment(
     method: 'POST',
     body: JSON.stringify(payload),
     token,
-    ...WRITE_REQUEST_OPTIONS,
+    ...INVENTORY_WRITE_REQUEST_OPTIONS,
   });
 }
 

@@ -4,9 +4,10 @@
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { ListExpensesQueryDto } from './dto/list-expenses-query.dto';
@@ -46,7 +47,7 @@ export class ExpensesService {
       const saved = await this.expenseRepository.save(record);
       return this.findById(saved.id);
     } catch (error: unknown) {
-      if (this.isSqliteUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findByClientExpenseId(dto.clientExpenseId);
       }
 
@@ -206,12 +207,4 @@ export class ExpensesService {
     }
   }
 
-  private isSqliteUniqueConstraintError(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) {
-      return false;
-    }
-
-    const candidate = error as QueryFailedError & { message?: string };
-    return candidate.message?.includes('UNIQUE constraint failed') ?? false;
-  }
 }

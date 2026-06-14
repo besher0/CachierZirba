@@ -841,7 +841,11 @@ export function mapLocalPurchaseToRow(item: LocalPurchase): PurchaseRow {
   };
 }
 
-export function mergeSyncJobs(previous: SyncJob[], incoming: SyncJob): SyncJob[] {
+export function mergeSyncJobs(
+  previous: SyncJob[],
+  incoming: SyncJob,
+  inFlightJobIds: ReadonlySet<string> = new Set(),
+): SyncJob[] {
   const entity = incoming.entity ?? incoming.type;
   if (
     entity !== "EXPENSE" &&
@@ -874,6 +878,10 @@ export function mergeSyncJobs(previous: SyncJob[], incoming: SyncJob): SyncJob[]
   const withoutExisting = previous.filter((_, index) => index !== lastIndex);
 
   if (existingEntity !== entity) {
+    return [...previous, incoming];
+  }
+
+  if (inFlightJobIds.has(existing.id)) {
     return [...previous, incoming];
   }
 

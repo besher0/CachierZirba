@@ -1,8 +1,9 @@
 import { ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { Store } from './entities/store.entity';
 
@@ -25,7 +26,7 @@ export class StoresService implements OnModuleInit {
       });
       return await this.storeRepository.save(store);
     } catch (error: unknown) {
-      if (this.isSqliteUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         throw new ConflictException('Store code already exists.');
       }
       throw error;
@@ -114,12 +115,4 @@ export class StoresService implements OnModuleInit {
     }
   }
 
-  private isSqliteUniqueConstraintError(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) {
-      return false;
-    }
-
-    const candidate = error as QueryFailedError & { message?: string };
-    return candidate.message?.includes('UNIQUE constraint failed') ?? false;
-  }
 }

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
+import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Product } from './entities/product.entity';
@@ -38,7 +39,7 @@ export class ProductsService {
       const saved = await this.productRepository.save(record);
       return this.findById(saved.id);
     } catch (error: unknown) {
-      if (this.isSqliteUniqueConstraintError(error)) {
+      if (isUniqueConstraintError(error)) {
         return this.findByClientProductId(dto.clientProductId);
       }
       throw error;
@@ -109,12 +110,4 @@ export class ProductsService {
     return record;
   }
 
-  private isSqliteUniqueConstraintError(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) {
-      return false;
-    }
-
-    const candidate = error as QueryFailedError & { message?: string };
-    return candidate.message?.includes('UNIQUE constraint failed') ?? false;
-  }
 }
