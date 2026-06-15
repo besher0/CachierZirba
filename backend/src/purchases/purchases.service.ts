@@ -177,8 +177,8 @@ export class PurchasesService {
   }
 
   private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {
-    if (authUser.role !== UserRole.CASHIER) {
-      throw new ForbiddenException('Admin accounts have read-only access to purchases.');
+    if (authUser.role === UserRole.ADMIN) {
+      return requestedStoreId;
     }
 
     if (!authUser.storeId) {
@@ -193,8 +193,8 @@ export class PurchasesService {
   }
 
   private assertRecordWritePermission(record: Purchase, authUser: AuthUser): void {
-    if (authUser.role !== UserRole.CASHIER) {
-      throw new ForbiddenException('Admin accounts have read-only access to purchases.');
+    if (authUser.role === UserRole.ADMIN) {
+      return;
     }
 
     if (!authUser.storeId || authUser.storeId !== record.storeId) {

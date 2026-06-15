@@ -22,13 +22,13 @@ export class ExpensesController {
     return this.expensesService.findAll(query, authUser);
   }
 
-  @Roles(UserRole.CASHIER)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Post()
   create(@Body() dto: CreateExpenseDto, @CurrentUser() authUser: AuthUser): Promise<Expense> {
     return this.expensesService.create(dto, authUser);
   }
 
-  @Roles(UserRole.CASHIER)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Patch(':clientExpenseId')
   update(
     @Param('clientExpenseId') clientExpenseId: string,
@@ -38,7 +38,7 @@ export class ExpensesController {
     return this.expensesService.update(clientExpenseId, dto, authUser);
   }
 
-  @Roles(UserRole.CASHIER)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Delete(':clientExpenseId')
   remove(
     @Param('clientExpenseId') clientExpenseId: string,

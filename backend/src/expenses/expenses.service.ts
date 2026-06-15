@@ -182,8 +182,8 @@ export class ExpensesService {
   }
 
   private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {
-    if (authUser.role !== UserRole.CASHIER) {
-      throw new ForbiddenException('Admin accounts have read-only access to expenses.');
+    if (authUser.role === UserRole.ADMIN) {
+      return requestedStoreId;
     }
 
     if (!authUser.storeId) {
@@ -198,8 +198,8 @@ export class ExpensesService {
   }
 
   private assertRecordWritePermission(record: Expense, authUser: AuthUser): void {
-    if (authUser.role !== UserRole.CASHIER) {
-      throw new ForbiddenException('Admin accounts have read-only access to expenses.');
+    if (authUser.role === UserRole.ADMIN) {
+      return;
     }
 
     if (!authUser.storeId || authUser.storeId !== record.storeId) {

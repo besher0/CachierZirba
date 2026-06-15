@@ -317,6 +317,7 @@ interface SyncJobBase {
   id: string;
   referenceId: string;
   retries: number;
+  permanentFailure?: boolean;
   createdAt: string;
   action?: 'CREATE' | 'UPDATE' | 'DELETE';
   entity?:

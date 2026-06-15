@@ -113,7 +113,10 @@ import {
   UpdatePurchasePayload,
 } from "../types";
 import { exportCsv, toCsv } from "../utils/csv";
-import { correctLegacyUtcDateOnly } from "../utils/businessDate";
+import {
+  correctLegacyUtcDateOnly,
+  toIsoDateOnlyInTimeZone,
+} from "../utils/businessDate";
 import { styles } from "../views/appStyles";
 import {
   buildPieceStockAuditRows,
@@ -206,7 +209,7 @@ function isPermanentSyncError(error: unknown): boolean {
     (error instanceof ApiError &&
       error.status >= 400 &&
       error.status < 500 &&
-      ![401, 408, 409, 429].includes(error.status))
+      ![401, 403, 404, 408, 409, 429].includes(error.status))
   );
 }
 
@@ -222,6 +225,15 @@ function correctCachedPurchaseDate(item: LocalPurchase): LocalPurchase {
         ...item,
         purchaseDate,
       };
+}
+
+function toBusinessDateFromTimestamp(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value.slice(0, 10);
+  }
+
+  return toIsoDateOnlyInTimeZone(parsed);
 }
 
 function correctPurchaseSyncJobDate(job: SyncJob): SyncJob {
@@ -720,11 +732,13 @@ export function useAppController() {
     [remoteSettlements, selectedStoreId],
   );
 
-  const [todayDate, setTodayDate] = useState(() => toIsoDateOnly(new Date()));
+  const [todayDate, setTodayDate] = useState(() =>
+    toIsoDateOnlyInTimeZone(new Date()),
+  );
 
   useEffect(() => {
     const refreshTodayDate = () => {
-      const nextDate = toIsoDateOnly(new Date());
+      const nextDate = toIsoDateOnlyInTimeZone(new Date());
       setTodayDate((currentDate) =>
         currentDate === nextDate ? currentDate : nextDate,
       );
@@ -799,11 +813,11 @@ export function useAppController() {
       .filter((item) => item.storeId === selectedStoreId)
       .forEach((item) => rows.set(item.clientOrderId, mapApiOrderToRow(item)));
 
-    selectedStoreOrders
-      .filter((item) => item.synced !== true)
-      .forEach((item) =>
-        rows.set(item.clientOrderId, mapLocalOrderToRow(item)),
-      );
+    selectedStoreOrders.forEach((item) => {
+      if (!rows.has(item.clientOrderId)) {
+        rows.set(item.clientOrderId, mapLocalOrderToRow(item));
+      }
+    });
 
     return Array.from(rows.values()).sort((a, b) =>
       b.orderedAt.localeCompare(a.orderedAt),
@@ -811,7 +825,7 @@ export function useAppController() {
   }, [remoteOrders, selectedStoreId, selectedStoreOrders]);
 
   const mergedOrderRows = useMemo(
-    () => allMergedOrderRows.slice(0, 12),
+    () => allMergedOrderRows,
     [allMergedOrderRows],
   );
 
@@ -976,72 +990,53 @@ export function useAppController() {
     return latest;
   }, [mergedInventoryAdjustments]);
 
+  const isInCurrentSettlementCycle = useCallback(
+    (recordDate: string, occurredAt: string) => {
+      if (!settlementCycleStartIso) {
+        return recordDate === todayDate;
+      }
+
+      const normalizedOccurredAt = normalizeIsoTimestamp(occurredAt);
+      return normalizedOccurredAt
+        ? normalizedOccurredAt > settlementCycleStartIso
+        : recordDate === todayDate;
+    },
+    [settlementCycleStartIso, todayDate],
+  );
+
   const ordersInCurrentCycle = useMemo(
     () =>
-      allMergedOrderRows.filter((item) => {
-        if (item.orderedAt.slice(0, 10) !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const orderedAt = normalizeIsoTimestamp(item.orderedAt);
-        return orderedAt ? orderedAt > settlementCycleStartIso : true;
-      }),
-    [allMergedOrderRows, settlementCycleStartIso, todayDate],
+      allMergedOrderRows.filter((item) =>
+        isInCurrentSettlementCycle(
+          toBusinessDateFromTimestamp(item.orderedAt),
+          item.orderedAt,
+        ),
+      ),
+    [allMergedOrderRows, isInCurrentSettlementCycle],
   );
 
   const expensesInCurrentCycle = useMemo(
     () =>
-      mergedExpenseRows.filter((item) => {
-        if (item.expenseDate !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const occurredAt = normalizeIsoTimestamp(item.occurredAt);
-        return occurredAt ? occurredAt > settlementCycleStartIso : true;
-      }),
-    [mergedExpenseRows, settlementCycleStartIso, todayDate],
+      mergedExpenseRows.filter((item) =>
+        isInCurrentSettlementCycle(item.expenseDate, item.occurredAt),
+      ),
+    [isInCurrentSettlementCycle, mergedExpenseRows],
   );
 
   const purchasesInCurrentCycle = useMemo(
     () =>
-      mergedPurchaseRows.filter((item) => {
-        if (item.purchaseDate !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const occurredAt = normalizeIsoTimestamp(item.occurredAt);
-        return occurredAt ? occurredAt > settlementCycleStartIso : true;
-      }),
-    [mergedPurchaseRows, settlementCycleStartIso, todayDate],
+      mergedPurchaseRows.filter((item) =>
+        isInCurrentSettlementCycle(item.purchaseDate, item.occurredAt),
+      ),
+    [isInCurrentSettlementCycle, mergedPurchaseRows],
   );
 
   const withdrawalsInCurrentCycle = useMemo(
     () =>
-      selectedStoreWithdrawals.filter((item) => {
-        if (item.withdrawalDate !== todayDate) {
-          return false;
-        }
-
-        if (!settlementCycleStartIso) {
-          return true;
-        }
-
-        const createdAt = normalizeIsoTimestamp(item.createdAt);
-        return createdAt ? createdAt > settlementCycleStartIso : true;
-      }),
-    [selectedStoreWithdrawals, settlementCycleStartIso, todayDate],
+      selectedStoreWithdrawals.filter((item) =>
+        isInCurrentSettlementCycle(item.withdrawalDate, item.createdAt),
+      ),
+    [isInCurrentSettlementCycle, selectedStoreWithdrawals],
   );
 
   const filteredExpenseRows = useMemo(
@@ -1119,7 +1114,9 @@ export function useAppController() {
   const openSettlementDetails = useCallback(
     (settlement: SettlementHistoryRow) => {
       const dayOrders = allMergedOrderRows.filter(
-        (item) => item.orderedAt.slice(0, 10) === settlement.businessDate,
+        (item) =>
+          toBusinessDateFromTimestamp(item.orderedAt) ===
+          settlement.businessDate,
       );
       const dayExpenses = mergedExpenseRows.filter(
         (item) => item.expenseDate === settlement.businessDate,
@@ -2318,12 +2315,13 @@ export function useAppController() {
       return;
     }
 
-    const jobsToSync = queue.filter(
-      (job) => job.retries < MAX_SYNC_JOB_RETRIES,
-    );
+    const jobsToSync = queue.filter((job) => !job.permanentFailure);
     if (jobsToSync.length === 0) {
+      const permanentlyFailedCount = queue.filter(
+        (job) => job.permanentFailure,
+      ).length;
       setStatusMessage(
-        `يوجد ${queue.length} عملية متوقفة بسبب خطأ دائم وتحتاج إلى تعديل البيانات قبل إعادة المحاولة.`,
+        `يوجد ${permanentlyFailedCount} عملية متوقفة بسبب خطأ دائم وتحتاج إلى تعديل البيانات قبل إعادة المحاولة.`,
       );
       return;
     }
@@ -2523,11 +2521,13 @@ export function useAppController() {
           continue;
         }
 
+        const permanentFailure = isPermanentSyncError(error);
         retryJobs.set(job.id, {
           ...job,
-          retries: isPermanentSyncError(error)
+          retries: permanentFailure
             ? MAX_SYNC_JOB_RETRIES
             : Math.min(job.retries + 1, MAX_SYNC_JOB_RETRIES - 1),
+          permanentFailure: permanentFailure || undefined,
         });
       } finally {
         inFlightSyncJobIdsRef.current.delete(job.id);
@@ -3255,7 +3255,7 @@ export function useAppController() {
     if (
       !isOnline ||
       !session?.accessToken ||
-      !queue.some((job) => job.retries < MAX_SYNC_JOB_RETRIES)
+      !queue.some((job) => !job.permanentFailure)
     ) {
       return;
     }
@@ -3693,7 +3693,7 @@ export function useAppController() {
 
     const createdAt = new Date().toISOString();
     const clientClosureId = makeId('close');
-    const businessDate = createdAt.slice(0, 10);
+    const businessDate = toIsoDateOnlyInTimeZone(new Date(createdAt));
     const cashBoxAmount = parseNumberInput(cashBoxInput);
     const sharesAmount = parseNumberInput(sharesInput);
     const actualRemainingAmount = Number(parseNumberInput(actualRemainingInput).toFixed(2));

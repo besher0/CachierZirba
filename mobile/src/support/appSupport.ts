@@ -26,7 +26,10 @@ import {
   ProductTemplate,
   SyncJob,
 } from "../types";
-import { correctLegacyUtcDateOnly } from "../utils/businessDate";
+import {
+  correctLegacyUtcDateOnly,
+  toDateTimeMinuteInTimeZone,
+} from "../utils/businessDate";
 
 export interface OrderHistoryRow {
   clientOrderId: string;
@@ -604,7 +607,12 @@ export function toShortDate(isoDate: string): string {
     return "-";
   }
 
-  return isoDate.replace("T", " ").slice(0, 16);
+  const parsed = new Date(isoDate);
+  if (Number.isNaN(parsed.getTime())) {
+    return isoDate.replace("T", " ").slice(0, 16);
+  }
+
+  return toDateTimeMinuteInTimeZone(parsed);
 }
 
 export function toOrderStatusLabel(status: OrderStatus): string {
@@ -891,6 +899,8 @@ export function mergeSyncJobs(
         ...withoutExisting,
         {
           ...existing,
+          retries: 0,
+          permanentFailure: undefined,
           payload: {
             ...(existing.payload as object),
             ...(incoming.payload as object),

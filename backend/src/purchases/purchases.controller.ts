@@ -22,13 +22,13 @@ export class PurchasesController {
     return this.purchasesService.findAll(query, authUser);
   }
 
-  @Roles(UserRole.CASHIER)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Post()
   create(@Body() dto: CreatePurchaseDto, @CurrentUser() authUser: AuthUser): Promise<Purchase> {
     return this.purchasesService.create(dto, authUser);
   }
 
-  @Roles(UserRole.CASHIER)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Patch(':clientPurchaseId')
   update(
     @Param('clientPurchaseId') clientPurchaseId: string,
@@ -38,7 +38,7 @@ export class PurchasesController {
     return this.purchasesService.update(clientPurchaseId, dto, authUser);
   }
 
-  @Roles(UserRole.CASHIER)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Delete(':clientPurchaseId')
   remove(
     @Param('clientPurchaseId') clientPurchaseId: string,

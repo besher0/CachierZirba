@@ -26,6 +26,8 @@ describe('Zirba API (e2e)', () => {
   let app: INestApplication<App>;
   let adminToken = '';
   let cashierMainToken = '';
+  let adminCreatedExpenseId = '';
+  let adminCreatedPurchaseId = '';
   let createdExpenseId = '';
   let createdPurchaseId = '';
   const e2eDbPath = join(process.cwd(), 'zirba.e2e.db');
@@ -65,12 +67,12 @@ describe('Zirba API (e2e)', () => {
   it('POST /api/auth/login should authenticate admin and cashier users', async () => {
     const admin = await request(app.getHttpServer())
       .post('/api/auth/login')
-      .send({ username: 'admin', password: 'Admin@123' })
+      .send({ username: 'مها', password: 'abcd' })
       .expect(201);
 
     const cashier = await request(app.getHttpServer())
       .post('/api/auth/login')
-      .send({ username: 'cashier.main', password: 'Cashier@123' })
+      .send({ username: 'محافظة', password: '0000' })
       .expect(201);
 
     const adminBody = admin.body as LoginResponse;
@@ -121,8 +123,8 @@ describe('Zirba API (e2e)', () => {
     expect(Array.isArray(response.body)).toBe(true);
   });
 
-  it('POST /api/expenses should reject admin write access', async () => {
-    await request(app.getHttpServer())
+  it('POST /api/expenses should allow admin write access for a selected store', async () => {
+    const response = await request(app.getHttpServer())
       .post('/api/expenses')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
@@ -130,11 +132,14 @@ describe('Zirba API (e2e)', () => {
         storeId: MAIN_STORE_ID,
         expenseDate: '2026-05-15',
         category: 'RAW_MATERIALS',
-        description: 'Admin write should fail',
+        description: 'Admin-managed expense',
         amount: 10,
         syncedAt: new Date().toISOString(),
       })
-      .expect(403);
+      .expect(201);
+
+    adminCreatedExpenseId = response.body.clientExpenseId as string;
+    expect(response.body.storeId).toBe(MAIN_STORE_ID);
   });
 
   it('POST /api/expenses should enforce cashier store scope', async () => {
@@ -208,12 +213,14 @@ describe('Zirba API (e2e)', () => {
     ).toBe(true);
   });
 
-  it('PATCH /api/expenses should reject admin write access', async () => {
-    await request(app.getHttpServer())
+  it('PATCH /api/expenses should allow admin write access', async () => {
+    const response = await request(app.getHttpServer())
       .patch(`/api/expenses/${createdExpenseId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ amount: 900 })
-      .expect(403);
+      .expect(200);
+
+    expect(response.body.amount).toBe(900);
   });
 
   it('PATCH /api/expenses should allow cashier update', async () => {
@@ -250,8 +257,15 @@ describe('Zirba API (e2e)', () => {
     ).toBe(false);
   });
 
-  it('POST /api/purchases should reject admin write access', async () => {
+  it('DELETE /api/expenses should allow admin write access', async () => {
     await request(app.getHttpServer())
+      .delete(`/api/expenses/${adminCreatedExpenseId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+  });
+
+  it('POST /api/purchases should allow admin write access for a selected store', async () => {
+    const response = await request(app.getHttpServer())
       .post('/api/purchases')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
@@ -264,7 +278,10 @@ describe('Zirba API (e2e)', () => {
         purchaseDate: '2026-05-15',
         syncedAt: new Date().toISOString(),
       })
-      .expect(403);
+      .expect(201);
+
+    adminCreatedPurchaseId = response.body.clientPurchaseId as string;
+    expect(response.body.storeId).toBe(MAIN_STORE_ID);
   });
 
   it('POST /api/purchases should enforce cashier store scope', async () => {
@@ -344,12 +361,14 @@ describe('Zirba API (e2e)', () => {
     ).toBe(true);
   });
 
-  it('PATCH /api/purchases should reject admin write access', async () => {
-    await request(app.getHttpServer())
+  it('PATCH /api/purchases should allow admin write access', async () => {
+    const response = await request(app.getHttpServer())
       .patch(`/api/purchases/${createdPurchaseId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ totalCost: 140 })
-      .expect(403);
+      .expect(200);
+
+    expect(response.body.totalCost).toBe(140);
   });
 
   it('PATCH /api/purchases should allow cashier update', async () => {
@@ -385,6 +404,13 @@ describe('Zirba API (e2e)', () => {
         (item: { clientPurchaseId: string }) => item.clientPurchaseId === createdPurchaseId,
       ),
     ).toBe(false);
+  });
+
+  it('DELETE /api/purchases should allow admin write access', async () => {
+    await request(app.getHttpServer())
+      .delete(`/api/purchases/${adminCreatedPurchaseId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
   });
 
   afterAll(async () => {

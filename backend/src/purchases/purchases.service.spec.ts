@@ -1,4 +1,3 @@
-import { ForbiddenException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -79,11 +78,21 @@ describe('PurchasesService', () => {
     expect(repository.save).toHaveBeenCalledWith(created);
   });
 
-  it('keeps admin purchase access read-only', async () => {
-    await expect(service.create(payload, adminUser)).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
-    expect(storesService.findById).not.toHaveBeenCalled();
-    expect(repository.save).not.toHaveBeenCalled();
+  it('allows an admin to create a purchase for the selected store', async () => {
+    const created = {
+      ...payload,
+      note: null,
+      syncedAt: new Date(payload.syncedAt),
+    } as Purchase;
+    const saved = { ...created, id: 'server-id' } as Purchase;
+    repository.findOne
+      ?.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(saved);
+    repository.create?.mockReturnValue(created);
+    repository.save?.mockResolvedValue(saved);
+
+    await expect(service.create(payload, adminUser)).resolves.toBe(saved);
+    expect(storesService.findById).toHaveBeenCalledWith(storeId);
+    expect(repository.save).toHaveBeenCalledWith(created);
   });
 });
