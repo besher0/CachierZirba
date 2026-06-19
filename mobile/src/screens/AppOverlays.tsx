@@ -32,6 +32,7 @@ export function AppOverlays() {
     clientPurchaseId,
     closeAdminDatePicker,
     closeMobileNav,
+    closeTodayPurchasesInvoice,
     confirmAdminDatePicker,
     cover,
     date,
@@ -56,6 +57,7 @@ export function AppOverlays() {
     footerStatus,
     footerStatusText,
     formatMoney,
+    formatQuantity,
     id,
     imageUrl,
     index,
@@ -64,6 +66,7 @@ export function AppOverlays() {
     invoiceOverlay,
     isMobileNavVisible,
     isSyncing,
+    isTodayPurchasesInvoiceOpen,
     item,
     items,
     key,
@@ -149,6 +152,11 @@ export function AppOverlays() {
     subtotal,
     summaryRow,
     summaryText,
+    summaryTextStrong,
+    todayDate,
+    todayPurchaseInvoiceRows,
+    todayPurchaseInvoiceTotal,
+    exportTodayPurchasesInvoicePdf,
     toExpenseCategoryLabel,
     toOrderStatusLabel,
     toPaymentMethodLabel,
@@ -594,6 +602,96 @@ export function AppOverlays() {
                           </ScrollView>
                         </>
                       ) : null}
+                    </View>
+                  </View>
+                </Modal>
+
+                <Modal
+                  visible={isTodayPurchasesInvoiceOpen}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={closeTodayPurchasesInvoice}
+                >
+                  <View style={styles.invoiceOverlay}>
+                    <View style={styles.invoiceCard}>
+                      <View style={styles.sectionHeaderInline}>
+                        <Text style={styles.sectionTitle}>
+                          فاتورة توريدات اليوم
+                        </Text>
+                        <View style={styles.supplyHeaderActions}>
+                          <Pressable
+                            style={styles.smallRefreshButton}
+                            onPress={() => void exportTodayPurchasesInvoicePdf()}
+                          >
+                            <Text style={styles.smallRefreshText}>PDF</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.smallRefreshButton}
+                            onPress={closeTodayPurchasesInvoice}
+                          >
+                            <Text style={styles.smallRefreshText}>إغلاق</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      <Text style={styles.orderRowMeta}>
+                        الفرع: {selectedStore?.name ?? "-"}
+                      </Text>
+                      <Text style={styles.orderRowMeta}>
+                        التاريخ: {todayDate}
+                      </Text>
+
+                      <Text style={styles.storeTableTitle}>المنتجات</Text>
+                      <ScrollView style={styles.invoiceItemsList}>
+                        {todayPurchaseInvoiceRows.length === 0 ? (
+                          <Text style={styles.emptyText}>
+                            لا توجد توريدات مسجلة اليوم.
+                          </Text>
+                        ) : (
+                          todayPurchaseInvoiceRows.map((row) => (
+                            <View key={row.productName} style={styles.orderRow}>
+                              <View style={styles.orderRowMain}>
+                                <Text style={styles.orderRowId}>
+                                  {row.productName}
+                                </Text>
+                                <Text style={styles.orderRowItems}>
+                                  × {formatQuantity(row.quantity)}
+                                </Text>
+                              </View>
+                              <View style={styles.orderRowMain}>
+                                <Text style={styles.orderRowMeta}>
+                                  تكلفة الوحدة: {formatMoney(row.unitCost)}
+                                </Text>
+                                <Text style={styles.orderRowTotal}>
+                                  {formatMoney(row.totalCost)}
+                                </Text>
+                              </View>
+                              <Text
+                                style={
+                                  row.synced
+                                    ? styles.syncedText
+                                    : styles.pendingText
+                                }
+                              >
+                                {row.synced
+                                  ? "متزامن"
+                                  : `معلق (${row.pendingCount})`}
+                              </Text>
+                              {row.notes.length > 0 ? (
+                                <Text style={styles.orderRowMeta}>
+                                  ملاحظة: {row.notes.join(" | ")}
+                                </Text>
+                              ) : null}
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+
+                      <View style={styles.summaryRow}>
+                        <Text style={styles.summaryTextStrong}>
+                          الإجمالي: {formatMoney(todayPurchaseInvoiceTotal)}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                 </Modal>

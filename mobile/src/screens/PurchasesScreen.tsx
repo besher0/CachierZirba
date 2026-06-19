@@ -55,6 +55,7 @@ export function PurchasesScreen() {
     note,
     onChangeText,
     onPress,
+    openTodayPurchasesInvoice,
     openProductCreateForm,
     orderRow,
     orderRowId,
@@ -160,6 +161,14 @@ export function PurchasesScreen() {
                           >
                             <Text style={styles.smallRefreshText}>
                               تحديث الكتالوج
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.smallRefreshButton}
+                            onPress={openTodayPurchasesInvoice}
+                          >
+                            <Text style={styles.smallRefreshText}>
+                              فاتورة اليوم
                             </Text>
                           </Pressable>
                           <Pressable

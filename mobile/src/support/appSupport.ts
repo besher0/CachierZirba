@@ -149,7 +149,7 @@ export interface MobileNavItem {
   subtitle: string;
 }
 
-export const moneyFormatter = new Intl.NumberFormat("ar-SY", {
+export const moneyFormatter = new Intl.NumberFormat("ar-SY-u-nu-latn", {
   style: "currency",
   currency: "SYP",
   maximumFractionDigits: 0,

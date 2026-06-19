@@ -6,6 +6,8 @@ import DateTimePicker, {
 import NetInfo from "@react-native-community/netinfo";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import {
   useCallback,
   useEffect,
@@ -201,7 +203,26 @@ import {
 const SYNC_RETRY_DELAY_MS = 10000;
 const MAX_SYNC_JOB_RETRIES = 5;
 
+interface TodayPurchaseInvoiceRow {
+  productName: string;
+  quantity: number;
+  unitCost: number;
+  totalCost: number;
+  notes: string[];
+  synced: boolean;
+  pendingCount: number;
+}
+
 class UnsupportedSyncOperationError extends Error {}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function isPermanentSyncError(error: unknown): boolean {
   return (
@@ -368,6 +389,8 @@ export function useAppController() {
     useState<SettlementDayDetail | null>(null);
   const [selectedExpenseDetails, setSelectedExpenseDetails] =
     useState<ExpenseRow | null>(null);
+  const [isTodayPurchasesInvoiceOpen, setIsTodayPurchasesInvoiceOpen] =
+    useState(false);
 
   const [expenseEditingId, setExpenseEditingId] = useState<string | null>(null);
   const [expenseDateInput, setExpenseDateInput] = useState(
@@ -1106,6 +1129,91 @@ export function useAppController() {
       purchaseFilterTo,
     ],
   );
+
+  const todayPurchaseInvoiceRows = useMemo<TodayPurchaseInvoiceRow[]>(() => {
+    const orderIndexByProduct = new Map(
+      posProducts.map((product, index) => [
+        normalizeProductKey(product.name),
+        index,
+      ]),
+    );
+    const grouped = new Map<
+      string,
+      TodayPurchaseInvoiceRow & { sortIndex: number }
+    >();
+
+    mergedPurchaseRows
+      .filter((item) => item.purchaseDate === todayDate)
+      .forEach((item) => {
+        const key = normalizeProductKey(item.productName);
+        const existing = grouped.get(key);
+        const note = item.note?.trim();
+
+        if (existing) {
+          existing.quantity += item.quantity;
+          existing.totalCost += item.totalCost;
+          existing.synced = existing.synced && item.synced;
+          existing.pendingCount += item.synced ? 0 : 1;
+          if (note && !existing.notes.includes(note)) {
+            existing.notes.push(note);
+          }
+          return;
+        }
+
+        grouped.set(key, {
+          productName: item.productName,
+          quantity: item.quantity,
+          unitCost: item.unitCost,
+          totalCost: item.totalCost,
+          notes: note ? [note] : [],
+          synced: item.synced,
+          pendingCount: item.synced ? 0 : 1,
+          sortIndex: orderIndexByProduct.get(key) ?? Number.MAX_SAFE_INTEGER,
+        });
+      });
+
+    return Array.from(grouped.values())
+      .sort((a, b) => {
+        if (a.sortIndex !== b.sortIndex) {
+          return a.sortIndex - b.sortIndex;
+        }
+        return a.productName.localeCompare(b.productName, "ar");
+      })
+      .map(({ sortIndex, ...row }) => {
+        const quantity = Number(row.quantity.toFixed(3));
+        const totalCost = Number(row.totalCost.toFixed(2));
+        return {
+          ...row,
+          quantity,
+          totalCost,
+          unitCost:
+            quantity > 0 ? Number((totalCost / quantity).toFixed(2)) : 0,
+        };
+      });
+  }, [mergedPurchaseRows, posProducts, todayDate]);
+
+  const todayPurchaseInvoiceTotal = useMemo(
+    () =>
+      Number(
+        todayPurchaseInvoiceRows
+          .reduce((sum, item) => sum + item.totalCost, 0)
+          .toFixed(2),
+      ),
+    [todayPurchaseInvoiceRows],
+  );
+
+  const openTodayPurchasesInvoice = useCallback(() => {
+    if (todayPurchaseInvoiceRows.length === 0) {
+      setStatusMessage("لا توجد توريدات مسجلة اليوم.");
+      return;
+    }
+
+    setIsTodayPurchasesInvoiceOpen(true);
+  }, [todayPurchaseInvoiceRows.length]);
+
+  const closeTodayPurchasesInvoice = useCallback(() => {
+    setIsTodayPurchasesInvoiceOpen(false);
+  }, []);
 
   const openExpenseDetails = useCallback((item: ExpenseRow) => {
     setSelectedExpenseDetails(item);
@@ -3032,6 +3140,7 @@ export function useAppController() {
     setSelectedOrderInvoice(null);
     setSelectedExpenseDetails(null);
     setSelectedSettlementDetail(null);
+    setIsTodayPurchasesInvoiceOpen(false);
   }, [selectedStoreId]);
 
   useEffect(() => {
@@ -3526,6 +3635,108 @@ export function useAppController() {
     setPendingMultiplier(null);
     setPendingAmountValue(null);
     setStatusMessage(`تمت إضافة منوعات بقيمة ${formatMoney(miscAmount)}.`);
+  };
+
+  const addTawasiSupplyFromPad = async () => {
+    if (!posPadInput.trim()) {
+      setStatusMessage("أدخل مبلغ التواصي من لوحة الأرقام أولاً.");
+      return;
+    }
+
+    const tawasiAmount = parseNumberInput(posPadInput);
+    if (tawasiAmount <= 0) {
+      setStatusMessage("مبلغ التواصي غير صالح.");
+      return;
+    }
+
+    if (!session) {
+      setStatusMessage("سجّل الدخول أولاً.");
+      return;
+    }
+
+    const effectiveStoreId = isCashier
+      ? assignedStoreId ?? ""
+      : selectedStoreId;
+    if (!effectiveStoreId) {
+      setStatusMessage("اختر المحل أولاً.");
+      return;
+    }
+
+    const orderedAt = new Date().toISOString();
+    const clientOrderId = makeId("order");
+    const payload: CreateOrderPayload = {
+      clientOrderId,
+      storeId: effectiveStoreId,
+      cashierName: session.user.displayName,
+      status: "COMPLETED",
+      paymentMethod: "CASH",
+      subtotal: tawasiAmount,
+      discount: 0,
+      tax: 0,
+      total: tawasiAmount,
+      items: [
+        {
+          productName: "تواصي",
+          quantity: 1,
+          unitPrice: tawasiAmount,
+          lineTotal: tawasiAmount,
+        },
+      ],
+      orderedAt,
+    };
+
+    const localOrder: LocalOrder = {
+      ...payload,
+      synced: false,
+      createdLocallyAt: orderedAt,
+    };
+
+    setOrders((previous) => {
+      const next = [localOrder, ...previous];
+      void saveArray(STORAGE_KEYS.orders, next);
+      return next;
+    });
+
+    setPosPadInput("");
+    setPendingMultiplier(null);
+    setPendingAmountValue(null);
+    setIsRefundMode(false);
+
+    const syncJob: SyncJob = {
+      id: makeId("job"),
+      referenceId: clientOrderId,
+      retries: 0,
+      createdAt: orderedAt,
+      entity: "ORDER",
+      action: "CREATE",
+      payload,
+    };
+
+    if (isOnline && authToken) {
+      try {
+        await postOrder(authToken, payload);
+        markOrderSynced(clientOrderId);
+        await refreshDashboardData();
+        await refreshOrdersData();
+        setStatusMessage(
+          `تم تسجيل تواصي بقيمة ${formatMoney(tawasiAmount)} كبيع مباشر.`,
+        );
+        return;
+      } catch (error: unknown) {
+        enqueueJob(syncJob);
+
+        if (error instanceof ApiError && error.status === 401) {
+          logout("انتهت الجلسة وتم حفظ بيع التواصي محلياً لحين تسجيل الدخول.");
+          return;
+        }
+
+        setStatusMessage("تم حفظ بيع التواصي محلياً بانتظار المزامنة.");
+        return;
+      }
+    }
+
+    enqueueJob(syncJob);
+    setStatusMessage("لا يوجد إنترنت: تم تخزين بيع التواصي محلياً.");
   };
 
   const handlePosProductDragEnd = ({ data }: { data: LocalProduct[] }) => {
@@ -5112,6 +5323,137 @@ export function useAppController() {
     setStatusMessage('تم تصدير المشتريات.');
   };
 
+  const exportTodayPurchasesInvoicePdf = async () => {
+    if (todayPurchaseInvoiceRows.length === 0) {
+      setStatusMessage("لا توجد توريدات مسجلة اليوم لإنشاء فاتورة.");
+      return;
+    }
+
+    const generatedAt = toShortDate(new Date().toISOString());
+    const rowsHtml = todayPurchaseInvoiceRows
+      .map(
+        (row, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${escapeHtml(row.productName)}</td>
+            <td>${escapeHtml(formatQuantity(row.quantity))}</td>
+            <td>${escapeHtml(formatMoney(row.unitCost))}</td>
+            <td>${escapeHtml(formatMoney(row.totalCost))}</td>
+            <td>${row.synced ? "متزامن" : `معلق (${row.pendingCount})`}</td>
+          </tr>
+        `,
+      )
+      .join("");
+    const notesHtml = todayPurchaseInvoiceRows
+      .filter((row) => row.notes.length > 0)
+      .map(
+        (row) => `
+          <div class="note">
+            <strong>${escapeHtml(row.productName)}:</strong>
+            ${escapeHtml(row.notes.join(" | "))}
+          </div>
+        `,
+      )
+      .join("");
+    const html = `
+      <!doctype html>
+      <html lang="ar" dir="rtl">
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body {
+              direction: rtl;
+              font-family: Arial, Tahoma, sans-serif;
+              color: #3f1d32;
+              margin: 28px;
+            }
+            h1 {
+              margin: 0 0 10px;
+              font-size: 24px;
+              color: #9d174d;
+            }
+            .meta {
+              margin: 4px 0;
+              font-size: 13px;
+              color: #6f425f;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 18px;
+              font-size: 12px;
+            }
+            th,
+            td {
+              border: 1px solid #efcadb;
+              padding: 8px;
+              text-align: right;
+            }
+            th {
+              background: #f8e8ee;
+              color: #831843;
+            }
+            .total {
+              margin-top: 16px;
+              font-size: 16px;
+              font-weight: 700;
+              color: #9d174d;
+            }
+            .note {
+              margin-top: 8px;
+              font-size: 12px;
+              color: #6f425f;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>فاتورة توريدات اليوم</h1>
+          <div class="meta">المحل: ${escapeHtml(selectedStore?.name ?? "-")}</div>
+          <div class="meta">التاريخ: ${escapeHtml(todayDate)}</div>
+          <div class="meta">وقت الإنشاء: ${escapeHtml(generatedAt)}</div>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>المنتج</th>
+                <th>الكمية</th>
+                <th>تكلفة الوحدة</th>
+                <th>الإجمالي</th>
+                <th>الحالة</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <div class="total">الإجمالي: ${escapeHtml(formatMoney(todayPurchaseInvoiceTotal))}</div>
+          ${notesHtml}
+        </body>
+      </html>
+    `;
+
+    try {
+      const pdf = await Print.printToFileAsync({ html });
+      if (!pdf?.uri) {
+        setStatusMessage("تم فتح نافذة الطباعة لفاتورة اليوم.");
+        return;
+      }
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        setStatusMessage("تم إنشاء ملف PDF، لكن المشاركة غير متاحة على هذا الجهاز.");
+        return;
+      }
+
+      await Sharing.shareAsync(pdf.uri, {
+        mimeType: "application/pdf",
+        dialogTitle: "فاتورة توريدات اليوم",
+        UTI: "com.adobe.pdf",
+      });
+      setStatusMessage("تم إنشاء ومشاركة فاتورة توريدات اليوم PDF.");
+    } catch (error: unknown) {
+      setStatusMessage("تعذر إنشاء ملف PDF لفاتورة اليوم.");
+    }
+  };
+
   const appScreenContext = {
     Animated,
     BRAND_CATEGORY,
@@ -5145,6 +5487,7 @@ export function useAppController() {
     addExpenseCategoryOption,
     addMiscAmountToCart,
     addProductToCart,
+    addTawasiSupplyFromPad,
     adminDatePickerTarget,
     adminDatePickerValue,
     adminFromDateInput,
@@ -5168,6 +5511,7 @@ export function useAppController() {
     commitInventoryAdjustment,
     closeAdminDatePicker,
     closeMobileNav,
+    closeTodayPurchasesInvoice,
     confirmAdminDatePicker,
     dashboardSummaries,
     decreaseProductInCart,
@@ -5194,6 +5538,7 @@ export function useAppController() {
     expenses,
     exportExpensesData,
     exportPurchasesData,
+    exportTodayPurchasesInvoicePdf,
     filteredExpenseRows,
     filteredPurchaseRows,
     formatMoney,
@@ -5210,6 +5555,7 @@ export function useAppController() {
     isPosSplit,
     isProductFormOpen,
     isRefundMode,
+    isTodayPurchasesInvoiceOpen,
     isSyncing,
     loginUser,
     logout,
@@ -5230,6 +5576,7 @@ export function useAppController() {
     openExpenseDetails,
     openProductCreateForm,
     openSettlementDetails,
+    openTodayPurchasesInvoice,
     orders,
     padAmountPreview,
     passwordInput,
@@ -5345,9 +5692,12 @@ export function useAppController() {
     toPaymentMethodLabel,
     toShortDate,
     todayEmployeeWithdrawalsTotal,
+    todayDate,
     todayExpectedRemaining,
     todayExpensesTotal,
     todayNetSales,
+    todayPurchaseInvoiceRows,
+    todayPurchaseInvoiceTotal,
     todayPurchasesTotal,
     todayRefundTotal,
     todaySalesTotal,
