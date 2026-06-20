@@ -23,7 +23,9 @@ export class DailySettlement {
   @Column({ type: 'uuid' })
   storeId: string;
 
-  @ManyToOne(() => Store, (store) => store.dailySettlements, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Store, (store) => store.dailySettlements, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'storeId' })
   store: Store;
 
@@ -41,6 +43,9 @@ export class DailySettlement {
 
   @Column({ type: 'real', default: 0 })
   expectedRevenue: number;
+
+  @Column({ type: 'real', default: 0 })
+  carryInAmount: number;
 
   @Column({ type: 'text', nullable: true })
   note: string | null;

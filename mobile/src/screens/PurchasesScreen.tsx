@@ -82,6 +82,7 @@ export function PurchasesScreen() {
     refreshInventoryData,
     refreshProductsData,
     registerTawasiSupply,
+    registerSupplyPayment,
     remainingQty,
     resetProductForm,
     row,
@@ -104,6 +105,8 @@ export function PurchasesScreen() {
     setStatusMessage,
     setTawasiCapitalInput,
     setTawasiSellPriceInput,
+    setSupplyPaymentAmountInput,
+    setSupplyPaymentNoteInput,
     smallRefreshButton,
     smallRefreshText,
     storeChip,
@@ -133,6 +136,8 @@ export function PurchasesScreen() {
     syncedText,
     tawasiCapitalInput,
     tawasiSellPriceInput,
+    supplyPaymentAmountInput,
+    supplyPaymentNoteInput,
     todaySupplyInputs,
     totalCost,
     unitCost,
@@ -242,6 +247,41 @@ export function PurchasesScreen() {
                         >
                           <Text style={styles.supplyActionButtonTextPrimary}>
                             تسجيل تواصي
+                          </Text>
+                        </Pressable>
+                      </View>
+
+                      <View style={styles.supplyAddBox}>
+                        <Text style={styles.supplyAddTitle}>
+                          دفعة من فاتورة توريدات اليوم
+                        </Text>
+                        <View style={styles.inputRow}>
+                          <TextInput
+                            style={styles.input}
+                            value={supplyPaymentAmountInput}
+                            onChangeText={setSupplyPaymentAmountInput}
+                            keyboardType="decimal-pad"
+                            placeholder="قيمة الدفعة"
+                            placeholderTextColor="#d7b3c4"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            value={supplyPaymentNoteInput}
+                            onChangeText={setSupplyPaymentNoteInput}
+                            placeholder="بيان الدفعة (اختياري)"
+                            placeholderTextColor="#d7b3c4"
+                          />
+                        </View>
+                        <Pressable
+                          style={[
+                            styles.supplyActionButtonPrimary,
+                            !canManageInventory && styles.buttonDisabled,
+                          ]}
+                          disabled={!canManageInventory}
+                          onPress={() => void registerSupplyPayment()}
+                        >
+                          <Text style={styles.supplyActionButtonTextPrimary}>
+                            تسجيل الدفعة
                           </Text>
                         </Pressable>
                       </View>
@@ -534,12 +574,18 @@ export function PurchasesScreen() {
                                 {item.productName}
                               </Text>
                               <Text style={styles.orderRowItems}>
-                                {item.quantity} × {formatMoney(item.unitCost)}
+                                {item.purchaseKind === "PAYMENT"
+                                  ? "دفعة فاتورة"
+                                  : `${item.quantity} × ${formatMoney(item.unitCost)}`}
                               </Text>
                             </View>
                             <View style={styles.orderRowMain}>
                               <Text style={styles.orderRowTotal}>
-                                {formatMoney(item.totalCost)}
+                                {formatMoney(
+                                  item.purchaseKind === "PAYMENT"
+                                    ? item.paymentAmount
+                                    : item.totalCost,
+                                )}
                               </Text>
                               <Text
                                 style={
@@ -554,6 +600,11 @@ export function PurchasesScreen() {
                             <Text style={styles.orderRowMeta}>
                               {item.purchaseDate}
                             </Text>
+                            {item.purchaseKind === "TAWASI" ? (
+                              <Text style={styles.orderRowMeta}>
+                                رأس المال: {formatMoney(item.totalCost)} | سعر المبيع: {formatMoney(item.sellPrice)}
+                              </Text>
+                            ) : null}
                             {item.note ? (
                               <Text style={styles.orderRowMeta}>
                                 {item.note}

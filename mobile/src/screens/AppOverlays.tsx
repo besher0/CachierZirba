@@ -156,6 +156,9 @@ export function AppOverlays() {
     todayDate,
     todayPurchaseInvoiceRows,
     todayPurchaseInvoiceTotal,
+    todayPurchasePaymentRows,
+    todayPurchasePaymentsTotal,
+    todayPurchaseInvoiceBalance,
     exportTodayPurchasesInvoicePdf,
     toExpenseCategoryLabel,
     toOrderStatusLabel,
@@ -393,7 +396,7 @@ export function AppOverlays() {
                       </View>
 
                       {selectedSettlementDetail ? (
-                        <>
+                        <ScrollView style={styles.invoiceItemsList}>
                           <Text style={styles.orderRowMeta}>
                             التاريخ: {selectedSettlementDetail.businessDate}
                           </Text>
@@ -493,16 +496,20 @@ export function AppOverlays() {
                             فواتير البيع (
                             {selectedSettlementDetail.orders.length})
                           </Text>
-                          <ScrollView style={styles.invoiceItemsList}>
+                          <View>
                             {selectedSettlementDetail.orders.length === 0 ? (
                               <Text style={styles.emptyText}>
                                 لا توجد فواتير في هذا اليوم.
                               </Text>
                             ) : (
                               selectedSettlementDetail.orders.map((order) => (
-                                <View
+                                <Pressable
                                   key={order.clientOrderId}
                                   style={styles.orderRow}
+                                  onPress={() => {
+                                    setSelectedSettlementDetail(null);
+                                    setSelectedOrderInvoice(order);
+                                  }}
                                 >
                                   <Text style={styles.orderRowId}>
                                     {order.clientOrderId}
@@ -511,16 +518,22 @@ export function AppOverlays() {
                                     {toOrderStatusLabel(order.status)} -{" "}
                                     {formatMoney(order.total)}
                                   </Text>
-                                </View>
+                                  <Text style={styles.orderRowMeta}>
+                                    {order.cashierName} | {toPaymentMethodLabel(order.paymentMethod)} | {toShortDate(order.orderedAt)}
+                                  </Text>
+                                  <Text style={styles.orderRowItems}>
+                                    {order.items.map((item) => `${item.productName} × ${formatQuantity(item.quantity)}`).join("، ")}
+                                  </Text>
+                                </Pressable>
                               ))
                             )}
-                          </ScrollView>
+                          </View>
 
                           <Text style={styles.storeTableTitle}>
                             المصاريف ({selectedSettlementDetail.expenses.length}
                             )
                           </Text>
-                          <ScrollView style={styles.invoiceItemsList}>
+                          <View>
                             {selectedSettlementDetail.expenses.length === 0 ? (
                               <Text style={styles.emptyText}>
                                 لا توجد مصاريف.
@@ -528,27 +541,34 @@ export function AppOverlays() {
                             ) : (
                               selectedSettlementDetail.expenses.map(
                                 (expense) => (
-                                  <View
+                                  <Pressable
                                     key={expense.clientExpenseId}
                                     style={styles.orderRow}
+                                    onPress={() => {
+                                      setSelectedSettlementDetail(null);
+                                      setSelectedExpenseDetails(expense);
+                                    }}
                                   >
                                     <Text style={styles.orderRowId}>
                                       {expense.description}
                                     </Text>
                                     <Text style={styles.orderRowMeta}>
-                                      {formatMoney(expense.amount)}
+                                      {toExpenseCategoryLabel(expense.category)} | {formatMoney(expense.amount)}
                                     </Text>
-                                  </View>
+                                    {expense.note ? (
+                                      <Text style={styles.orderRowMeta}>{expense.note}</Text>
+                                    ) : null}
+                                  </Pressable>
                                 ),
                               )
                             )}
-                          </ScrollView>
+                          </View>
 
                           <Text style={styles.storeTableTitle}>
                             السحوبات (
                             {selectedSettlementDetail.withdrawals.length})
                           </Text>
-                          <ScrollView style={styles.invoiceItemsList}>
+                          <View>
                             {selectedSettlementDetail.withdrawals.length ===
                             0 ? (
                               <Text style={styles.emptyText}>
@@ -565,19 +585,22 @@ export function AppOverlays() {
                                       {withdrawal.employeeName}
                                     </Text>
                                     <Text style={styles.orderRowMeta}>
-                                      {formatMoney(withdrawal.amount)}
+                                      {withdrawal.withdrawalDate} | {formatMoney(withdrawal.amount)}
                                     </Text>
+                                    {withdrawal.note ? (
+                                      <Text style={styles.orderRowMeta}>{withdrawal.note}</Text>
+                                    ) : null}
                                   </View>
                                 ),
                               )
                             )}
-                          </ScrollView>
+                          </View>
 
                           <Text style={styles.storeTableTitle}>
                             التوريدات (
                             {selectedSettlementDetail.purchases.length})
                           </Text>
-                          <ScrollView style={styles.invoiceItemsList}>
+                          <View>
                             {selectedSettlementDetail.purchases.length === 0 ? (
                               <Text style={styles.emptyText}>
                                 لا توجد توريدات.
@@ -593,14 +616,24 @@ export function AppOverlays() {
                                       {purchase.productName}
                                     </Text>
                                     <Text style={styles.orderRowMeta}>
-                                      {formatMoney(purchase.totalCost)}
+                                      {purchase.purchaseKind === "PAYMENT"
+                                        ? `دفعة: ${formatMoney(purchase.paymentAmount)}`
+                                        : `${formatQuantity(purchase.quantity)} × ${formatMoney(purchase.unitCost)} = ${formatMoney(purchase.totalCost)}`}
                                     </Text>
+                                    {purchase.purchaseKind === "TAWASI" ? (
+                                      <Text style={styles.orderRowMeta}>
+                                        سعر المبيع: {formatMoney(purchase.sellPrice)}
+                                      </Text>
+                                    ) : null}
+                                    {purchase.note ? (
+                                      <Text style={styles.orderRowMeta}>{purchase.note}</Text>
+                                    ) : null}
                                   </View>
                                 ),
                               )
                             )}
-                          </ScrollView>
-                        </>
+                          </View>
+                        </ScrollView>
                       ) : null}
                     </View>
                   </View>
@@ -649,15 +682,22 @@ export function AppOverlays() {
                           </Text>
                         ) : (
                           todayPurchaseInvoiceRows.map((row) => (
-                            <View key={row.productName} style={styles.orderRow}>
+                            <View key={row.key} style={styles.orderRow}>
                               <View style={styles.orderRowMain}>
                                 <Text style={styles.orderRowId}>
-                                  {row.productName}
+                                  {row.purchaseKind === "TAWASI"
+                                    ? "تواصي"
+                                    : row.productName}
                                 </Text>
                                 <Text style={styles.orderRowItems}>
                                   × {formatQuantity(row.quantity)}
                                 </Text>
                               </View>
+                              {row.purchaseKind === "TAWASI" ? (
+                                <Text style={styles.orderRowMeta}>
+                                  رأس المال: {formatMoney(row.totalCost)} | سعر المبيع: {formatMoney(row.sellPrice)}
+                                </Text>
+                              ) : null}
                               <View style={styles.orderRowMain}>
                                 <Text style={styles.orderRowMeta}>
                                   تكلفة الوحدة: {formatMoney(row.unitCost)}
@@ -687,9 +727,32 @@ export function AppOverlays() {
                         )}
                       </ScrollView>
 
+                      <Text style={styles.storeTableTitle}>الدفعات</Text>
+                      {todayPurchasePaymentRows.length === 0 ? (
+                        <Text style={styles.emptyText}>لا توجد دفعات.</Text>
+                      ) : (
+                        todayPurchasePaymentRows.map((row) => (
+                          <View key={row.key} style={styles.orderRow}>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowId}>
+                                {row.note || "دفعة فاتورة"}
+                              </Text>
+                              <Text style={styles.orderRowTotal}>
+                                {formatMoney(row.amount)}
+                              </Text>
+                            </View>
+                            <Text
+                              style={row.synced ? styles.syncedText : styles.pendingText}
+                            >
+                              {row.synced ? "متزامن" : "معلق"}
+                            </Text>
+                          </View>
+                        ))
+                      )}
+
                       <View style={styles.summaryRow}>
                         <Text style={styles.summaryTextStrong}>
-                          الإجمالي: {formatMoney(todayPurchaseInvoiceTotal)}
+                          التوريدات: {formatMoney(todayPurchaseInvoiceTotal)} | المدفوع: {formatMoney(todayPurchasePaymentsTotal)} | المتبقي: {formatMoney(todayPurchaseInvoiceBalance)}
                         </Text>
                       </View>
                     </View>

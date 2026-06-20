@@ -17,7 +17,10 @@ export class DailySettlementsService {
     private readonly storesService: StoresService,
   ) {}
 
-  async createOrUpdate(dto: CreateDailySettlementDto, authUser: AuthUser): Promise<DailySettlement> {
+  async createOrUpdate(
+    dto: CreateDailySettlementDto,
+    authUser: AuthUser,
+  ): Promise<DailySettlement> {
     const scopedStoreId = this.resolveStoreForWrite(dto.storeId, authUser);
     await this.storesService.findById(scopedStoreId);
 
@@ -43,11 +46,18 @@ export class DailySettlementsService {
       sameDayRecord.cashBoxAmount = dto.cashBoxAmount;
       sameDayRecord.sharesAmount = dto.sharesAmount;
       sameDayRecord.actualRemainingAmount = dto.actualRemainingAmount;
-      sameDayRecord.expectedRevenue = dto.expectedRevenue ?? sameDayRecord.expectedRevenue;
+      sameDayRecord.expectedRevenue =
+        dto.expectedRevenue ?? sameDayRecord.expectedRevenue;
+      sameDayRecord.carryInAmount =
+        dto.carryInAmount ?? sameDayRecord.carryInAmount;
       sameDayRecord.note = dto.note ?? null;
-      sameDayRecord.syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
+      sameDayRecord.syncedAt = dto.syncedAt
+        ? new Date(dto.syncedAt)
+        : new Date();
 
-      return this.dailySettlementRepository.save(sameDayRecord);
+      const saved = await this.dailySettlementRepository.save(sameDayRecord);
+      await this.updateStoreCashCarry(saved);
+      return saved;
     }
 
     try {
@@ -56,11 +66,13 @@ export class DailySettlementsService {
         storeId: scopedStoreId,
         actualRemainingAmount: dto.actualRemainingAmount,
         expectedRevenue: dto.expectedRevenue ?? 0,
+        carryInAmount: dto.carryInAmount ?? 0,
         note: dto.note ?? null,
         syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
       });
 
       const saved = await this.dailySettlementRepository.save(record);
+      await this.updateStoreCashCarry(saved);
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
@@ -93,11 +105,15 @@ export class DailySettlementsService {
     }
 
     if (query.from) {
-      qb.andWhere('s.businessDate >= :fromDate', { fromDate: query.from.slice(0, 10) });
+      qb.andWhere('s.businessDate >= :fromDate', {
+        fromDate: query.from.slice(0, 10),
+      });
     }
 
     if (query.to) {
-      qb.andWhere('s.businessDate <= :toDate', { toDate: query.to.slice(0, 10) });
+      qb.andWhere('s.businessDate <= :toDate', {
+        toDate: query.to.slice(0, 10),
+      });
     }
 
     return qb.getMany();
@@ -116,7 +132,10 @@ export class DailySettlementsService {
     return record;
   }
 
-  private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {
+  private resolveStoreForWrite(
+    requestedStoreId: string,
+    authUser: AuthUser,
+  ): string {
     if (authUser.role === UserRole.CASHIER) {
       if (!authUser.storeId) {
         throw new ForbiddenException('Cashier account has no assigned store.');
@@ -132,6 +151,18 @@ export class DailySettlementsService {
     }
 
     return requestedStoreId;
+  }
+
+  private async updateStoreCashCarry(
+    settlement: DailySettlement,
+  ): Promise<void> {
+    const carryForward = Math.max(
+      settlement.actualRemainingAmount -
+        settlement.cashBoxAmount -
+        settlement.sharesAmount,
+      0,
+    );
+    await this.storesService.setCashCarry(settlement.storeId, carryForward);
   }
 
   private resolveStoreForRead(

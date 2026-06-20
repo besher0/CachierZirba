@@ -24,6 +24,7 @@ export interface Store {
   name: string;
   code: string;
   isActive: boolean;
+  cashCarryAmount?: number;
 }
 
 export interface ProductTemplate {
@@ -106,9 +107,12 @@ export interface CreateDailySettlementPayload {
   sharesAmount: number;
   actualRemainingAmount: number;
   expectedRevenue?: number;
+  carryInAmount?: number;
   note?: string;
   syncedAt: string;
 }
+
+export type PurchaseKind = 'SUPPLY' | 'TAWASI' | 'PAYMENT';
 
 export interface LocalDailySettlement extends CreateDailySettlementPayload {
   synced: boolean;
@@ -173,6 +177,9 @@ export interface CreatePurchasePayload {
   quantity: number;
   unitCost: number;
   totalCost: number;
+  purchaseKind?: PurchaseKind;
+  sellPrice?: number;
+  paymentAmount?: number;
   purchaseDate: string;
   note?: string;
   syncedAt: string;
@@ -183,6 +190,9 @@ export interface UpdatePurchasePayload {
   quantity?: number;
   unitCost?: number;
   totalCost?: number;
+  purchaseKind?: PurchaseKind;
+  sellPrice?: number;
+  paymentAmount?: number;
   purchaseDate?: string;
   note?: string;
   syncedAt?: string;

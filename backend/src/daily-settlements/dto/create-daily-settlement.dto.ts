@@ -45,6 +45,12 @@ export class CreateDailySettlementDto {
   expectedRevenue?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  carryInAmount?: number;
+
+  @IsOptional()
   @IsString()
   @MaxLength(500)
   note?: string;

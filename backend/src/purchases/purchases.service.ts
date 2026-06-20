@@ -39,6 +39,9 @@ export class PurchasesService {
       const record = this.purchaseRepository.create({
         ...dto,
         storeId: scopedStoreId,
+        purchaseKind: dto.purchaseKind ?? 'SUPPLY',
+        sellPrice: dto.sellPrice ?? null,
+        paymentAmount: dto.paymentAmount ?? 0,
         note: dto.note ?? null,
         syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
       });
@@ -78,6 +81,18 @@ export class PurchasesService {
       record.totalCost = dto.totalCost;
     }
 
+    if (dto.purchaseKind !== undefined) {
+      record.purchaseKind = dto.purchaseKind;
+    }
+
+    if (dto.sellPrice !== undefined) {
+      record.sellPrice = dto.sellPrice;
+    }
+
+    if (dto.paymentAmount !== undefined) {
+      record.paymentAmount = dto.paymentAmount;
+    }
+
     if (dto.purchaseDate !== undefined) {
       record.purchaseDate = dto.purchaseDate;
     }
@@ -92,7 +107,10 @@ export class PurchasesService {
     return this.findById(record.id);
   }
 
-  async remove(clientPurchaseId: string, authUser: AuthUser): Promise<{ deleted: true }> {
+  async remove(
+    clientPurchaseId: string,
+    authUser: AuthUser,
+  ): Promise<{ deleted: true }> {
     const record = await this.findByClientPurchaseId(clientPurchaseId);
     this.assertRecordWritePermission(record, authUser);
 
@@ -100,7 +118,10 @@ export class PurchasesService {
     return { deleted: true };
   }
 
-  async findAll(query: ListPurchasesQueryDto, authUser: AuthUser): Promise<Purchase[]> {
+  async findAll(
+    query: ListPurchasesQueryDto,
+    authUser: AuthUser,
+  ): Promise<Purchase[]> {
     const qb = this.purchaseRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.store', 'store')
@@ -113,11 +134,15 @@ export class PurchasesService {
     }
 
     if (query.from) {
-      qb.andWhere('p.purchaseDate >= :fromDate', { fromDate: query.from.slice(0, 10) });
+      qb.andWhere('p.purchaseDate >= :fromDate', {
+        fromDate: query.from.slice(0, 10),
+      });
     }
 
     if (query.to) {
-      qb.andWhere('p.purchaseDate <= :toDate', { toDate: query.to.slice(0, 10) });
+      qb.andWhere('p.purchaseDate <= :toDate', {
+        toDate: query.to.slice(0, 10),
+      });
     }
 
     if (query.product) {
@@ -142,7 +167,9 @@ export class PurchasesService {
     return record;
   }
 
-  private async findByClientPurchaseId(clientPurchaseId: string): Promise<Purchase> {
+  private async findByClientPurchaseId(
+    clientPurchaseId: string,
+  ): Promise<Purchase> {
     const record = await this.purchaseRepository.findOne({
       where: { clientPurchaseId },
       relations: { store: true },
@@ -167,7 +194,9 @@ export class PurchasesService {
       }
 
       if (requestedStoreId && requestedStoreId !== authUser.storeId) {
-        throw new ForbiddenException('Cashier can only view purchases for assigned store.');
+        throw new ForbiddenException(
+          'Cashier can only view purchases for assigned store.',
+        );
       }
 
       return authUser.storeId;
@@ -176,7 +205,10 @@ export class PurchasesService {
     return requestedStoreId;
   }
 
-  private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {
+  private resolveStoreForWrite(
+    requestedStoreId: string,
+    authUser: AuthUser,
+  ): string {
     if (authUser.role === UserRole.ADMIN) {
       return requestedStoreId;
     }
@@ -186,20 +218,26 @@ export class PurchasesService {
     }
 
     if (requestedStoreId !== authUser.storeId) {
-      throw new ForbiddenException('Cashier can only manage purchases for assigned store.');
+      throw new ForbiddenException(
+        'Cashier can only manage purchases for assigned store.',
+      );
     }
 
     return authUser.storeId;
   }
 
-  private assertRecordWritePermission(record: Purchase, authUser: AuthUser): void {
+  private assertRecordWritePermission(
+    record: Purchase,
+    authUser: AuthUser,
+  ): void {
     if (authUser.role === UserRole.ADMIN) {
       return;
     }
 
     if (!authUser.storeId || authUser.storeId !== record.storeId) {
-      throw new ForbiddenException('Cashier can only manage purchases for assigned store.');
+      throw new ForbiddenException(
+        'Cashier can only manage purchases for assigned store.',
+      );
     }
   }
-
 }

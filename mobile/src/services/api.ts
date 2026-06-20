@@ -259,6 +259,19 @@ export function fetchStores(token: string): Promise<Store[]> {
   return request<Store[]>('/stores', { token });
 }
 
+export function addStoreCashCarry(
+  token: string,
+  storeId: string,
+  amount: number,
+): Promise<Store> {
+  return request<Store>(`/stores/${encodeURIComponent(storeId)}/cash-carry/add`, {
+    method: 'PATCH',
+    body: JSON.stringify({ amount }),
+    token,
+    ...WRITE_REQUEST_OPTIONS,
+  });
+}
+
 export function postOrder(token: string, payload: CreateOrderPayload) {
   return request('/orders', {
     method: 'POST',

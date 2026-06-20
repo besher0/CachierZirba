@@ -39,6 +39,7 @@ import {
 } from "../config";
 import {
   ApiError,
+  addStoreCashCarry,
   deleteEmployeeAbsence,
   deleteEmployeeWithdrawal,
   deleteExpense,
@@ -204,13 +205,23 @@ const SYNC_RETRY_DELAY_MS = 10000;
 const MAX_SYNC_JOB_RETRIES = 5;
 
 interface TodayPurchaseInvoiceRow {
+  key: string;
   productName: string;
+  purchaseKind: "SUPPLY" | "TAWASI";
   quantity: number;
   unitCost: number;
   totalCost: number;
+  sellPrice: number;
   notes: string[];
   synced: boolean;
   pendingCount: number;
+}
+
+interface TodayPurchasePaymentRow {
+  key: string;
+  amount: number;
+  note?: string;
+  synced: boolean;
 }
 
 class UnsupportedSyncOperationError extends Error {}
@@ -422,6 +433,8 @@ export function useAppController() {
   const [purchaseFilterTo, setPurchaseFilterTo] = useState("");
   const [tawasiCapitalInput, setTawasiCapitalInput] = useState("");
   const [tawasiSellPriceInput, setTawasiSellPriceInput] = useState("");
+  const [supplyPaymentAmountInput, setSupplyPaymentAmountInput] = useState("");
+  const [supplyPaymentNoteInput, setSupplyPaymentNoteInput] = useState("");
   const [products, setProducts] = useState<LocalProduct[]>(
     PRODUCT_CATALOG.map((item) => toLocalProduct(item)),
   );
@@ -977,6 +990,68 @@ export function useAppController() {
     selectedStorePurchases,
   ]);
 
+  const settlementArchiveRows = useMemo(
+    () =>
+      mergedSettlementRows.map((settlement) => {
+        const dayOrders = allMergedOrderRows.filter(
+          (item) =>
+            toBusinessDateFromTimestamp(item.orderedAt) ===
+            settlement.businessDate,
+        );
+        const dayExpenses = mergedExpenseRows.filter(
+          (item) => item.expenseDate === settlement.businessDate,
+        );
+        const dayPurchases = mergedPurchaseRows.filter(
+          (item) => item.purchaseDate === settlement.businessDate,
+        );
+        const dayWithdrawals = selectedStoreWithdrawals.filter(
+          (item) => item.withdrawalDate === settlement.businessDate,
+        );
+
+        return {
+          ...settlement,
+          ordersCount: dayOrders.length,
+          salesAmount: Number(
+            dayOrders
+              .filter((item) => item.status === "COMPLETED")
+              .reduce((sum, item) => sum + item.total, 0)
+              .toFixed(2),
+          ),
+          refundAmount: Number(
+            dayOrders
+              .filter((item) => item.status === "REFUNDED")
+              .reduce((sum, item) => sum + item.total, 0)
+              .toFixed(2),
+          ),
+          expensesCount: dayExpenses.length,
+          expensesAmount: Number(
+            dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+          ),
+          purchasesCount: dayPurchases.filter(
+            (item) => item.purchaseKind !== "PAYMENT",
+          ).length,
+          purchasesAmount: Number(
+            dayPurchases
+              .reduce((sum, item) => sum + item.totalCost, 0)
+              .toFixed(2),
+          ),
+          paymentsAmount: Number(
+            dayPurchases
+              .reduce((sum, item) => sum + item.paymentAmount, 0)
+              .toFixed(2),
+          ),
+          withdrawalsCount: dayWithdrawals.length,
+        };
+      }),
+    [
+      allMergedOrderRows,
+      mergedExpenseRows,
+      mergedPurchaseRows,
+      mergedSettlementRows,
+      selectedStoreWithdrawals,
+    ],
+  );
+
   const mergedInventoryAdjustments = useMemo(() => {
     const rows = new Map<
       string,
@@ -1143,9 +1218,15 @@ export function useAppController() {
     >();
 
     mergedPurchaseRows
-      .filter((item) => item.purchaseDate === todayDate)
+      .filter(
+        (item) =>
+          item.purchaseDate === todayDate && item.purchaseKind !== "PAYMENT",
+      )
       .forEach((item) => {
-        const key = normalizeProductKey(item.productName);
+        const key =
+          item.purchaseKind === "TAWASI"
+            ? item.clientPurchaseId
+            : normalizeProductKey(item.productName);
         const existing = grouped.get(key);
         const note = item.note?.trim();
 
@@ -1161,10 +1242,13 @@ export function useAppController() {
         }
 
         grouped.set(key, {
+          key,
           productName: item.productName,
+          purchaseKind: item.purchaseKind === "TAWASI" ? "TAWASI" : "SUPPLY",
           quantity: item.quantity,
           unitCost: item.unitCost,
           totalCost: item.totalCost,
+          sellPrice: item.sellPrice,
           notes: note ? [note] : [],
           synced: item.synced,
           pendingCount: item.synced ? 0 : 1,
@@ -1192,6 +1276,22 @@ export function useAppController() {
       });
   }, [mergedPurchaseRows, posProducts, todayDate]);
 
+  const todayPurchasePaymentRows = useMemo<TodayPurchasePaymentRow[]>(
+    () =>
+      mergedPurchaseRows
+        .filter(
+          (item) =>
+            item.purchaseDate === todayDate && item.purchaseKind === "PAYMENT",
+        )
+        .map((item) => ({
+          key: item.clientPurchaseId,
+          amount: item.paymentAmount,
+          note: item.note,
+          synced: item.synced,
+        })),
+    [mergedPurchaseRows, todayDate],
+  );
+
   const todayPurchaseInvoiceTotal = useMemo(
     () =>
       Number(
@@ -1202,14 +1302,38 @@ export function useAppController() {
     [todayPurchaseInvoiceRows],
   );
 
+  const todayPurchasePaymentsTotal = useMemo(
+    () =>
+      Number(
+        todayPurchasePaymentRows
+          .reduce((sum, item) => sum + item.amount, 0)
+          .toFixed(2),
+      ),
+    [todayPurchasePaymentRows],
+  );
+
+  const todayPurchaseInvoiceBalance = useMemo(
+    () =>
+      Number(
+        Math.max(
+          todayPurchaseInvoiceTotal - todayPurchasePaymentsTotal,
+          0,
+        ).toFixed(2),
+      ),
+    [todayPurchaseInvoiceTotal, todayPurchasePaymentsTotal],
+  );
+
   const openTodayPurchasesInvoice = useCallback(() => {
-    if (todayPurchaseInvoiceRows.length === 0) {
+    if (
+      todayPurchaseInvoiceRows.length === 0 &&
+      todayPurchasePaymentRows.length === 0
+    ) {
       setStatusMessage("لا توجد توريدات مسجلة اليوم.");
       return;
     }
 
     setIsTodayPurchasesInvoiceOpen(true);
-  }, [todayPurchaseInvoiceRows.length]);
+  }, [todayPurchaseInvoiceRows.length, todayPurchasePaymentRows.length]);
 
   const closeTodayPurchasesInvoice = useCallback(() => {
     setIsTodayPurchasesInvoiceOpen(false);
@@ -1272,7 +1396,7 @@ export function useAppController() {
           0,
         ).toFixed(2),
       );
-      const carryInAmount = Number(
+      const inferredCarryInAmount = Number(
         (
           expectedBeforeDistributionAmount -
           (netSalesAmount -
@@ -1281,6 +1405,10 @@ export function useAppController() {
             withdrawalsAmount)
         ).toFixed(2),
       );
+      const carryInAmount =
+        settlement.carryInAmount > 0
+          ? settlement.carryInAmount
+          : inferredCarryInAmount;
       const actualRemainingAmount = Number(
         settlement.actualRemainingAmount.toFixed(2),
       );
@@ -1984,6 +2112,15 @@ export function useAppController() {
 
       setStores(remoteStores);
       await saveArray(STORAGE_KEYS.stores, remoteStores);
+      setCashCarryByStore((previous) => ({
+        ...previous,
+        ...Object.fromEntries(
+          remoteStores.map((store) => [
+            store.id,
+            Number((store.cashCarryAmount ?? 0).toFixed(2)),
+          ]),
+        ),
+      }));
 
       setSelectedStoreId((previous) => {
         if (isCashier && assignedStoreId) {
@@ -2249,6 +2386,8 @@ export function useAppController() {
       refreshDailySettlementsData(),
       refreshEmployeesData(),
       refreshExpensesData(),
+      refreshOrdersData(),
+      refreshPurchasesData(),
       refreshProductsData(),
     ]).then(() => undefined);
     settlementRefreshPromiseRef.current = {
@@ -2270,6 +2409,8 @@ export function useAppController() {
     refreshEmployeesData,
     refreshExpensesData,
     refreshInventoryData,
+    refreshOrdersData,
+    refreshPurchasesData,
     refreshProductsData,
     selectedStoreId,
   ]);
@@ -3137,6 +3278,8 @@ export function useAppController() {
     setSettlementNoteInput("");
     setTawasiCapitalInput("");
     setTawasiSellPriceInput("");
+    setSupplyPaymentAmountInput("");
+    setSupplyPaymentNoteInput("");
     setSelectedOrderInvoice(null);
     setSelectedExpenseDetails(null);
     setSelectedSettlementDetail(null);
@@ -3230,6 +3373,11 @@ export function useAppController() {
     }
 
     void refreshStoresData();
+    const intervalId = setInterval(() => {
+      void refreshStoresData();
+    }, 15000);
+
+    return () => clearInterval(intervalId);
   }, [isOnline, refreshStoresData, session?.accessToken]);
 
   useEffect(() => {
@@ -3449,7 +3597,7 @@ export function useAppController() {
     );
   };
 
-  const roundPadValue = () => {
+  const roundPadValue = async () => {
     if (!posPadInput.trim()) {
       setStatusMessage("أدخل مبلغاً أولاً لإضافته إلى الكاش.");
       return;
@@ -3482,8 +3630,38 @@ export function useAppController() {
     setPosPadInput("");
     setPendingMultiplier(null);
     setPendingAmountValue(null);
+    if (isOnline && authToken) {
+      try {
+        const updatedStore = await addStoreCashCarry(
+          authToken,
+          effectiveStoreId,
+          cashValue,
+        );
+        setCashCarryByStore((previous) => ({
+          ...previous,
+          [effectiveStoreId]: Number(
+            (updatedStore.cashCarryAmount ?? 0).toFixed(2),
+          ),
+        }));
+        setStores((previous) =>
+          previous.map((store) =>
+            store.id === effectiveStoreId ? updatedStore : store,
+          ),
+        );
+        setStatusMessage(
+          `تمت إضافة ${formatMoney(cashValue)} إلى المدوّر ومزامنته مع الفرع.`,
+        );
+        return;
+      } catch (error: unknown) {
+        if (error instanceof ApiError && error.status === 401) {
+          logout("انتهت الجلسة. حُفظ المدوّر على هذا الجهاز فقط.");
+          return;
+        }
+      }
+    }
+
     setStatusMessage(
-      `تمت إضافة ${formatMoney(cashValue)} إلى كاش الصندوق (مدور).`,
+      `تمت إضافة ${formatMoney(cashValue)} محلياً؛ ستحتاج المزامنة عند توفر الاتصال.`,
     );
   };
 
@@ -3949,6 +4127,7 @@ export function useAppController() {
       sharesAmount,
       actualRemainingAmount,
       expectedRevenue: settlementExpectedRevenueAmount,
+      carryInAmount,
       note: settlementNoteInput.trim() || undefined,
       syncedAt: createdAt,
     };
@@ -4669,6 +4848,8 @@ export function useAppController() {
         quantity: row.receivedToday,
         unitCost: row.costPrice,
         totalCost: Number((row.receivedToday * row.costPrice).toFixed(2)),
+        purchaseKind: 'SUPPLY',
+        paymentAmount: 0,
         purchaseDate,
         note: `توريد يومي (${row.unitType === 'KG' ? 'كغ' : 'قطعة'})`,
         syncedAt: now,
@@ -4707,6 +4888,9 @@ export function useAppController() {
         quantity: record.quantity,
         unitCost: record.unitCost,
         totalCost: record.totalCost,
+        purchaseKind: record.purchaseKind,
+        sellPrice: record.sellPrice,
+        paymentAmount: record.paymentAmount,
         purchaseDate: record.purchaseDate,
         note: record.note ?? undefined,
         syncedAt: record.syncedAt,
@@ -4792,6 +4976,9 @@ export function useAppController() {
       quantity: 1,
       unitCost: capitalAmount,
       totalCost: capitalAmount,
+      purchaseKind: 'TAWASI',
+      sellPrice: sellAmount,
+      paymentAmount: 0,
       purchaseDate: toIsoDateOnly(nowDate),
       note: `تواصي | رأس المال: ${capitalAmount} | سعر المبيع: ${sellAmount}`,
       syncedAt: now,
@@ -4845,6 +5032,91 @@ export function useAppController() {
 
     enqueueJob(syncJob);
     setStatusMessage('لا يوجد إنترنت: تم تخزين التواصي محلياً.');
+  };
+
+  const registerSupplyPayment = async () => {
+    if (!session) {
+      setStatusMessage('سجّل الدخول أولاً.');
+      return;
+    }
+
+    if (!canManageInventory) {
+      setStatusMessage('وضع القراءة فقط: تسجيل دفعات التوريدات غير متاح.');
+      return;
+    }
+
+    const effectiveStoreId = isCashier ? assignedStoreId ?? '' : selectedStoreId;
+    if (!effectiveStoreId) {
+      setStatusMessage('اختر المحل أولاً.');
+      return;
+    }
+
+    const paymentAmount = parseNumberInput(supplyPaymentAmountInput);
+    if (paymentAmount <= 0) {
+      setStatusMessage('أدخل قيمة دفعة صحيحة.');
+      return;
+    }
+
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const payload: CreatePurchasePayload = {
+      clientPurchaseId: makeId('pay'),
+      storeId: effectiveStoreId,
+      productName: 'دفعة فاتورة التوريدات',
+      quantity: 0,
+      unitCost: 0,
+      totalCost: 0,
+      purchaseKind: 'PAYMENT',
+      paymentAmount,
+      purchaseDate: toIsoDateOnly(nowDate),
+      note: supplyPaymentNoteInput.trim() || undefined,
+      syncedAt: now,
+    };
+    const localRecord: LocalPurchase = {
+      ...payload,
+      synced: false,
+      createdLocallyAt: now,
+      updatedLocallyAt: now,
+    };
+
+    setPurchases((previous) => {
+      const next = [localRecord, ...previous];
+      void saveArray(STORAGE_KEYS.purchases, next);
+      return next;
+    });
+    setSupplyPaymentAmountInput('');
+    setSupplyPaymentNoteInput('');
+
+    const syncJob: SyncJob = {
+      id: makeId('job'),
+      referenceId: localRecord.clientPurchaseId,
+      retries: 0,
+      createdAt: now,
+      entity: 'PURCHASE',
+      action: 'CREATE',
+      payload,
+    };
+
+    if (isOnline && authToken) {
+      try {
+        await postPurchase(authToken, payload);
+        markPurchaseSynced(localRecord.clientPurchaseId);
+        await refreshPurchasesData();
+        setStatusMessage('تم تسجيل دفعة فاتورة التوريدات من دون احتسابها في التسوية.');
+        return;
+      } catch (error: unknown) {
+        enqueueJob(syncJob);
+        if (error instanceof ApiError && error.status === 401) {
+          logout('انتهت الجلسة وتم حفظ الدفعة محلياً.');
+          return;
+        }
+        setStatusMessage('تم حفظ الدفعة محلياً بانتظار المزامنة.');
+        return;
+      }
+    }
+
+    enqueueJob(syncJob);
+    setStatusMessage('لا يوجد إنترنت: تم تخزين الدفعة محلياً.');
   };
 
   const deletePurchaseRecord = async (clientPurchaseId: string) => {
@@ -5308,13 +5580,16 @@ export function useAppController() {
 
   const exportPurchasesData = async () => {
     const csv = toCsv(
-      ['التاريخ', 'المنتج', 'الكمية', 'تكلفة الوحدة', 'الإجمالي', 'الملاحظة', 'الحالة'],
+      ['التاريخ', 'النوع', 'المنتج', 'الكمية', 'تكلفة الوحدة', 'سعر المبيع', 'الإجمالي', 'قيمة الدفعة', 'الملاحظة', 'الحالة'],
       filteredPurchaseRows.map((item) => [
         item.purchaseDate,
+        item.purchaseKind,
         item.productName,
         item.quantity,
         item.unitCost,
+        item.sellPrice,
         item.totalCost,
+        item.paymentAmount,
         item.note ?? '',
         item.synced ? 'متزامن' : 'معلق',
       ]),
@@ -5324,7 +5599,10 @@ export function useAppController() {
   };
 
   const exportTodayPurchasesInvoicePdf = async () => {
-    if (todayPurchaseInvoiceRows.length === 0) {
+    if (
+      todayPurchaseInvoiceRows.length === 0 &&
+      todayPurchasePaymentRows.length === 0
+    ) {
       setStatusMessage("لا توجد توريدات مسجلة اليوم لإنشاء فاتورة.");
       return;
     }
@@ -5335,11 +5613,25 @@ export function useAppController() {
         (row, index) => `
           <tr>
             <td>${index + 1}</td>
+            <td>${row.purchaseKind === "TAWASI" ? "تواصي" : "توريد"}</td>
             <td>${escapeHtml(row.productName)}</td>
             <td>${escapeHtml(formatQuantity(row.quantity))}</td>
             <td>${escapeHtml(formatMoney(row.unitCost))}</td>
             <td>${escapeHtml(formatMoney(row.totalCost))}</td>
+            <td>${row.purchaseKind === "TAWASI" ? escapeHtml(formatMoney(row.sellPrice)) : "-"}</td>
             <td>${row.synced ? "متزامن" : `معلق (${row.pendingCount})`}</td>
+          </tr>
+        `,
+      )
+      .join("");
+    const paymentsHtml = todayPurchasePaymentRows
+      .map(
+        (row, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${escapeHtml(formatMoney(row.amount))}</td>
+            <td>${escapeHtml(row.note ?? "-")}</td>
+            <td>${row.synced ? "متزامن" : "معلق"}</td>
           </tr>
         `,
       )
@@ -5415,16 +5707,27 @@ export function useAppController() {
             <thead>
               <tr>
                 <th>#</th>
+                <th>النوع</th>
                 <th>المنتج</th>
                 <th>الكمية</th>
                 <th>تكلفة الوحدة</th>
                 <th>الإجمالي</th>
+                <th>سعر مبيع التواصي</th>
                 <th>الحالة</th>
               </tr>
             </thead>
             <tbody>${rowsHtml}</tbody>
           </table>
-          <div class="total">الإجمالي: ${escapeHtml(formatMoney(todayPurchaseInvoiceTotal))}</div>
+          <div class="total">إجمالي التوريدات: ${escapeHtml(formatMoney(todayPurchaseInvoiceTotal))}</div>
+          <h2>دفعات الفاتورة</h2>
+          <table>
+            <thead>
+              <tr><th>#</th><th>قيمة الدفعة</th><th>البيان</th><th>الحالة</th></tr>
+            </thead>
+            <tbody>${paymentsHtml || '<tr><td colspan="4">لا توجد دفعات مسجلة.</td></tr>'}</tbody>
+          </table>
+          <div class="total">إجمالي الدفعات: ${escapeHtml(formatMoney(todayPurchasePaymentsTotal))}</div>
+          <div class="total">الرصيد المتبقي: ${escapeHtml(formatMoney(todayPurchaseInvoiceBalance))}</div>
           ${notesHtml}
         </body>
       </html>
@@ -5561,6 +5864,7 @@ export function useAppController() {
     logout,
     mergedOrderRows,
     mergedSettlementRows,
+    settlementArchiveRows,
     mobileNavBackdropOpacity,
     mobileNavDrawerWidth,
     mobileNavItems,
@@ -5610,6 +5914,7 @@ export function useAppController() {
     refreshPurchasesData,
     refreshSettlementData,
     registerTawasiSupply,
+    registerSupplyPayment,
     removeEmployeeAbsence,
     removeEmployeeWithdrawal,
     resetExpenseForm,
@@ -5661,6 +5966,8 @@ export function useAppController() {
     setStatusMessage,
     setTawasiCapitalInput,
     setTawasiSellPriceInput,
+    setSupplyPaymentAmountInput,
+    setSupplyPaymentNoteInput,
     setUsernameInput,
     setWithdrawalAmountInput,
     setWithdrawalDateInput,
@@ -5687,6 +5994,8 @@ export function useAppController() {
     subtotal,
     tawasiCapitalInput,
     tawasiSellPriceInput,
+    supplyPaymentAmountInput,
+    supplyPaymentNoteInput,
     toExpenseCategoryLabel,
     toOrderStatusLabel,
     toPaymentMethodLabel,
@@ -5698,6 +6007,9 @@ export function useAppController() {
     todayNetSales,
     todayPurchaseInvoiceRows,
     todayPurchaseInvoiceTotal,
+    todayPurchasePaymentRows,
+    todayPurchasePaymentsTotal,
+    todayPurchaseInvoiceBalance,
     todayPurchasesTotal,
     todayRefundTotal,
     todaySalesTotal,

@@ -28,6 +28,9 @@ export class Store {
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({ type: 'real', default: 0 })
+  cashCarryAmount: number;
+
   @OneToMany(() => Order, (order) => order.store)
   orders: Order[];
 

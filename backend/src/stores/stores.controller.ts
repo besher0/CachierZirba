@@ -1,8 +1,17 @@
-import { Body, Controller, ForbiddenException, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../auth/enums/user-role.enum';
 import type { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { AdjustCashCarryDto } from './dto/adjust-cash-carry.dto';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { Store } from './entities/store.entity';
 import { StoresService } from './stores.service';
@@ -24,11 +33,25 @@ export class StoresController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentUser() authUser: AuthUser): Promise<Store> {
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() authUser: AuthUser,
+  ): Promise<Store> {
     if (authUser.role === UserRole.CASHIER && authUser.storeId !== id) {
-      throw new ForbiddenException('Cashier can only access the assigned store.');
+      throw new ForbiddenException(
+        'Cashier can only access the assigned store.',
+      );
     }
 
     return this.storesService.findById(id);
+  }
+
+  @Patch(':id/cash-carry/add')
+  addCashCarry(
+    @Param('id') id: string,
+    @Body() dto: AdjustCashCarryDto,
+    @CurrentUser() authUser: AuthUser,
+  ): Promise<Store> {
+    return this.storesService.addCashCarry(id, dto.amount, authUser);
   }
 }

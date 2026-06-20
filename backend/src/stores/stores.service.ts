@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
@@ -62,6 +67,27 @@ export class StoresService implements OnModuleInit {
     return store;
   }
 
+  async addCashCarry(
+    id: string,
+    amount: number,
+    authUser: AuthUser,
+  ): Promise<Store> {
+    if (authUser.role === UserRole.CASHIER && authUser.storeId !== id) {
+      throw new NotFoundException(`Store ${id} was not found.`);
+    }
+
+    await this.findById(id);
+    await this.storeRepository.increment({ id }, 'cashCarryAmount', amount);
+    return this.findById(id);
+  }
+
+  async setCashCarry(id: string, amount: number): Promise<void> {
+    await this.storeRepository.update(
+      { id },
+      { cashCarryAmount: Number(Math.max(amount, 0).toFixed(2)) },
+    );
+  }
+
   private async seedDefaults(): Promise<void> {
     const defaults: Array<Pick<Store, 'id' | 'name' | 'code' | 'isActive'>> = [
       {
@@ -114,5 +140,4 @@ export class StoresService implements OnModuleInit {
       }
     }
   }
-
 }

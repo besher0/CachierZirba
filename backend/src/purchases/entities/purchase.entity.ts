@@ -38,6 +38,15 @@ export class Purchase {
   @Column({ type: 'real' })
   totalCost: number;
 
+  @Column({ type: 'varchar', length: 20, default: 'SUPPLY' })
+  purchaseKind: 'SUPPLY' | 'TAWASI' | 'PAYMENT';
+
+  @Column({ type: 'real', nullable: true })
+  sellPrice: number | null;
+
+  @Column({ type: 'real', default: 0 })
+  paymentAmount: number;
+
   @Column({ type: 'varchar', length: 10 })
   purchaseDate: string;
 

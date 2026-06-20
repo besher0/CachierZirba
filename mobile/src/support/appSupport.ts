@@ -23,6 +23,7 @@ import {
   OrderItem,
   OrderStatus,
   PaymentMethod,
+  PurchaseKind,
   ProductTemplate,
   SyncJob,
 } from "../types";
@@ -54,6 +55,7 @@ export interface SettlementHistoryRow {
   cashBoxAmount: number;
   sharesAmount: number;
   expectedRevenue: number;
+  carryInAmount: number;
   actualRemainingAmount: number;
   expectedRemainingAmount: number;
   differenceAmount: number;
@@ -83,6 +85,9 @@ export interface PurchaseRow {
   quantity: number;
   unitCost: number;
   totalCost: number;
+  purchaseKind: PurchaseKind;
+  sellPrice: number;
+  paymentAmount: number;
   note?: string;
   synced: boolean;
   occurredAt: string;
@@ -742,6 +747,7 @@ export function mapApiSettlementToRow(item: ApiDailySettlement): SettlementHisto
     cashBoxAmount: item.cashBoxAmount,
     sharesAmount: item.sharesAmount,
     expectedRevenue,
+    carryInAmount: Number((item.carryInAmount ?? 0).toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: getSettlementDifferenceAmount(
@@ -773,6 +779,7 @@ export function mapLocalSettlementToRow(
     cashBoxAmount: item.cashBoxAmount,
     sharesAmount: item.sharesAmount,
     expectedRevenue,
+    carryInAmount: Number((item.carryInAmount ?? 0).toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: getSettlementDifferenceAmount(
@@ -826,6 +833,13 @@ export function mapApiPurchaseToRow(item: ApiPurchase): PurchaseRow {
     quantity: item.quantity,
     unitCost: item.unitCost,
     totalCost: item.totalCost,
+    purchaseKind:
+      item.purchaseKind ??
+      (normalizeProductKey(item.productName) === normalizeProductKey('تواصي')
+        ? 'TAWASI'
+        : 'SUPPLY'),
+    sellPrice: Number(item.sellPrice ?? 0),
+    paymentAmount: Number(item.paymentAmount ?? 0),
     note: item.note,
     synced: true,
     occurredAt: item.createdAt,
@@ -843,6 +857,13 @@ export function mapLocalPurchaseToRow(item: LocalPurchase): PurchaseRow {
     quantity: item.quantity,
     unitCost: item.unitCost,
     totalCost: item.totalCost,
+    purchaseKind:
+      item.purchaseKind ??
+      (normalizeProductKey(item.productName) === normalizeProductKey('تواصي')
+        ? 'TAWASI'
+        : 'SUPPLY'),
+    sellPrice: Number(item.sellPrice ?? 0),
+    paymentAmount: Number(item.paymentAmount ?? 0),
     note: item.note,
     synced: item.synced,
     occurredAt: item.createdLocallyAt,

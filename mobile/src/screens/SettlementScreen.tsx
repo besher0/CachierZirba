@@ -33,6 +33,8 @@ export function SettlementScreen() {
     length,
     map,
     mergedSettlementRows,
+    settlementArchiveRows,
+    selectedStore,
     name,
     netAmount,
     netQty,
@@ -393,7 +395,9 @@ export function SettlementScreen() {
 
                     <View style={styles.section}>
                       <View style={styles.sectionHeaderInline}>
-                        <Text style={styles.sectionTitle}>أرشيف التسويات</Text>
+                        <Text style={styles.sectionTitle}>
+                          أرشيف تسويات {selectedStore?.name ?? "الفرع"}
+                        </Text>
                         <Pressable
                           style={styles.smallRefreshButton}
                           onPress={() => void refreshSettlementData()}
@@ -402,14 +406,14 @@ export function SettlementScreen() {
                         </Pressable>
                       </View>
 
-                      {mergedSettlementRows.length === 0 ? (
+                      {settlementArchiveRows.length === 0 ? (
                         <Text style={styles.emptyText}>
                           لا يوجد تسويات مسجلة بعد.
                         </Text>
                       ) : (
-                        mergedSettlementRows.map((item) => (
+                        settlementArchiveRows.map((item) => (
                           <Pressable
-                            key={item.businessDate}
+                            key={item.clientClosureId}
                             style={styles.settlementRow}
                             onPress={() => openSettlementDetails(item)}
                           >
@@ -425,6 +429,38 @@ export function SettlementScreen() {
                                 }
                               >
                                 {item.synced ? "متزامن" : "معلق"}
+                              </Text>
+                            </View>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowMeta}>
+                                مبيعات: {formatMoney(item.salesAmount)}
+                              </Text>
+                              <Text style={styles.orderRowMeta}>
+                                مرتجعات: {formatMoney(item.refundAmount)}
+                              </Text>
+                            </View>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowMeta}>
+                                فواتير: {item.ordersCount}
+                              </Text>
+                              <Text style={styles.orderRowMeta}>
+                                مصاريف: {item.expensesCount} ({formatMoney(item.expensesAmount)})
+                              </Text>
+                            </View>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowMeta}>
+                                توريدات: {item.purchasesCount} ({formatMoney(item.purchasesAmount)})
+                              </Text>
+                              <Text style={styles.orderRowMeta}>
+                                دفعات: {formatMoney(item.paymentsAmount)}
+                              </Text>
+                            </View>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowMeta}>
+                                مدوّر داخل: {formatMoney(item.carryInAmount)}
+                              </Text>
+                              <Text style={styles.orderRowMeta}>
+                                وقت الإغلاق: {toShortDate(item.syncedAt)}
                               </Text>
                             </View>
                             <View style={styles.orderRowMain}>

@@ -1,6 +1,7 @@
 ﻿import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -32,6 +33,22 @@ export class UpdatePurchaseDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   totalCost?: number;
+
+  @IsOptional()
+  @IsIn(['SUPPLY', 'TAWASI', 'PAYMENT'])
+  purchaseKind?: 'SUPPLY' | 'TAWASI' | 'PAYMENT';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  sellPrice?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  paymentAmount?: number;
 
   @IsOptional()
   @IsString()

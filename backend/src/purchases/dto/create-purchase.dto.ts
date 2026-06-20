@@ -9,6 +9,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  IsIn,
 } from 'class-validator';
 
 export class CreatePurchaseDto {
@@ -39,6 +40,22 @@ export class CreatePurchaseDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   totalCost: number;
+
+  @IsOptional()
+  @IsIn(['SUPPLY', 'TAWASI', 'PAYMENT'])
+  purchaseKind?: 'SUPPLY' | 'TAWASI' | 'PAYMENT';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  sellPrice?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  paymentAmount?: number;
 
   @IsString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
