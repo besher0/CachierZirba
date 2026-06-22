@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -15,6 +16,7 @@ import { OrderItem } from '../interfaces/order-item.interface';
 
 @Entity('orders')
 @Unique('UQ_client_order_id', ['clientOrderId'])
+@Index('IDX_orders_store_ordered_at', ['storeId', 'orderedAt'])
 export class Order {
   @PrimaryGeneratedColumn('uuid')
   id: string;

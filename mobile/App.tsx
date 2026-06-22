@@ -1,5 +1,5 @@
 import { StatusBar } from "expo-status-bar";
-import { ScrollView, View } from "react-native";
+import { RefreshControl, ScrollView, View } from "react-native";
 
 import { TapSoundContext } from "./src/components/TapPressable";
 import { useAppController } from "./src/controllers/useAppController";
@@ -25,6 +25,8 @@ export default function App() {
     isPortraitMobile,
     swipePanResponder,
     isPosProductReordering,
+    isRefreshingActiveScreen,
+    refreshActiveScreenData,
   } = useAppController();
 
   if (isBootstrapping) {
@@ -69,6 +71,14 @@ export default function App() {
                 <ScrollView
                   contentContainerStyle={styles.content}
                   scrollEnabled={!isPosProductReordering}
+                  refreshControl={
+                    <RefreshControl
+                      refreshing={isRefreshingActiveScreen}
+                      onRefresh={() => void refreshActiveScreenData()}
+                      tintColor="#831843"
+                      colors={["#831843"]}
+                    />
+                  }
                 >
                   <ActiveScreenContent />
                 </ScrollView>

@@ -5,6 +5,7 @@ import { CreateEmployeeTables1783000000000 } from './migrations/1783000000000-Cr
 import { CreateInventoryAdjustments1784000000000 } from './migrations/1784000000000-CreateInventoryAdjustments';
 import { CorrectPurchaseDatesForDamascus1785000000000 } from './migrations/1785000000000-CorrectPurchaseDatesForDamascus';
 import { AddCarryAndSupplyInvoiceFields1786000000000 } from './migrations/1786000000000-AddCarryAndSupplyInvoiceFields';
+import { AddQueryIndexes1787000000000 } from './migrations/1787000000000-AddQueryIndexes';
 import { Expense } from '../expenses/entities/expense.entity';
 import { EmployeeAbsence } from '../employees/entities/employee-absence.entity';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
@@ -43,6 +44,12 @@ export function createTypeOrmOptions(
   const databaseUrl = process.env.DATABASE_URL?.trim();
   const migrations = overrides.migrations;
 
+  if (!databaseUrl && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'DATABASE_URL is required in production. Configure PostgreSQL before starting the API.',
+    );
+  }
+
   if (databaseUrl) {
     return {
       type: 'postgres',
@@ -56,6 +63,7 @@ export function createTypeOrmOptions(
         CreateInventoryAdjustments1784000000000,
         CorrectPurchaseDatesForDamascus1785000000000,
         AddCarryAndSupplyInvoiceFields1786000000000,
+        AddQueryIndexes1787000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

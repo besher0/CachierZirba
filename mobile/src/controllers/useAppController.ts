@@ -203,6 +203,7 @@ import {
 
 const SYNC_RETRY_DELAY_MS = 10000;
 const MAX_SYNC_JOB_RETRIES = 5;
+const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 60000;
 
 interface TodayPurchaseInvoiceRow {
   key: string;
@@ -332,11 +333,17 @@ export function useAppController() {
   const [activeScreen, setActiveScreen] = useState<AppScreenKey>("pos");
   const [isOnline, setIsOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isRefreshingActiveScreen, setIsRefreshingActiveScreen] =
+    useState(false);
   const isSyncingRef = useRef(false);
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const hasLoadedCashCarryRef = useRef(false);
   const settlementRefreshPromiseRef = useRef<{
+    key: string;
+    promise: Promise<void>;
+  } | null>(null);
+  const activeScreenRefreshPromiseRef = useRef<{
     key: string;
     promise: Promise<void>;
   } | null>(null);
@@ -1290,6 +1297,22 @@ export function useAppController() {
           synced: item.synced,
         })),
     [mergedPurchaseRows, todayDate],
+  );
+
+  const todayPurchaseProductRows = useMemo(
+    () =>
+      todayPurchaseInvoiceRows.filter(
+        (item) => item.purchaseKind === "SUPPLY",
+      ),
+    [todayPurchaseInvoiceRows],
+  );
+
+  const todayPurchaseTawasiRows = useMemo(
+    () =>
+      todayPurchaseInvoiceRows.filter(
+        (item) => item.purchaseKind === "TAWASI",
+      ),
+    [todayPurchaseInvoiceRows],
   );
 
   const todayPurchaseInvoiceTotal = useMemo(
@@ -2386,8 +2409,6 @@ export function useAppController() {
       refreshDailySettlementsData(),
       refreshEmployeesData(),
       refreshExpensesData(),
-      refreshOrdersData(),
-      refreshPurchasesData(),
       refreshProductsData(),
     ]).then(() => undefined);
     settlementRefreshPromiseRef.current = {
@@ -2409,8 +2430,6 @@ export function useAppController() {
     refreshEmployeesData,
     refreshExpensesData,
     refreshInventoryData,
-    refreshOrdersData,
-    refreshPurchasesData,
     refreshProductsData,
     selectedStoreId,
   ]);
@@ -2446,6 +2465,76 @@ export function useAppController() {
     handleApiFailure,
     isAdmin,
     isOnline,
+  ]);
+
+  const refreshActiveScreenData = useCallback(async () => {
+    if (!isOnline || !session?.accessToken) {
+      return;
+    }
+
+    const refreshKey = `${activeScreen}:${selectedStoreId}:${session.accessToken}`;
+    if (activeScreenRefreshPromiseRef.current?.key === refreshKey) {
+      await activeScreenRefreshPromiseRef.current.promise;
+      return;
+    }
+
+    const refreshPromise = (async () => {
+      setIsRefreshingActiveScreen(true);
+
+      try {
+        switch (activeScreen) {
+          case "pos":
+            await Promise.all([refreshStoresData(), refreshProductsData()]);
+            return;
+          case "purchases":
+            await Promise.all([refreshProductsData(), refreshInventoryData()]);
+            return;
+          case "expenses":
+            await refreshExpensesData();
+            return;
+          case "employees":
+            await refreshEmployeesData();
+            return;
+          case "orders":
+            await refreshOrdersData();
+            return;
+          case "settlement":
+            await refreshSettlementData();
+            return;
+          case "admin":
+            await Promise.all([refreshStoresData(), refreshDashboardData()]);
+            return;
+        }
+      } finally {
+        setIsRefreshingActiveScreen(false);
+      }
+    })();
+
+    activeScreenRefreshPromiseRef.current = {
+      key: refreshKey,
+      promise: refreshPromise,
+    };
+
+    try {
+      await refreshPromise;
+    } finally {
+      if (activeScreenRefreshPromiseRef.current?.promise === refreshPromise) {
+        activeScreenRefreshPromiseRef.current = null;
+      }
+    }
+  }, [
+    activeScreen,
+    isOnline,
+    refreshDashboardData,
+    refreshEmployeesData,
+    refreshExpensesData,
+    refreshInventoryData,
+    refreshOrdersData,
+    refreshProductsData,
+    refreshSettlementData,
+    refreshStoresData,
+    selectedStoreId,
+    session?.accessToken,
   ]);
 
   const applyAdminDateSelection = useCallback(
@@ -3372,93 +3461,26 @@ export function useAppController() {
       return;
     }
 
-    void refreshStoresData();
+    void refreshActiveScreenData();
+  }, [
+    activeScreen,
+    isOnline,
+    refreshActiveScreenData,
+    selectedStoreId,
+    session?.accessToken,
+  ]);
+
+  useEffect(() => {
+    if (!isOnline || !session?.accessToken) {
+      return;
+    }
+
     const intervalId = setInterval(() => {
-      void refreshStoresData();
-    }, 15000);
+      void refreshActiveScreenData();
+    }, ACTIVE_SCREEN_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
-  }, [isOnline, refreshStoresData, session?.accessToken]);
-
-  useEffect(() => {
-    if (!isOnline || !session?.accessToken) {
-      return;
-    }
-
-    void refreshProductsData();
-  }, [isOnline, refreshProductsData, session?.accessToken]);
-
-  useEffect(() => {
-    if (!isOnline || !session?.accessToken) {
-      return;
-    }
-
-    const intervalId = setInterval(() => {
-      void refreshProductsData();
-    }, 20000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [isOnline, refreshProductsData, session?.accessToken]);
-
-  useEffect(() => {
-    if (!isOnline || !session?.accessToken || !selectedStoreId) {
-      return;
-    }
-
-    void refreshSettlementData();
-  }, [
-    isOnline,
-    refreshSettlementData,
-    selectedStoreId,
-    session?.accessToken,
-  ]);
-
-  useEffect(() => {
-    if (
-      !isOnline ||
-      !session?.accessToken ||
-      !selectedStoreId ||
-      activeScreen !== "settlement"
-    ) {
-      return;
-    }
-
-    void refreshSettlementData();
-  }, [
-    activeScreen,
-    isOnline,
-    refreshSettlementData,
-    selectedStoreId,
-    session?.accessToken,
-  ]);
-
-  useEffect(() => {
-    if (
-      !isOnline ||
-      !session?.accessToken ||
-      !selectedStoreId ||
-      activeScreen !== "purchases"
-    ) {
-      return;
-    }
-
-    void refreshInventoryData();
-    const intervalId = setInterval(() => {
-      void refreshInventoryData();
-    }, 20000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [
-    activeScreen,
-    isOnline,
-    refreshInventoryData,
-    selectedStoreId,
-    session?.accessToken,
-  ]);
+  }, [isOnline, refreshActiveScreenData, session?.accessToken]);
 
   useEffect(() => {
     if (!session || !isOnline) {
@@ -3467,25 +3489,6 @@ export function useAppController() {
 
     void validateSession();
   }, [isOnline, session?.accessToken, validateSession]);
-
-  useEffect(() => {
-    if (
-      !isOnline ||
-      !session?.accessToken ||
-      !isAdmin ||
-      activeScreen !== "admin"
-    ) {
-      return;
-    }
-
-    void refreshDashboardData();
-  }, [
-    activeScreen,
-    isAdmin,
-    isOnline,
-    refreshDashboardData,
-    session?.accessToken,
-  ]);
 
   const syncQueueTrigger = useMemo(
     () =>
@@ -5608,42 +5611,48 @@ export function useAppController() {
     }
 
     const generatedAt = toShortDate(new Date().toISOString());
-    const rowsHtml = todayPurchaseInvoiceRows
-      .map(
-        (row, index) => `
+    const buildSupplyRowHtml = (
+      row: TodayPurchaseInvoiceRow,
+      index: number,
+    ) => `
           <tr>
             <td>${index + 1}</td>
             <td>${row.purchaseKind === "TAWASI" ? "تواصي" : "توريد"}</td>
             <td>${escapeHtml(row.productName)}</td>
             <td>${escapeHtml(formatQuantity(row.quantity))}</td>
-            <td>${escapeHtml(formatMoney(row.unitCost))}</td>
-            <td>${escapeHtml(formatMoney(row.totalCost))}</td>
+            <td>${row.purchaseKind === "SUPPLY" ? escapeHtml(formatMoney(row.unitCost)) : "-"}</td>
+            <td>${row.purchaseKind === "TAWASI" ? escapeHtml(formatMoney(row.totalCost)) : "-"}</td>
             <td>${row.purchaseKind === "TAWASI" ? escapeHtml(formatMoney(row.sellPrice)) : "-"}</td>
+            <td>${escapeHtml(formatMoney(row.totalCost))}</td>
+            <td>-</td>
+            <td>${escapeHtml(row.notes.join(" | ") || "-")}</td>
             <td>${row.synced ? "متزامن" : `معلق (${row.pendingCount})`}</td>
           </tr>
-        `,
+        `;
+    const productRowsHtml = todayPurchaseProductRows
+      .map((row, index) => buildSupplyRowHtml(row, index))
+      .join("");
+    const tawasiRowsHtml = todayPurchaseTawasiRows
+      .map((row, index) =>
+        buildSupplyRowHtml(row, todayPurchaseProductRows.length + index),
       )
       .join("");
-    const paymentsHtml = todayPurchasePaymentRows
+    const paymentRowsHtml = todayPurchasePaymentRows
       .map(
         (row, index) => `
           <tr>
-            <td>${index + 1}</td>
+            <td>${todayPurchaseInvoiceRows.length + index + 1}</td>
+            <td>دفعة</td>
+            <td>دفعة فاتورة التوريدات</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
             <td>${escapeHtml(formatMoney(row.amount))}</td>
             <td>${escapeHtml(row.note ?? "-")}</td>
             <td>${row.synced ? "متزامن" : "معلق"}</td>
           </tr>
-        `,
-      )
-      .join("");
-    const notesHtml = todayPurchaseInvoiceRows
-      .filter((row) => row.notes.length > 0)
-      .map(
-        (row) => `
-          <div class="note">
-            <strong>${escapeHtml(row.productName)}:</strong>
-            ${escapeHtml(row.notes.join(" | "))}
-          </div>
         `,
       )
       .join("");
@@ -5657,8 +5666,9 @@ export function useAppController() {
               direction: rtl;
               font-family: Arial, Tahoma, sans-serif;
               color: #3f1d32;
-              margin: 28px;
+              margin: 18px;
             }
+            @page { size: A4 landscape; margin: 12mm; }
             h1 {
               margin: 0 0 10px;
               font-size: 24px;
@@ -5673,28 +5683,42 @@ export function useAppController() {
               width: 100%;
               border-collapse: collapse;
               margin-top: 18px;
-              font-size: 12px;
+              font-size: 10px;
             }
             th,
             td {
               border: 1px solid #efcadb;
-              padding: 8px;
+              padding: 6px;
               text-align: right;
+              vertical-align: top;
             }
             th {
               background: #f8e8ee;
               color: #831843;
             }
-            .total {
+            .group-row td {
+              background: #fdf4f7;
+              color: #831843;
+              font-size: 12px;
+              font-weight: 700;
+              padding: 8px;
+            }
+            .summary {
+              display: flex;
+              gap: 12px;
               margin-top: 16px;
-              font-size: 16px;
+            }
+            .total {
+              flex: 1;
+              border: 1px solid #efcadb;
+              background: #fdf4f7;
+              padding: 10px;
+              font-size: 13px;
               font-weight: 700;
               color: #9d174d;
             }
-            .note {
-              margin-top: 8px;
-              font-size: 12px;
-              color: #6f425f;
+            tr {
+              page-break-inside: avoid;
             }
           </style>
         </head>
@@ -5711,29 +5735,47 @@ export function useAppController() {
                 <th>المنتج</th>
                 <th>الكمية</th>
                 <th>تكلفة الوحدة</th>
-                <th>الإجمالي</th>
+                <th>رأس المال</th>
                 <th>سعر مبيع التواصي</th>
+                <th>إجمالي التوريد</th>
+                <th>الدفعة</th>
+                <th>الملاحظة</th>
                 <th>الحالة</th>
               </tr>
             </thead>
-            <tbody>${rowsHtml}</tbody>
+            <tbody>
+              <tr class="group-row"><td colspan="11">المنتجات</td></tr>
+              ${productRowsHtml || '<tr><td colspan="11">لا توجد منتجات موردة.</td></tr>'}
+              ${tawasiRowsHtml ? `<tr class="group-row"><td colspan="11">التواصي</td></tr>${tawasiRowsHtml}` : ""}
+              ${paymentRowsHtml ? `<tr class="group-row"><td colspan="11">الدفعات</td></tr>${paymentRowsHtml}` : ""}
+            </tbody>
           </table>
-          <div class="total">إجمالي التوريدات: ${escapeHtml(formatMoney(todayPurchaseInvoiceTotal))}</div>
-          <h2>دفعات الفاتورة</h2>
-          <table>
-            <thead>
-              <tr><th>#</th><th>قيمة الدفعة</th><th>البيان</th><th>الحالة</th></tr>
-            </thead>
-            <tbody>${paymentsHtml || '<tr><td colspan="4">لا توجد دفعات مسجلة.</td></tr>'}</tbody>
-          </table>
-          <div class="total">إجمالي الدفعات: ${escapeHtml(formatMoney(todayPurchasePaymentsTotal))}</div>
-          <div class="total">الرصيد المتبقي: ${escapeHtml(formatMoney(todayPurchaseInvoiceBalance))}</div>
-          ${notesHtml}
+          <div class="summary">
+            <div class="total">إجمالي التوريدات: ${escapeHtml(formatMoney(todayPurchaseInvoiceTotal))}</div>
+            <div class="total">إجمالي الدفعات: ${escapeHtml(formatMoney(todayPurchasePaymentsTotal))}</div>
+            <div class="total">الرصيد المتبقي: ${escapeHtml(formatMoney(todayPurchaseInvoiceBalance))}</div>
+          </div>
         </body>
       </html>
     `;
 
     try {
+      if (Platform.OS === "web") {
+        const printWindow = window.open("", "_blank", "width=1280,height=900");
+        if (!printWindow) {
+          setStatusMessage("تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.");
+          return;
+        }
+
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        window.setTimeout(() => printWindow.print(), 300);
+        setStatusMessage("تم فتح فاتورة الجدول للطباعة أو الحفظ PDF.");
+        return;
+      }
+
       const pdf = await Print.printToFileAsync({ html });
       if (!pdf?.uri) {
         setStatusMessage("تم فتح نافذة الطباعة لفاتورة اليوم.");
@@ -6007,6 +6049,8 @@ export function useAppController() {
     todayNetSales,
     todayPurchaseInvoiceRows,
     todayPurchaseInvoiceTotal,
+    todayPurchaseProductRows,
+    todayPurchaseTawasiRows,
     todayPurchasePaymentRows,
     todayPurchasePaymentsTotal,
     todayPurchaseInvoiceBalance,
@@ -6038,5 +6082,7 @@ export function useAppController() {
     isPortraitMobile,
     swipePanResponder,
     isPosProductReordering,
+    isRefreshingActiveScreen,
+    refreshActiveScreenData,
   };
 }

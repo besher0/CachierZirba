@@ -2,6 +2,7 @@
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -12,6 +13,7 @@ import { Store } from '../../stores/entities/store.entity';
 
 @Entity('purchases')
 @Unique('UQ_client_purchase_id', ['clientPurchaseId'])
+@Index('IDX_purchases_store_date_created', ['storeId', 'purchaseDate', 'createdAt'])
 export class Purchase {
   @PrimaryGeneratedColumn('uuid')
   id: string;

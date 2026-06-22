@@ -156,6 +156,8 @@ export function AppOverlays() {
     todayDate,
     todayPurchaseInvoiceRows,
     todayPurchaseInvoiceTotal,
+    todayPurchaseProductRows,
+    todayPurchaseTawasiRows,
     todayPurchasePaymentRows,
     todayPurchasePaymentsTotal,
     todayPurchaseInvoiceBalance,
@@ -178,6 +180,39 @@ export function AppOverlays() {
     withdrawals,
     withdrawalsAmount,
   } = useAppScreenContext() as any;
+
+  const renderPurchaseInvoiceRow = (row: any) => (
+    <View key={row.key} style={styles.orderRow}>
+      <View style={styles.orderRowMain}>
+        <Text style={styles.orderRowId}>
+          {row.purchaseKind === "TAWASI" ? "تواصي" : row.productName}
+        </Text>
+        <Text style={styles.orderRowItems}>
+          × {formatQuantity(row.quantity)}
+        </Text>
+      </View>
+      {row.purchaseKind === "TAWASI" ? (
+        <Text style={styles.orderRowMeta}>
+          رأس المال: {formatMoney(row.totalCost)} | سعر المبيع:{" "}
+          {formatMoney(row.sellPrice)}
+        </Text>
+      ) : null}
+      <View style={styles.orderRowMain}>
+        <Text style={styles.orderRowMeta}>
+          تكلفة الوحدة: {formatMoney(row.unitCost)}
+        </Text>
+        <Text style={styles.orderRowTotal}>{formatMoney(row.totalCost)}</Text>
+      </View>
+      <Text style={row.synced ? styles.syncedText : styles.pendingText}>
+        {row.synced ? "متزامن" : `معلق (${row.pendingCount})`}
+      </Text>
+      {row.notes.length > 0 ? (
+        <Text style={styles.orderRowMeta}>
+          ملاحظة: {row.notes.join(" | ")}
+        </Text>
+      ) : null}
+    </View>
+  );
 
   return (
     <>
@@ -676,55 +711,22 @@ export function AppOverlays() {
 
                       <Text style={styles.storeTableTitle}>المنتجات</Text>
                       <ScrollView style={styles.invoiceItemsList}>
-                        {todayPurchaseInvoiceRows.length === 0 ? (
+                        {todayPurchaseProductRows.length === 0 ? (
                           <Text style={styles.emptyText}>
-                            لا توجد توريدات مسجلة اليوم.
+                            لا توجد منتجات موردة اليوم.
                           </Text>
                         ) : (
-                          todayPurchaseInvoiceRows.map((row) => (
-                            <View key={row.key} style={styles.orderRow}>
-                              <View style={styles.orderRowMain}>
-                                <Text style={styles.orderRowId}>
-                                  {row.purchaseKind === "TAWASI"
-                                    ? "تواصي"
-                                    : row.productName}
-                                </Text>
-                                <Text style={styles.orderRowItems}>
-                                  × {formatQuantity(row.quantity)}
-                                </Text>
-                              </View>
-                              {row.purchaseKind === "TAWASI" ? (
-                                <Text style={styles.orderRowMeta}>
-                                  رأس المال: {formatMoney(row.totalCost)} | سعر المبيع: {formatMoney(row.sellPrice)}
-                                </Text>
-                              ) : null}
-                              <View style={styles.orderRowMain}>
-                                <Text style={styles.orderRowMeta}>
-                                  تكلفة الوحدة: {formatMoney(row.unitCost)}
-                                </Text>
-                                <Text style={styles.orderRowTotal}>
-                                  {formatMoney(row.totalCost)}
-                                </Text>
-                              </View>
-                              <Text
-                                style={
-                                  row.synced
-                                    ? styles.syncedText
-                                    : styles.pendingText
-                                }
-                              >
-                                {row.synced
-                                  ? "متزامن"
-                                  : `معلق (${row.pendingCount})`}
-                              </Text>
-                              {row.notes.length > 0 ? (
-                                <Text style={styles.orderRowMeta}>
-                                  ملاحظة: {row.notes.join(" | ")}
-                                </Text>
-                              ) : null}
-                            </View>
-                          ))
+                          todayPurchaseProductRows.map(renderPurchaseInvoiceRow)
                         )}
+
+                        {todayPurchaseTawasiRows.length > 0 ? (
+                          <>
+                            <Text style={styles.storeTableTitle}>التواصي</Text>
+                            {todayPurchaseTawasiRows.map(
+                              renderPurchaseInvoiceRow,
+                            )}
+                          </>
+                        ) : null}
                       </ScrollView>
 
                       <Text style={styles.storeTableTitle}>الدفعات</Text>
