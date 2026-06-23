@@ -40,6 +40,7 @@ export function PurchasesScreen() {
     input,
     inputFull,
     inputRow,
+    isAdmin,
     isProductFormOpen,
     item,
     key,
@@ -477,16 +478,18 @@ export function PurchasesScreen() {
                                     تعديل المنتج
                                   </Text>
                                 </Pressable>
-                                <Pressable
-                                  style={styles.dangerButton}
-                                  onPress={() =>
-                                    deleteProductDefinition(row.productId)
-                                  }
-                                >
-                                  <Text style={styles.dangerButtonText}>
-                                    حذف المنتج
-                                  </Text>
-                                </Pressable>
+                                {isAdmin && (
+                                  <Pressable
+                                    style={styles.dangerButton}
+                                    onPress={() =>
+                                      deleteProductDefinition(row.productId)
+                                    }
+                                  >
+                                    <Text style={styles.dangerButtonText}>
+                                      حذف المنتج
+                                    </Text>
+                                  </Pressable>
+                                )}
                               </View>
                             )}
                           </View>

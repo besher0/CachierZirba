@@ -4732,8 +4732,8 @@ export function useAppController() {
   };
 
   const deleteProductDefinition = async (productId: string) => {
-    if (!canManageInventory) {
-      setStatusMessage('وضع القراءة فقط: حذف المنتجات متاح للكاشير أو الأدمن فقط.');
+    if (!isAdmin) {
+      setStatusMessage('حذف المنتجات متاح للأدمن فقط.');
       return;
     }
 

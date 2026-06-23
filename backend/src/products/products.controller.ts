@@ -29,6 +29,7 @@ export class ProductsController {
     return this.productsService.update(clientProductId, dto);
   }
 
+  @Roles(UserRole.ADMIN)
   @Delete(':clientProductId')
   remove(@Param('clientProductId') clientProductId: string): Promise<{ deleted: true }> {
     return this.productsService.remove(clientProductId);
