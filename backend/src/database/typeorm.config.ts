@@ -11,11 +11,13 @@ import { EmployeeAbsence } from '../employees/entities/employee-absence.entity';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
 import { Employee } from '../employees/entities/employee.entity';
 import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
+import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
 import { Order } from '../orders/entities/order.entity';
 import { Product } from '../products/entities/product.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
 import { Store } from '../stores/entities/store.entity';
 import { User } from '../users/entities/user.entity';
+import { CreateInventoryDestructions1788000000000 } from './migrations/1788000000000-CreateInventoryDestructions';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -34,6 +36,7 @@ const entities = [
   EmployeeAbsence,
   EmployeeWithdrawal,
   InventoryAdjustment,
+  InventoryDestruction,
 ];
 
 export function createTypeOrmOptions(
@@ -64,6 +67,7 @@ export function createTypeOrmOptions(
         CorrectPurchaseDatesForDamascus1785000000000,
         AddCarryAndSupplyInvoiceFields1786000000000,
         AddQueryIndexes1787000000000,
+        CreateInventoryDestructions1788000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

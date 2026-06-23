@@ -52,6 +52,7 @@ import {
   fetchEmployeeWithdrawals,
   fetchExpenses,
   fetchInventoryAdjustments,
+  fetchInventoryDestructions,
   fetchMe,
   fetchOrders,
   fetchProducts,
@@ -67,6 +68,7 @@ import {
   postEmployeeWithdrawal,
   postExpense,
   postInventoryAdjustment,
+  postInventoryDestruction,
   postOrder,
   postProduct,
   postPurchase,
@@ -76,6 +78,7 @@ import {
   ApiDailySettlement,
   ApiExpense,
   ApiInventoryAdjustment,
+  ApiInventoryDestruction,
   ApiOrder,
   ApiProduct,
   ApiPurchase,
@@ -88,6 +91,7 @@ import {
   CreateEmployeeWithdrawalPayload,
   CreateExpensePayload,
   CreateInventoryAdjustmentPayload,
+  CreateInventoryDestructionPayload,
   CreateOrderPayload,
   CreateProductPayload,
   CreatePurchasePayload,
@@ -101,6 +105,7 @@ import {
   LocalDailySettlement,
   LocalExpense,
   LocalInventoryAdjustment,
+  LocalInventoryDestruction,
   LocalOrder,
   LocalProduct,
   LocalPurchase,
@@ -361,6 +366,9 @@ export function useAppController() {
   const [inventoryAdjustments, setInventoryAdjustments] = useState<
     LocalInventoryAdjustment[]
   >([]);
+  const [inventoryDestructions, setInventoryDestructions] = useState<
+    LocalInventoryDestruction[]
+  >([]);
   const [queue, setQueue] = useState<SyncJob[]>([]);
 
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -400,6 +408,9 @@ export function useAppController() {
   const [remotePurchases, setRemotePurchases] = useState<ApiPurchase[]>([]);
   const [remoteInventoryAdjustments, setRemoteInventoryAdjustments] = useState<
     ApiInventoryAdjustment[]
+  >([]);
+  const [remoteInventoryDestructions, setRemoteInventoryDestructions] = useState<
+    ApiInventoryDestruction[]
   >([]);
   const [selectedOrderInvoice, setSelectedOrderInvoice] =
     useState<OrderHistoryRow | null>(null);
@@ -483,6 +494,11 @@ export function useAppController() {
   const [settlementActualInputs, setSettlementActualInputs] = useState<
     Record<string, string>
   >({});
+  const [inventoryDestructionInputs, setInventoryDestructionInputs] = useState<
+    Record<string, string>
+  >({});
+  const [inventoryDestructionNoteInputs, setInventoryDestructionNoteInputs] =
+    useState<Record<string, string>>({});
   const [adminFromDateInput, setAdminFromDateInput] = useState("");
   const [adminToDateInput, setAdminToDateInput] = useState("");
   const [adminDatePickerTarget, setAdminDatePickerTarget] = useState<
@@ -1095,6 +1111,30 @@ export function useAppController() {
     return latest;
   }, [mergedInventoryAdjustments]);
 
+  const mergedInventoryDestructions = useMemo(() => {
+    const rows = new Map<
+      string,
+      ApiInventoryDestruction | LocalInventoryDestruction
+    >();
+
+    remoteInventoryDestructions
+      .filter((item) => item.storeId === selectedStoreId)
+      .forEach((item) => rows.set(item.clientDestructionId, item));
+    inventoryDestructions
+      .filter(
+        (item) => item.storeId === selectedStoreId && item.synced !== true,
+      )
+      .forEach((item) => rows.set(item.clientDestructionId, item));
+
+    return Array.from(rows.values()).sort((a, b) =>
+      b.destroyedAt.localeCompare(a.destroyedAt),
+    );
+  }, [
+    inventoryDestructions,
+    remoteInventoryDestructions,
+    selectedStoreId,
+  ]);
+
   const isInCurrentSettlementCycle = useCallback(
     (recordDate: string, occurredAt: string) => {
       if (!settlementCycleStartIso) {
@@ -1477,6 +1517,7 @@ export function useAppController() {
     const purchasedByProduct = new Map<string, number>();
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
+    const destroyedByProduct = new Map<string, number>();
     const todayReceivedByProduct = new Map<string, number>();
 
     mergedPurchaseRows.forEach((entry) => {
@@ -1536,16 +1577,43 @@ export function useAppController() {
       });
     });
 
+    mergedInventoryDestructions.forEach((destruction) => {
+      const product = products.find(
+        (item) => item.clientProductId === destruction.productClientId,
+      );
+      const adjustment = product
+        ? latestInventoryAdjustmentByProduct.get(product.clientProductId)
+        : undefined;
+      const destructionTime = normalizeIsoTimestamp(destruction.destroyedAt);
+      const adjustmentTime = normalizeIsoTimestamp(adjustment?.adjustedAt);
+      if (
+        adjustmentTime &&
+        destructionTime &&
+        destructionTime <= adjustmentTime
+      ) {
+        return;
+      }
+
+      const key = product
+        ? normalizeProductKey(product.name)
+        : destruction.productClientId;
+      destroyedByProduct.set(
+        key,
+        (destroyedByProduct.get(key) ?? 0) + destruction.quantity,
+      );
+    });
+
     return products.map((product) => {
       const key = normalizeProductKey(product.name);
       const purchased = purchasedByProduct.get(key) ?? 0;
       const sold = soldByProduct.get(key) ?? 0;
       const refunded = refundedByProduct.get(key) ?? 0;
+      const destroyed = destroyedByProduct.get(key) ?? 0;
       const inventoryBaseline =
         latestInventoryAdjustmentByProduct.get(product.clientProductId)
           ?.actualQuantity ?? 0;
       const remainingQty = Number(
-        (inventoryBaseline + purchased - sold + refunded).toFixed(3),
+        (inventoryBaseline + purchased - sold + refunded - destroyed).toFixed(3),
       );
       const loggedToday = Number(
         (todayReceivedByProduct.get(key) ?? 0).toFixed(3),
@@ -1568,11 +1636,37 @@ export function useAppController() {
   }, [
     allMergedOrderRows,
     latestInventoryAdjustmentByProduct,
+    mergedInventoryDestructions,
     mergedPurchaseRows,
     products,
     todayDate,
     todaySupplyInputs,
   ]);
+
+  const settlementInventoryDestructionRows = useMemo(
+    () =>
+      mergedInventoryDestructions
+        .filter((item) =>
+          isInCurrentSettlementCycle(
+            toIsoDateOnlyInTimeZone(new Date(item.destroyedAt)),
+            item.destroyedAt,
+          ),
+        )
+        .map((item) => {
+          const product = products.find(
+            (entry) => entry.clientProductId === item.productClientId,
+          );
+          return {
+            id: item.clientDestructionId,
+            productName: product?.name ?? item.productClientId,
+            unitType: product?.unitType ?? 'PIECE',
+            quantity: item.quantity,
+            note: item.note,
+            destroyedAt: item.destroyedAt,
+          };
+        }),
+    [isInCurrentSettlementCycle, mergedInventoryDestructions, products],
+  );
 
   const todaySalesTotal = useMemo(
     () =>
@@ -1952,6 +2046,7 @@ export function useAppController() {
     setRemoteExpenses([]);
     setRemotePurchases([]);
     setRemoteInventoryAdjustments([]);
+    setRemoteInventoryDestructions([]);
     setActiveScreen("pos");
     setStatusMessage(message);
   }, []);
@@ -2059,6 +2154,19 @@ export function useAppController() {
     [],
   );
 
+  const markInventoryDestructionSynced = useCallback(
+    (clientDestructionId: string) => {
+      setInventoryDestructions((previous) => {
+        const next = previous.filter(
+          (item) => item.clientDestructionId !== clientDestructionId,
+        );
+        void saveArray(STORAGE_KEYS.inventoryDestructions, next);
+        return next;
+      });
+    },
+    [],
+  );
+
   const upsertRemoteInventoryAdjustment = useCallback(
     (adjustment: ApiInventoryAdjustment) => {
       setRemoteInventoryAdjustments((previous) => {
@@ -2068,6 +2176,21 @@ export function useAppController() {
         rows.set(adjustment.clientAdjustmentId, adjustment);
         return Array.from(rows.values()).sort((a, b) =>
           b.adjustedAt.localeCompare(a.adjustedAt),
+        );
+      });
+    },
+    [],
+  );
+
+  const upsertRemoteInventoryDestruction = useCallback(
+    (destruction: ApiInventoryDestruction) => {
+      setRemoteInventoryDestructions((previous) => {
+        const rows = new Map(
+          previous.map((item) => [item.clientDestructionId, item]),
+        );
+        rows.set(destruction.clientDestructionId, destruction);
+        return Array.from(rows.values()).sort((a, b) =>
+          b.destroyedAt.localeCompare(a.destroyedAt),
         );
       });
     },
@@ -2225,14 +2348,17 @@ export function useAppController() {
     }
 
     try {
-      const [purchaseData, orderData, adjustmentData] = await Promise.all([
+      const [purchaseData, orderData, adjustmentData, destructionData] =
+        await Promise.all([
         fetchPurchases(authToken, { storeId: selectedStoreId }),
         fetchOrders(authToken, { storeId: selectedStoreId }),
         fetchInventoryAdjustments(authToken, { storeId: selectedStoreId }),
+        fetchInventoryDestructions(authToken, { storeId: selectedStoreId }),
       ]);
       replaceRemotePurchases(purchaseData);
       setRemoteOrders(orderData);
       setRemoteInventoryAdjustments(adjustmentData);
+      setRemoteInventoryDestructions(destructionData);
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث بيانات المخزون من السيرفر.");
     }
@@ -2667,8 +2793,10 @@ export function useAppController() {
     isSyncingRef.current = true;
     setIsSyncing(true);
     setStatusMessage("يتم حالياً مزامنة العمليات المحلية...");
-    const inventoryAdjustmentsOnly = jobsToSync.every(
-      (job) => (job.entity ?? job.type) === "INVENTORY_ADJUSTMENT",
+    const inventoryChangesOnly = jobsToSync.every((job) =>
+      ["INVENTORY_ADJUSTMENT", "INVENTORY_DESTRUCTION"].includes(
+        job.entity ?? job.type ?? "",
+      ),
     );
     const completedJobIds = new Set<string>();
     const retryJobs = new Map<string, SyncJob>();
@@ -2806,6 +2934,24 @@ export function useAppController() {
           markInventoryAdjustmentSynced(
             adjustmentPayload.clientAdjustmentId,
           );
+        } else if (
+          entity === "INVENTORY_DESTRUCTION" &&
+          action === "CREATE"
+        ) {
+          if (!isAdmin) {
+            retryJobs.set(job.id, job);
+            continue;
+          }
+          const destructionPayload =
+            job.payload as CreateInventoryDestructionPayload;
+          const destruction = await postInventoryDestruction(
+            authToken,
+            destructionPayload,
+          );
+          upsertRemoteInventoryDestruction(destruction);
+          markInventoryDestructionSynced(
+            destructionPayload.clientDestructionId,
+          );
         } else if (entity === "EMPLOYEE" && action === "CREATE") {
           await postEmployee(authToken, job.payload as CreateEmployeePayload);
           markEmployeeSynced(job.referenceId);
@@ -2893,7 +3039,7 @@ export function useAppController() {
       setStatusMessage(
         `تمت مزامنة ${completedJobIds.size} عملية مؤجلة بنجاح.`,
       );
-      if (inventoryAdjustmentsOnly) {
+      if (inventoryChangesOnly) {
         return;
       }
       await Promise.all([
@@ -2921,7 +3067,9 @@ export function useAppController() {
     markEmployeeSynced,
     markEmployeeWithdrawalSynced,
     markInventoryAdjustmentSynced,
+    markInventoryDestructionSynced,
     upsertRemoteInventoryAdjustment,
+    upsertRemoteInventoryDestruction,
     markOrderSynced,
     markProductSynced,
     markPurchaseSynced,
@@ -3013,6 +3161,7 @@ export function useAppController() {
           cachedExpenseCategories,
           cachedPurchases,
           cachedInventoryAdjustments,
+          cachedInventoryDestructions,
           cachedProducts,
           cachedEmployees,
           cachedEmployeeAbsences,
@@ -3030,6 +3179,9 @@ export function useAppController() {
           loadArray<LocalPurchase>(STORAGE_KEYS.purchases),
           loadArray<LocalInventoryAdjustment>(
             STORAGE_KEYS.inventoryAdjustments,
+          ),
+          loadArray<LocalInventoryDestruction>(
+            STORAGE_KEYS.inventoryDestructions,
           ),
           loadArray<ProductTemplate | LocalProduct>(STORAGE_KEYS.products),
           loadArray<Employee>(STORAGE_KEYS.employees),
@@ -3098,6 +3250,7 @@ export function useAppController() {
         setExpenseCategoryOptions(initialExpenseCategories);
         setPurchases(correctedPurchases);
         setInventoryAdjustments(cachedInventoryAdjustments);
+        setInventoryDestructions(cachedInventoryDestructions);
         setProducts(initialProducts);
         setEmployees(cachedEmployees);
         setEmployeeAbsences(cachedEmployeeAbsences);
@@ -3120,6 +3273,7 @@ export function useAppController() {
         setExpenseCategoryOptions(DEFAULT_EXPENSE_CATEGORY_OPTIONS);
         setPurchases([]);
         setInventoryAdjustments([]);
+        setInventoryDestructions([]);
         setProducts([]);
         setEmployees([]);
         setEmployeeAbsences([]);
@@ -3157,6 +3311,10 @@ export function useAppController() {
   useEffect(() => {
     void saveArray(STORAGE_KEYS.inventoryAdjustments, inventoryAdjustments);
   }, [inventoryAdjustments]);
+
+  useEffect(() => {
+    void saveArray(STORAGE_KEYS.inventoryDestructions, inventoryDestructions);
+  }, [inventoryDestructions]);
 
   useEffect(() => {
     void saveArray(STORAGE_KEYS.products, products);
@@ -3278,6 +3436,28 @@ export function useAppController() {
             },
           });
         });
+
+      inventoryDestructions
+        .filter((item) => item.synced !== true)
+        .forEach((item) => {
+          enqueueJob({
+            id: makeId("job"),
+            referenceId: item.clientDestructionId,
+            retries: 0,
+            createdAt: item.destroyedAt,
+            entity: "INVENTORY_DESTRUCTION",
+            action: "CREATE",
+            payload: {
+              clientDestructionId: item.clientDestructionId,
+              storeId: item.storeId,
+              productClientId: item.productClientId,
+              quantity: item.quantity,
+              note: item.note,
+              destroyedAt: item.destroyedAt,
+              syncedAt: item.syncedAt,
+            },
+          });
+        });
     }
   }, [
     assignedStoreId,
@@ -3286,6 +3466,7 @@ export function useAppController() {
     employees,
     enqueueJob,
     inventoryAdjustments,
+    inventoryDestructions,
     isAdmin,
     isBootstrapping,
     isCashier,
@@ -3361,6 +3542,8 @@ export function useAppController() {
   useEffect(() => {
     setTodaySupplyInputs({});
     setSettlementActualInputs({});
+    setInventoryDestructionInputs({});
+    setInventoryDestructionNoteInputs({});
     setCashBoxInput("");
     setSharesInput("");
     setActualRemainingInput("");
@@ -4159,6 +4342,8 @@ export function useAppController() {
       [effectiveStoreId]: carryForwardAmount,
     }));
     setSettlementActualInputs({});
+    setInventoryDestructionInputs({});
+    setInventoryDestructionNoteInputs({});
 
     const syncJob: SyncJob = {
       id: makeId('job'),
@@ -5440,6 +5625,149 @@ export function useAppController() {
     }));
   };
 
+  const updateInventoryDestructionInput = (
+    productId: string,
+    value: string,
+  ) => {
+    const normalized = normalizeNumericInputText(value);
+    if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
+      return;
+    }
+
+    setInventoryDestructionInputs((previous) => ({
+      ...previous,
+      [productId]: normalized,
+    }));
+  };
+
+  const updateInventoryDestructionNoteInput = (
+    productId: string,
+    value: string,
+  ) => {
+    setInventoryDestructionNoteInputs((previous) => ({
+      ...previous,
+      [productId]: value,
+    }));
+  };
+
+  const recordInventoryDestruction = async (productId: string) => {
+    if (!isAdmin || !session) {
+      return;
+    }
+
+    const rawValue = inventoryDestructionInputs[productId]?.trim() ?? "";
+    if (!rawValue || !/^\d+(?:\.\d+)?$/.test(rawValue)) {
+      setStatusMessage("أدخل كمية إتلاف صحيحة أولاً.");
+      return;
+    }
+
+    const effectiveStoreId = selectedStoreId;
+    const product = products.find(
+      (item) => item.clientProductId === productId || item.id === productId,
+    );
+    const stockRow = productSupplyRows.find(
+      (item) => item.productId === productId,
+    );
+    if (!effectiveStoreId || !product || !stockRow) {
+      setStatusMessage("تعذر تحديد المنتج أو الفرع لتسجيل الإتلاف.");
+      return;
+    }
+
+    const quantity = Number(parseNumberInput(rawValue).toFixed(3));
+    if (quantity <= 0) {
+      setStatusMessage("كمية الإتلاف يجب أن تكون أكبر من صفر.");
+      return;
+    }
+    if (quantity > stockRow.remainingQty) {
+      setStatusMessage(
+        `كمية الإتلاف أكبر من الرصيد المتاح (${formatQuantity(Math.max(stockRow.remainingQty, 0))}).`,
+      );
+      return;
+    }
+
+    const note = inventoryDestructionNoteInputs[productId]?.trim();
+    const now = new Date().toISOString();
+    const clientDestructionId = makeId("destroy");
+    const payload: CreateInventoryDestructionPayload = {
+      clientDestructionId,
+      storeId: effectiveStoreId,
+      productClientId: product.clientProductId,
+      quantity,
+      note: note || undefined,
+      destroyedAt: now,
+      syncedAt: now,
+    };
+    const localDestruction: LocalInventoryDestruction = {
+      ...payload,
+      synced: false,
+      createdLocallyAt: now,
+    };
+    const syncJob: SyncJob = {
+      id: makeId("job"),
+      referenceId: clientDestructionId,
+      retries: 0,
+      createdAt: now,
+      entity: "INVENTORY_DESTRUCTION",
+      action: "CREATE",
+      payload,
+    };
+
+    setInventoryDestructionInputs((previous) => {
+      const next = { ...previous };
+      delete next[productId];
+      return next;
+    });
+    setInventoryDestructionNoteInputs((previous) => {
+      const next = { ...previous };
+      delete next[productId];
+      return next;
+    });
+    setInventoryDestructions((previous) => {
+      const next = [localDestruction, ...previous];
+      void saveArray(STORAGE_KEYS.inventoryDestructions, next);
+      return next;
+    });
+
+    if (!isOnline || !authToken) {
+      enqueueJob(syncJob);
+      setStatusMessage(
+        `تم تسجيل إتلاف ${formatQuantity(quantity)} من ${product.name} محلياً وسيتم رفعه عند عودة الاتصال.`,
+      );
+      return;
+    }
+
+    try {
+      const destruction = await postInventoryDestruction(authToken, payload);
+      upsertRemoteInventoryDestruction(destruction);
+      markInventoryDestructionSynced(clientDestructionId);
+      setQueue((previous) => {
+        const next = previous.filter(
+          (job) =>
+            !(
+              (job.entity ?? job.type) === "INVENTORY_DESTRUCTION" &&
+              job.referenceId === clientDestructionId
+            ),
+        );
+        if (next.length !== previous.length) {
+          persistSyncQueue(next);
+        }
+        return next;
+      });
+      setStatusMessage(
+        `تم تسجيل إتلاف ${formatQuantity(quantity)} من ${product.name}. لا يؤثر الإتلاف على نتيجة التسوية.`,
+      );
+    } catch (error: unknown) {
+      enqueueJob(syncJob);
+      if (error instanceof ApiError && error.status === 401) {
+        logout("انتهت الجلسة وتم حفظ الإتلاف محلياً.");
+        return;
+      }
+      setStatusMessage(
+        `تم حفظ إتلاف ${product.name} محلياً وسيتم رفعه تلقائياً.`,
+      );
+    }
+  };
+
   const commitInventoryAdjustment = async (productId: string) => {
     if (!isAdmin || !session) {
       return;
@@ -5473,6 +5801,16 @@ export function useAppController() {
     }
 
     setSettlementActualInputs((previous) => {
+      const next = { ...previous };
+      delete next[productId];
+      return next;
+    });
+    setInventoryDestructionInputs((previous) => {
+      const next = { ...previous };
+      delete next[productId];
+      return next;
+    });
+    setInventoryDestructionNoteInputs((previous) => {
       const next = { ...previous };
       delete next[productId];
       return next;
@@ -5955,6 +6293,7 @@ export function useAppController() {
     refreshProductsData,
     refreshPurchasesData,
     refreshSettlementData,
+    recordInventoryDestruction,
     registerTawasiSupply,
     registerSupplyPayment,
     removeEmployeeAbsence,
@@ -6016,10 +6355,13 @@ export function useAppController() {
     setWithdrawalEmployeeIdInput,
     setWithdrawalNoteInput,
     settlementActualInputs,
+    inventoryDestructionInputs,
+    inventoryDestructionNoteInputs,
     settlementCarryForwardAmount,
     settlementCycleStartIso,
     settlementDifferenceAmount,
     settlementExpectedRevenueAmount,
+    settlementInventoryDestructionRows,
     settlementNetSalesWithAudit,
     settlementNoteInput,
     settlementOverDistributedAmount,
@@ -6061,6 +6403,8 @@ export function useAppController() {
     toggleMobileNav,
     total,
     updateCashBoxInput,
+    updateInventoryDestructionInput,
+    updateInventoryDestructionNoteInput,
     updateSettlementActualInput,
     updateSharesInput,
     updateTodaySupplyInput,

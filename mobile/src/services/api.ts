@@ -2,6 +2,7 @@ import { API_BASE_URL, API_BASE_URL_CANDIDATES } from '../config';
 import {
   ApiExpense,
   ApiInventoryAdjustment,
+  ApiInventoryDestruction,
   ApiEmployee,
   ApiEmployeeAbsence,
   ApiEmployeeWithdrawal,
@@ -13,6 +14,7 @@ import {
   AuthSession,
   CreateExpensePayload,
   CreateInventoryAdjustmentPayload,
+  CreateInventoryDestructionPayload,
   CreateEmployeeAbsencePayload,
   CreateEmployeePayload,
   CreateEmployeeWithdrawalPayload,
@@ -489,6 +491,28 @@ export function postInventoryAdjustment(
   payload: CreateInventoryAdjustmentPayload,
 ): Promise<ApiInventoryAdjustment> {
   return request<ApiInventoryAdjustment>('/inventory-adjustments', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+    ...INVENTORY_WRITE_REQUEST_OPTIONS,
+  });
+}
+
+export function fetchInventoryDestructions(
+  token: string,
+  query: ListQuery = {},
+): Promise<ApiInventoryDestruction[]> {
+  return request<ApiInventoryDestruction[]>(
+    `/inventory-destructions${buildListQuery(query)}`,
+    { token },
+  );
+}
+
+export function postInventoryDestruction(
+  token: string,
+  payload: CreateInventoryDestructionPayload,
+): Promise<ApiInventoryDestruction> {
+  return request<ApiInventoryDestruction>('/inventory-destructions', {
     method: 'POST',
     body: JSON.stringify(payload),
     token,

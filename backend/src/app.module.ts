@@ -11,6 +11,7 @@ import { DailySettlementsModule } from './daily-settlements/daily-settlements.mo
 import { ExpensesModule } from './expenses/expenses.module';
 import { EmployeesModule } from './employees/employees.module';
 import { InventoryAdjustmentsModule } from './inventory-adjustments/inventory-adjustments.module';
+import { InventoryDestructionsModule } from './inventory-destructions/inventory-destructions.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
@@ -32,6 +33,7 @@ import { createTypeOrmOptions } from './database/typeorm.config';
     ExpensesModule,
     EmployeesModule,
     InventoryAdjustmentsModule,
+    InventoryDestructionsModule,
     UploadsModule,
     AdminModule,
   ],

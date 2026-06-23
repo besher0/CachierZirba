@@ -23,6 +23,7 @@ export function SettlementScreen() {
     emptyText,
     expectedQty,
     formatMoney,
+    formatQuantity,
     input,
     inputFull,
     inputRow,
@@ -56,6 +57,8 @@ export function SettlementScreen() {
     productId,
     productName,
     productSalesSummaryRows,
+    productSupplyRows,
+    recordInventoryDestruction,
     refreshSettlementData,
     refundedQty,
     row,
@@ -74,6 +77,7 @@ export function SettlementScreen() {
     settlementDiffPositive,
     settlementDifferenceAmount,
     settlementExpectedRevenueAmount,
+    settlementInventoryDestructionRows,
     settlementNetSalesWithAudit,
     settlementNoteInput,
     settlementOverDistributedAmount,
@@ -111,9 +115,13 @@ export function SettlementScreen() {
     todaySalesTotal,
     unitType,
     updateCashBoxInput,
+    updateInventoryDestructionInput,
+    updateInventoryDestructionNoteInput,
     updateSettlementActualInput,
     updateSharesInput,
     value,
+    inventoryDestructionInputs,
+    inventoryDestructionNoteInputs,
   } = useAppScreenContext() as any;
 
   return (
@@ -296,6 +304,117 @@ export function SettlementScreen() {
                                 {formatMoney(row.netAmount)}
                               </Text>
                             </View>
+                          </View>
+                        ))
+                      )}
+
+                      {isAdmin ? (
+                        <>
+                          <Text style={styles.storeTableTitle}>
+                            إتلاف من المخزون
+                          </Text>
+                          <Text style={styles.orderRowMeta}>
+                            سجّل كمية الإتلاف من الرصيد المتاح. الإتلاف ينقص
+                            المخزون فقط ولا يولّد بيعاً أو إرجاعاً ولا يغيّر فرق
+                            التسوية المالي.
+                          </Text>
+                          {productSupplyRows.length === 0 ? (
+                            <Text style={styles.emptyText}>
+                              لا توجد منتجات متاحة للإتلاف.
+                            </Text>
+                          ) : (
+                            productSupplyRows.map((row) => (
+                              <View
+                                key={`destruction-${row.productId}`}
+                                style={styles.orderRow}
+                              >
+                                <View style={styles.orderRowMain}>
+                                  <Text style={styles.orderRowId}>
+                                    {row.name}
+                                  </Text>
+                                  <Text style={styles.orderRowItems}>
+                                    المتاح: {formatQuantity(row.remainingQty)}{" "}
+                                    {row.unitType === "KG" ? "كيلو" : "قطعة"}
+                                  </Text>
+                                </View>
+                                <TextInput
+                                  style={styles.inputFull}
+                                  value={
+                                    inventoryDestructionInputs[row.productId] ??
+                                    ""
+                                  }
+                                  onChangeText={(value) =>
+                                    updateInventoryDestructionInput(
+                                      row.productId,
+                                      value,
+                                    )
+                                  }
+                                  keyboardType="decimal-pad"
+                                  placeholder="كمية الإتلاف"
+                                  placeholderTextColor="#d7b3c4"
+                                />
+                                <TextInput
+                                  style={styles.inputFull}
+                                  value={
+                                    inventoryDestructionNoteInputs[
+                                      row.productId
+                                    ] ?? ""
+                                  }
+                                  onChangeText={(value) =>
+                                    updateInventoryDestructionNoteInput(
+                                      row.productId,
+                                      value,
+                                    )
+                                  }
+                                  maxLength={500}
+                                  placeholder="سبب الإتلاف (اختياري)"
+                                  placeholderTextColor="#d7b3c4"
+                                />
+                                <Pressable
+                                  style={styles.secondaryButton}
+                                  onPress={() =>
+                                    void recordInventoryDestruction(
+                                      row.productId,
+                                    )
+                                  }
+                                >
+                                  <Text style={styles.secondaryButtonText}>
+                                    إتلاف الكمية
+                                  </Text>
+                                </Pressable>
+                              </View>
+                            ))
+                          )}
+                        </>
+                      ) : null}
+
+                      <Text style={styles.storeTableTitle}>
+                        المنتجات المتلفة في الدورة الحالية
+                      </Text>
+                      {settlementInventoryDestructionRows.length === 0 ? (
+                        <Text style={styles.emptyText}>
+                          لا توجد عمليات إتلاف مسجلة ضمن هذه الدورة.
+                        </Text>
+                      ) : (
+                        settlementInventoryDestructionRows.map((row) => (
+                          <View key={row.id} style={styles.orderRow}>
+                            <View style={styles.orderRowMain}>
+                              <Text style={styles.orderRowId}>
+                                {row.productName}
+                              </Text>
+                              <Text style={styles.orderRowItems}>
+                                كمية متلفة: {formatQuantity(row.quantity)}{" "}
+                                {row.unitType === "KG" ? "كيلو" : "قطعة"}
+                              </Text>
+                            </View>
+                            <Text style={styles.orderRowMeta}>
+                              {toShortDate(row.destroyedAt)}
+                            </Text>
+                            {row.note ? (
+                              <Text style={styles.orderRowMeta}>
+                                {row.note}
+                              </Text>
+                            ) : null}
                           </View>
                         ))
                       )}
