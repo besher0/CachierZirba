@@ -208,7 +208,15 @@ import {
 
 const SYNC_RETRY_DELAY_MS = 10000;
 const MAX_SYNC_JOB_RETRIES = 5;
-const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 60000;
+const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 15000;
+const RESOURCE_REFRESH_TTL_MS = 60000;
+
+type RefreshTimestamps = Record<string, number>;
+
+interface ActiveScreenRefreshOptions {
+  force?: boolean;
+  showIndicator?: boolean;
+}
 
 interface TodayPurchaseInvoiceRow {
   key: string;
@@ -344,9 +352,13 @@ export function useAppController() {
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const hasLoadedCashCarryRef = useRef(false);
+  const refreshTimestampsRef = useRef<RefreshTimestamps>({});
+  const resourceRefreshPromisesRef = useRef<Map<string, Promise<boolean>>>(
+    new Map(),
+  );
   const settlementRefreshPromiseRef = useRef<{
     key: string;
-    promise: Promise<void>;
+    promise: Promise<boolean>;
   } | null>(null);
   const activeScreenRefreshPromiseRef = useRef<{
     key: string;
@@ -706,6 +718,20 @@ export function useAppController() {
     () => sortProductsByLocalOrder(products, orderedProductIdsForStore),
     [orderedProductIdsForStore, products],
   );
+  const productByNormalizedName = useMemo(
+    () =>
+      new Map(
+        products.map((product) => [
+          normalizeProductKey(product.name),
+          product,
+        ]),
+      ),
+    [products],
+  );
+  const productByClientProductId = useMemo(
+    () => new Map(products.map((product) => [product.clientProductId, product])),
+    [products],
+  );
   const posProductGridData = useMemo<PosProductGridItem[]>(
     () => posProducts.map((item) => ({ ...item, key: item.id })),
     [posProducts],
@@ -1013,23 +1039,55 @@ export function useAppController() {
     selectedStorePurchases,
   ]);
 
+  const settlementRecordsByDate = useMemo(() => {
+    const orders = new Map<string, OrderHistoryRow[]>();
+    const expensesByDate = new Map<string, ExpenseRow[]>();
+    const purchasesByDate = new Map<string, PurchaseRow[]>();
+    const withdrawals = new Map<string, EmployeeWithdrawalEntry[]>();
+
+    allMergedOrderRows.forEach((item) => {
+      const date = toBusinessDateFromTimestamp(item.orderedAt);
+      orders.set(date, [...(orders.get(date) ?? []), item]);
+    });
+    mergedExpenseRows.forEach((item) => {
+      expensesByDate.set(item.expenseDate, [
+        ...(expensesByDate.get(item.expenseDate) ?? []),
+        item,
+      ]);
+    });
+    mergedPurchaseRows.forEach((item) => {
+      purchasesByDate.set(item.purchaseDate, [
+        ...(purchasesByDate.get(item.purchaseDate) ?? []),
+        item,
+      ]);
+    });
+    selectedStoreWithdrawals.forEach((item) => {
+      withdrawals.set(item.withdrawalDate, [
+        ...(withdrawals.get(item.withdrawalDate) ?? []),
+        item,
+      ]);
+    });
+
+    return { orders, expenses: expensesByDate, purchases: purchasesByDate, withdrawals };
+  }, [
+    allMergedOrderRows,
+    mergedExpenseRows,
+    mergedPurchaseRows,
+    selectedStoreWithdrawals,
+  ]);
+
+  const employeeNameById = useMemo(
+    () => new Map(selectedStoreEmployees.map((employee) => [employee.id, employee.name])),
+    [selectedStoreEmployees],
+  );
+
   const settlementArchiveRows = useMemo(
     () =>
       mergedSettlementRows.map((settlement) => {
-        const dayOrders = allMergedOrderRows.filter(
-          (item) =>
-            toBusinessDateFromTimestamp(item.orderedAt) ===
-            settlement.businessDate,
-        );
-        const dayExpenses = mergedExpenseRows.filter(
-          (item) => item.expenseDate === settlement.businessDate,
-        );
-        const dayPurchases = mergedPurchaseRows.filter(
-          (item) => item.purchaseDate === settlement.businessDate,
-        );
-        const dayWithdrawals = selectedStoreWithdrawals.filter(
-          (item) => item.withdrawalDate === settlement.businessDate,
-        );
+        const dayOrders = settlementRecordsByDate.orders.get(settlement.businessDate) ?? [];
+        const dayExpenses = settlementRecordsByDate.expenses.get(settlement.businessDate) ?? [];
+        const dayPurchases = settlementRecordsByDate.purchases.get(settlement.businessDate) ?? [];
+        const dayWithdrawals = settlementRecordsByDate.withdrawals.get(settlement.businessDate) ?? [];
 
         return {
           ...settlement,
@@ -1067,11 +1125,8 @@ export function useAppController() {
         };
       }),
     [
-      allMergedOrderRows,
-      mergedExpenseRows,
-      mergedPurchaseRows,
       mergedSettlementRows,
-      selectedStoreWithdrawals,
+      settlementRecordsByDate,
     ],
   );
 
@@ -1408,26 +1463,16 @@ export function useAppController() {
 
   const openSettlementDetails = useCallback(
     (settlement: SettlementHistoryRow) => {
-      const dayOrders = allMergedOrderRows.filter(
-        (item) =>
-          toBusinessDateFromTimestamp(item.orderedAt) ===
-          settlement.businessDate,
-      );
-      const dayExpenses = mergedExpenseRows.filter(
-        (item) => item.expenseDate === settlement.businessDate,
-      );
-      const dayPurchases = mergedPurchaseRows.filter(
-        (item) => item.purchaseDate === settlement.businessDate,
-      );
-      const employeeNameLookup = new Map(
-        selectedStoreEmployees.map((employee) => [employee.id, employee.name]),
-      );
-      const dayWithdrawals = selectedStoreWithdrawals
-        .filter((item) => item.withdrawalDate === settlement.businessDate)
+      const dayOrders = settlementRecordsByDate.orders.get(settlement.businessDate) ?? [];
+      const dayExpenses = settlementRecordsByDate.expenses.get(settlement.businessDate) ?? [];
+      const dayPurchases = settlementRecordsByDate.purchases.get(settlement.businessDate) ?? [];
+      const dayWithdrawals = (settlementRecordsByDate.withdrawals.get(
+        settlement.businessDate,
+      ) ?? [])
         .map((item) => ({
           ...item,
           employeeName:
-            employeeNameLookup.get(item.employeeId) ?? item.employeeId,
+            employeeNameById.get(item.employeeId) ?? item.employeeId,
         }));
 
       const salesAmount = dayOrders
@@ -1505,15 +1550,14 @@ export function useAppController() {
       });
     },
     [
-      allMergedOrderRows,
-      mergedExpenseRows,
-      mergedPurchaseRows,
-      selectedStoreEmployees,
-      selectedStoreWithdrawals,
+      employeeNameById,
+      settlementRecordsByDate,
     ],
   );
 
-  const productSupplyRows = useMemo<ProductSupplyRow[]>(() => {
+  const productSupplyBaseRows = useMemo<
+    Array<Omit<ProductSupplyRow, "receivedToday">>
+  >(() => {
     const purchasedByProduct = new Map<string, number>();
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
@@ -1529,9 +1573,7 @@ export function useAppController() {
         );
       }
 
-      const product = products.find(
-        (item) => normalizeProductKey(item.name) === key,
-      );
+      const product = productByNormalizedName.get(key);
       const adjustment = product
         ? latestInventoryAdjustmentByProduct.get(product.clientProductId)
         : undefined;
@@ -1554,9 +1596,7 @@ export function useAppController() {
     allMergedOrderRows.forEach((order) => {
       order.items.forEach((item) => {
         const key = normalizeProductKey(item.productName);
-        const product = products.find(
-          (entry) => normalizeProductKey(entry.name) === key,
-        );
+        const product = productByNormalizedName.get(key);
         const adjustment = product
           ? latestInventoryAdjustmentByProduct.get(product.clientProductId)
           : undefined;
@@ -1578,9 +1618,7 @@ export function useAppController() {
     });
 
     mergedInventoryDestructions.forEach((destruction) => {
-      const product = products.find(
-        (item) => item.clientProductId === destruction.productClientId,
-      );
+      const product = productByClientProductId.get(destruction.productClientId);
       const adjustment = product
         ? latestInventoryAdjustmentByProduct.get(product.clientProductId)
         : undefined;
@@ -1618,10 +1656,6 @@ export function useAppController() {
       const loggedToday = Number(
         (todayReceivedByProduct.get(key) ?? 0).toFixed(3),
       );
-      const receivedToday = Number(
-        parseNumberInput(todaySupplyInputs[product.id] ?? "0").toFixed(3),
-      );
-
       return {
         productId: product.id,
         name: product.name,
@@ -1629,7 +1663,6 @@ export function useAppController() {
         sellPrice: product.price,
         costPrice: product.costPrice,
         remainingQty,
-        receivedToday,
         loggedToday,
       };
     });
@@ -1638,10 +1671,21 @@ export function useAppController() {
     latestInventoryAdjustmentByProduct,
     mergedInventoryDestructions,
     mergedPurchaseRows,
-    products,
+    productByClientProductId,
+    productByNormalizedName,
     todayDate,
-    todaySupplyInputs,
   ]);
+
+  const productSupplyRows = useMemo<ProductSupplyRow[]>(
+    () =>
+      productSupplyBaseRows.map((row) => ({
+        ...row,
+        receivedToday: Number(
+          parseNumberInput(todaySupplyInputs[row.productId] ?? "0").toFixed(3),
+        ),
+      })),
+    [productSupplyBaseRows, todaySupplyInputs],
+  );
 
   const settlementInventoryDestructionRows = useMemo(
     () =>
@@ -1653,9 +1697,7 @@ export function useAppController() {
           ),
         )
         .map((item) => {
-          const product = products.find(
-            (entry) => entry.clientProductId === item.productClientId,
-          );
+          const product = productByClientProductId.get(item.productClientId);
           return {
             id: item.clientDestructionId,
             productName: product?.name ?? item.productClientId,
@@ -1665,7 +1707,11 @@ export function useAppController() {
             destroyedAt: item.destroyedAt,
           };
         }),
-    [isInCurrentSettlementCycle, mergedInventoryDestructions, products],
+    [
+      isInCurrentSettlementCycle,
+      mergedInventoryDestructions,
+      productByClientProductId,
+    ],
   );
 
   const todaySalesTotal = useMemo(
@@ -1829,9 +1875,7 @@ export function useAppController() {
     ordersInCurrentCycle.forEach((order) => {
       order.items.forEach((item) => {
         const key = normalizeProductKey(item.productName);
-        const fromCatalog = products.find(
-          (entry) => normalizeProductKey(entry.name) === key,
-        );
+        const fromCatalog = productByNormalizedName.get(key);
         const base = byProduct.get(key) ?? {
           productId: fromCatalog?.id ?? key,
           name: item.productName,
@@ -1863,7 +1907,7 @@ export function useAppController() {
       netQty: Number(item.netQty.toFixed(3)),
       netAmount: Number(item.netAmount.toFixed(2)),
     }));
-  }, [ordersInCurrentCycle, products]);
+  }, [ordersInCurrentCycle, productByNormalizedName]);
 
   const pieceStockAuditRows = useMemo<PieceStockAuditRow[]>(
     () =>
@@ -2039,6 +2083,8 @@ export function useAppController() {
 
   const logout = useCallback((message: string) => {
     setSession(null);
+    refreshTimestampsRef.current = {};
+    void saveObject(STORAGE_KEYS.refreshTimestamps, {});
     setDashboardTotals(null);
     setDashboardSummaries([]);
     setRemoteOrders([]);
@@ -2247,13 +2293,13 @@ export function useAppController() {
 
   const refreshStoresData = useCallback(async () => {
     if (!authToken) {
-      return;
+      return false;
     }
 
     try {
       const remoteStores = await fetchStores(authToken);
       if (remoteStores.length === 0) {
-        return;
+        return false;
       }
 
       setStores(remoteStores);
@@ -2275,27 +2321,31 @@ export function useAppController() {
 
         return previous || remoteStores[0]?.id || previous;
       });
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحميل المحلات من السيرفر.");
+      return false;
     }
   }, [assignedStoreId, authToken, handleApiFailure, isCashier]);
 
   const refreshOrdersData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     try {
       const data = await fetchOrders(authToken, { storeId: selectedStoreId });
       setRemoteOrders(data);
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث سجل الطلبات من السيرفر.");
+      return false;
     }
   }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
 
   const refreshDailySettlementsData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     try {
@@ -2303,27 +2353,31 @@ export function useAppController() {
         storeId: selectedStoreId,
       });
       setRemoteSettlements(data);
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث تسويات اليوم من السيرفر.");
+      return false;
     }
   }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
 
   const refreshExpensesData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     try {
       const data = await fetchExpenses(authToken, { storeId: selectedStoreId });
       setRemoteExpenses(data);
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث المصاريف من السيرفر.");
+      return false;
     }
   }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
 
   const refreshPurchasesData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     try {
@@ -2331,8 +2385,10 @@ export function useAppController() {
         storeId: selectedStoreId,
       });
       replaceRemotePurchases(data);
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث المشتريات من السيرفر.");
+      return false;
     }
   }, [
     authToken,
@@ -2344,7 +2400,7 @@ export function useAppController() {
 
   const refreshInventoryData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     try {
@@ -2359,8 +2415,10 @@ export function useAppController() {
       setRemoteOrders(orderData);
       setRemoteInventoryAdjustments(adjustmentData);
       setRemoteInventoryDestructions(destructionData);
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث بيانات المخزون من السيرفر.");
+      return false;
     }
   }, [
     authToken,
@@ -2372,7 +2430,7 @@ export function useAppController() {
 
   const refreshEmployeesData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     try {
@@ -2480,14 +2538,16 @@ export function useAppController() {
           ...Array.from(selected.values()),
         ].sort((a, b) => b.withdrawalDate.localeCompare(a.withdrawalDate));
       });
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث بيانات الموظفين من السيرفر.");
+      return false;
     }
   }, [authToken, handleApiFailure, isOnline, queue, selectedStoreId]);
 
   const refreshProductsData = useCallback(async () => {
     if (!authToken || !isOnline) {
-      return;
+      return false;
     }
 
     try {
@@ -2514,20 +2574,21 @@ export function useAppController() {
         void saveArray(STORAGE_KEYS.products, next);
         return next;
       });
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث كتالوج المنتجات من السيرفر.");
+      return false;
     }
   }, [authToken, handleApiFailure, isOnline, queue]);
 
   const refreshSettlementData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
-      return;
+      return false;
     }
 
     const refreshKey = `${authToken}:${selectedStoreId}`;
     if (settlementRefreshPromiseRef.current?.key === refreshKey) {
-      await settlementRefreshPromiseRef.current.promise;
-      return;
+      return settlementRefreshPromiseRef.current.promise;
     }
 
     const refreshPromise = Promise.all([
@@ -2536,14 +2597,14 @@ export function useAppController() {
       refreshEmployeesData(),
       refreshExpensesData(),
       refreshProductsData(),
-    ]).then(() => undefined);
+    ]).then((results) => results.every(Boolean));
     settlementRefreshPromiseRef.current = {
       key: refreshKey,
       promise: refreshPromise,
     };
 
     try {
-      await refreshPromise;
+      return await refreshPromise;
     } finally {
       if (settlementRefreshPromiseRef.current?.promise === refreshPromise) {
         settlementRefreshPromiseRef.current = null;
@@ -2562,7 +2623,7 @@ export function useAppController() {
 
   const refreshDashboardData = useCallback(async () => {
     if (!isOnline || !isAdmin || !authToken) {
-      return;
+      return false;
     }
 
     if (
@@ -2581,8 +2642,10 @@ export function useAppController() {
       });
       setDashboardTotals(dashboard.totals);
       setDashboardSummaries(dashboard.stores);
+      return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث لوحة الإدارة حالياً.");
+      return false;
     }
   }, [
     adminFromDateInput,
@@ -2593,11 +2656,62 @@ export function useAppController() {
     isOnline,
   ]);
 
-  const refreshActiveScreenData = useCallback(async () => {
+  const markResourceFresh = useCallback((resourceKey: string) => {
+    const next = {
+      ...refreshTimestampsRef.current,
+      [resourceKey]: Date.now(),
+    };
+    refreshTimestampsRef.current = next;
+    void saveObject(STORAGE_KEYS.refreshTimestamps, next);
+  }, []);
+
+  const refreshResource = useCallback(
+    async (
+      resourceKey: string,
+      refresh: () => Promise<boolean | undefined>,
+      force: boolean,
+    ) => {
+      const refreshedAt = refreshTimestampsRef.current[resourceKey] ?? 0;
+      if (!force && Date.now() - refreshedAt < RESOURCE_REFRESH_TTL_MS) {
+        return true;
+      }
+
+      const inFlight = resourceRefreshPromisesRef.current.get(resourceKey);
+      if (inFlight) {
+        return inFlight;
+      }
+
+      const refreshPromise = refresh()
+        .then((succeeded) => {
+          if (succeeded) {
+            markResourceFresh(resourceKey);
+          }
+          return Boolean(succeeded);
+        })
+        .finally(() => {
+          if (
+            resourceRefreshPromisesRef.current.get(resourceKey) ===
+            refreshPromise
+          ) {
+            resourceRefreshPromisesRef.current.delete(resourceKey);
+          }
+        });
+
+      resourceRefreshPromisesRef.current.set(resourceKey, refreshPromise);
+      return refreshPromise;
+    },
+    [markResourceFresh],
+  );
+
+  const refreshActiveScreenData = useCallback(async (
+    options: ActiveScreenRefreshOptions = {},
+  ) => {
     if (!isOnline || !session?.accessToken) {
       return;
     }
 
+    const force = options.force ?? false;
+    const showIndicator = options.showIndicator ?? force;
     const refreshKey = `${activeScreen}:${selectedStoreId}:${session.accessToken}`;
     if (activeScreenRefreshPromiseRef.current?.key === refreshKey) {
       await activeScreenRefreshPromiseRef.current.promise;
@@ -2605,34 +2719,66 @@ export function useAppController() {
     }
 
     const refreshPromise = (async () => {
-      setIsRefreshingActiveScreen(true);
+      if (showIndicator) {
+        setIsRefreshingActiveScreen(true);
+      }
+
+      const refreshForStore = (
+        resource: string,
+        refresh: () => Promise<boolean | undefined>,
+      ) => refreshResource(`${resource}:${selectedStoreId}`, refresh, force);
+      const refreshGlobal = (
+        resource: string,
+        refresh: () => Promise<boolean | undefined>,
+      ) => refreshResource(`${resource}:global`, refresh, force);
 
       try {
         switch (activeScreen) {
           case "pos":
-            await Promise.all([refreshStoresData(), refreshProductsData()]);
+            await Promise.all([
+              refreshGlobal("stores", refreshStoresData),
+              refreshGlobal("products", refreshProductsData),
+            ]);
             return;
           case "purchases":
-            await Promise.all([refreshProductsData(), refreshInventoryData()]);
+            await Promise.all([
+              refreshGlobal("products", refreshProductsData),
+              refreshForStore("inventory", refreshInventoryData),
+            ]);
             return;
           case "expenses":
-            await refreshExpensesData();
+            await refreshForStore("expenses", refreshExpensesData);
             return;
           case "employees":
-            await refreshEmployeesData();
+            await refreshForStore("employees", refreshEmployeesData);
             return;
           case "orders":
-            await refreshOrdersData();
+            await refreshForStore("orders", refreshOrdersData);
             return;
           case "settlement":
-            await refreshSettlementData();
+            await Promise.all([
+              refreshForStore("inventory", refreshInventoryData),
+              refreshForStore("settlements", refreshDailySettlementsData),
+              refreshForStore("employees", refreshEmployeesData),
+              refreshForStore("expenses", refreshExpensesData),
+              refreshGlobal("products", refreshProductsData),
+            ]);
             return;
           case "admin":
-            await Promise.all([refreshStoresData(), refreshDashboardData()]);
+            await Promise.all([
+              refreshGlobal("stores", refreshStoresData),
+              refreshResource(
+                `dashboard:${adminFromDateInput}:${adminToDateInput}`,
+                refreshDashboardData,
+                force,
+              ),
+            ]);
             return;
         }
       } finally {
-        setIsRefreshingActiveScreen(false);
+        if (showIndicator) {
+          setIsRefreshingActiveScreen(false);
+        }
       }
     })();
 
@@ -2650,6 +2796,8 @@ export function useAppController() {
     }
   }, [
     activeScreen,
+    adminFromDateInput,
+    adminToDateInput,
     isOnline,
     refreshDashboardData,
     refreshEmployeesData,
@@ -2657,7 +2805,7 @@ export function useAppController() {
     refreshInventoryData,
     refreshOrdersData,
     refreshProductsData,
-    refreshSettlementData,
+    refreshResource,
     refreshStoresData,
     selectedStoreId,
     session?.accessToken,
@@ -3104,6 +3252,8 @@ export function useAppController() {
         },
       });
       setSession(authSession);
+      refreshTimestampsRef.current = {};
+      void saveObject(STORAGE_KEYS.refreshTimestamps, {});
       setActiveScreen("pos");
 
       if (authSession.user.role === "CASHIER" && authSession.user.storeId) {
@@ -3169,6 +3319,7 @@ export function useAppController() {
           cachedCashCarryByStore,
           cachedProductOrderByStore,
           cachedQueue,
+          cachedRefreshTimestamps,
         ] = await Promise.all([
           loadObject<AuthSession>(STORAGE_KEYS.authSession),
           loadArray<Store>(STORAGE_KEYS.stores),
@@ -3190,6 +3341,7 @@ export function useAppController() {
           loadObject<Record<string, number>>(STORAGE_KEYS.cashCarryByStore),
           loadObject<Record<string, string[]>>(PRODUCT_ORDER_STORAGE_KEY),
           loadArray<SyncJob>(STORAGE_KEYS.syncQueue),
+          loadObject<RefreshTimestamps>(STORAGE_KEYS.refreshTimestamps),
         ]);
 
         if (!mounted) {
@@ -3259,6 +3411,7 @@ export function useAppController() {
         setCashCarryByStore(cachedCashCarryByStore ?? {});
         setProductOrderByStore(cachedProductOrderByStore ?? {});
         setQueue(correctedQueue);
+        refreshTimestampsRef.current = cachedRefreshTimestamps ?? {};
         setSelectedStoreId(initialStoreId);
       } catch {
         if (!mounted) {
@@ -3282,6 +3435,7 @@ export function useAppController() {
         setCashCarryByStore({});
         setProductOrderByStore({});
         setQueue([]);
+        refreshTimestampsRef.current = {};
         setSelectedStoreId(FALLBACK_STORES[0]?.id ?? "");
         setStatusMessage(
           "حدث خطأ في تحميل البيانات المحلية. تم تشغيل النظام بالوضع الافتراضي.",
@@ -3663,6 +3817,20 @@ export function useAppController() {
     }, ACTIVE_SCREEN_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
+  }, [isOnline, refreshActiveScreenData, session?.accessToken]);
+
+  useEffect(() => {
+    if (!isOnline || !session?.accessToken) {
+      return;
+    }
+
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void refreshActiveScreenData();
+      }
+    });
+
+    return () => subscription.remove();
   }, [isOnline, refreshActiveScreenData, session?.accessToken]);
 
   useEffect(() => {
@@ -4080,8 +4248,8 @@ export function useAppController() {
       try {
         await postOrder(authToken, payload);
         markOrderSynced(clientOrderId);
-        await refreshDashboardData();
-        await refreshOrdersData();
+        void refreshDashboardData();
+        void refreshOrdersData();
         setStatusMessage(
           `تم تسجيل تواصي بقيمة ${formatMoney(tawasiAmount)} كبيع مباشر.`,
         );
@@ -4229,8 +4397,8 @@ export function useAppController() {
         await postOrder(authToken, payload);
         markOrderSynced(clientOrderId);
         setStatusMessage('تم تسجيل الطلب في السيرفر مباشرة.');
-        await refreshDashboardData();
-        await refreshOrdersData();
+        void refreshDashboardData();
+        void refreshOrdersData();
         return;
       } catch (error: unknown) {
         enqueueJob(syncJob);
@@ -4372,9 +4540,9 @@ export function useAppController() {
             ? `تم تسجيل التسوية، وتوليد ${adjustmentRecords.length} حركة ضبط جرد. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`
             : `تم تسجيل تسوية اليوم في السيرفر. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`,
         );
-        await refreshDashboardData();
-        await refreshOrdersData();
-        await refreshDailySettlementsData();
+        void refreshDashboardData();
+        void refreshOrdersData();
+        void refreshDailySettlementsData();
         return;
       } catch (error: unknown) {
         adjustmentJobs
@@ -4595,7 +4763,7 @@ export function useAppController() {
 
           await postExpense(authToken, payloadToSend);
           markExpenseSynced(clientExpenseId);
-          await refreshExpensesData();
+          void refreshExpensesData();
           setStatusMessage('تم حفظ المصروف في السيرفر.');
         } catch {
           enqueueJob(syncJob);
@@ -4680,7 +4848,7 @@ export function useAppController() {
 
         await patchExpense(authToken, expenseEditingId, payloadToSend);
         markExpenseSynced(expenseEditingId);
-        await refreshExpensesData();
+        void refreshExpensesData();
         setStatusMessage('تم تحديث المصروف على السيرفر.');
       } catch {
         enqueueJob(syncJob);
@@ -4723,7 +4891,7 @@ export function useAppController() {
     if (isOnline && authToken) {
       try {
         await deleteExpense(authToken, clientExpenseId);
-        await refreshExpensesData();
+        void refreshExpensesData();
         setStatusMessage('تم حذف المصروف من السيرفر.');
         return;
       } catch {
@@ -4889,7 +5057,7 @@ export function useAppController() {
         }
 
         markProductSynced(clientProductId);
-        await refreshProductsData();
+        void refreshProductsData();
         setStatusMessage(isEditing ? `تم تعديل المنتج ${name} على السيرفر.` : `تمت إضافة المنتج ${name} على السيرفر.`);
         return;
       } catch (error: unknown) {
@@ -4964,7 +5132,7 @@ export function useAppController() {
     if (isOnline && authToken) {
       try {
         await deleteProduct(authToken, product.clientProductId);
-        await refreshProductsData();
+        void refreshProductsData();
         setStatusMessage(`تم حذف المنتج ${product.name} من السيرفر.`);
         return;
       } catch (error: unknown) {
@@ -5118,7 +5286,7 @@ export function useAppController() {
     }
 
     if (isOnline && authToken && queuedCount === 0) {
-      await refreshSettlementData();
+      void refreshSettlementData();
       setStatusMessage(`تم استلام ${syncedCount} توريد اليوم على السيرفر.`);
       return;
     }
@@ -5202,7 +5370,7 @@ export function useAppController() {
       try {
         await postPurchase(authToken, payload);
         markPurchaseSynced(localRecord.clientPurchaseId);
-        await refreshPurchasesData();
+        void refreshPurchasesData();
         setStatusMessage('تم تسجيل التواصي على السيرفر.');
         return;
       } catch (error: unknown) {
@@ -5289,7 +5457,7 @@ export function useAppController() {
       try {
         await postPurchase(authToken, payload);
         markPurchaseSynced(localRecord.clientPurchaseId);
-        await refreshPurchasesData();
+        void refreshPurchasesData();
         setStatusMessage('تم تسجيل دفعة فاتورة التوريدات من دون احتسابها في التسوية.');
         return;
       } catch (error: unknown) {
@@ -5333,7 +5501,7 @@ export function useAppController() {
     if (isOnline && authToken) {
       try {
         await deletePurchase(authToken, clientPurchaseId);
-        await refreshPurchasesData();
+        void refreshPurchasesData();
         setStatusMessage('تم حذف التوريد من السيرفر.');
         return;
       } catch {
@@ -6238,6 +6406,7 @@ export function useAppController() {
     isPosSplit,
     isProductFormOpen,
     isRefundMode,
+    isRefreshingActiveScreen,
     isTodayPurchasesInvoiceOpen,
     isSyncing,
     loginUser,
@@ -6292,6 +6461,7 @@ export function useAppController() {
     refreshOrdersData,
     refreshProductsData,
     refreshPurchasesData,
+    refreshActiveScreenData,
     refreshSettlementData,
     recordInventoryDestruction,
     registerTawasiSupply,
@@ -6417,8 +6587,52 @@ export function useAppController() {
     withdrawalNoteInput,
   };
 
+  const appShellContext = useMemo(
+    () => ({
+      BRAND_CATEGORY,
+      BRAND_FULL,
+      BRAND_NAME,
+      Pressable,
+      activeScreen,
+      activeScreenLabel,
+      assignedStoreId,
+      canSwitchStore,
+      isAdmin,
+      isDesktop,
+      isMobileNavOpen,
+      isOnline,
+      logout,
+      navItems,
+      selectedStoreId,
+      session,
+      setActiveScreen,
+      setSelectedStoreId,
+      showPageSwitchControls,
+      stores,
+      toggleMobileNav,
+    }),
+    [
+      activeScreen,
+      activeScreenLabel,
+      assignedStoreId,
+      canSwitchStore,
+      isAdmin,
+      isDesktop,
+      isMobileNavOpen,
+      isOnline,
+      logout,
+      navItems,
+      selectedStoreId,
+      session,
+      showPageSwitchControls,
+      stores,
+      toggleMobileNav,
+    ],
+  );
+
   return {
     appScreenContext,
+    appShellContext,
     isBootstrapping,
     session,
     playTapSound,

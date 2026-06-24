@@ -1,80 +1,34 @@
 // @ts-nocheck
+import { SectionList } from "react-native";
+
 import { useAppScreenContext } from "./AppScreenContext";
 
 export function SettlementScreen() {
   const {
-    KG,
     Pressable,
     Text,
     TextInput,
     View,
-    actualRemainingAmount,
     actualRemainingInput,
-    adjustmentAmount,
     auditNetSalesAmount,
-    businessDate,
-    cashBoxAmount,
     cashBoxInput,
     commitInventoryAdjustment,
-    d7b3c4,
-    decimal,
-    diffQty,
-    differenceAmount,
-    emptyText,
-    expectedQty,
     formatMoney,
     formatQuantity,
-    input,
-    inputFull,
-    inputRow,
+    inventoryDestructionInputs,
+    inventoryDestructionNoteInputs,
     isAdmin,
-    item,
-    key,
-    keyboardType,
-    length,
-    map,
-    mergedSettlementRows,
-    settlementArchiveRows,
-    selectedStore,
-    name,
-    netAmount,
-    netQty,
-    onChangeText,
-    onPress,
+    isRefreshingActiveScreen,
     openSettlementDetails,
-    orderRow,
-    orderRowHint,
-    orderRowId,
-    orderRowItems,
-    orderRowMain,
-    orderRowMeta,
-    orderRowTotal,
-    pad,
-    pendingText,
     pieceStockAuditRows,
-    placeholder,
-    placeholderTextColor,
-    productId,
-    productName,
-    productSalesSummaryRows,
     productSupplyRows,
     recordInventoryDestruction,
-    refreshSettlementData,
-    refundedQty,
-    row,
-    secondaryButton,
-    secondaryButtonText,
-    section,
-    sectionHeaderInline,
-    sectionTitle,
-    setActualRemainingInput,
-    setSettlementNoteInput,
+    refreshActiveScreenData,
+    selectedStore,
     settlementActualInputs,
+    settlementArchiveRows,
     settlementCarryForwardAmount,
     settlementCycleStartIso,
-    settlementDiffNegative,
-    settlementDiffNeutral,
-    settlementDiffPositive,
     settlementDifferenceAmount,
     settlementExpectedRevenueAmount,
     settlementInventoryDestructionRows,
@@ -83,537 +37,335 @@ export function SettlementScreen() {
     settlementOverDistributedAmount,
     settlementProductSalesSummaryRows,
     settlementRefundTotalWithAudit,
-    settlementRow,
     settlementSalesTotalWithAudit,
-    settlementStatCard,
-    settlementStatCardHighlight,
-    settlementStatLabel,
-    settlementStatLabelHighlight,
-    settlementStatValue,
-    settlementStatValueHighlight,
-    settlementStatsGrid,
-    sharesAmount,
     sharesInput,
-    smallRefreshButton,
-    smallRefreshText,
-    soldQty,
-    storeTableTitle,
-    style,
+    setActualRemainingInput,
+    setSettlementNoteInput,
     styles,
     submitDailySettlement,
-    summaryRow,
-    summaryText,
-    synced,
-    syncedText,
     toShortDate,
     todayEmployeeWithdrawalsTotal,
-    todayExpectedRemaining,
     todayExpensesTotal,
-    todayNetSales,
     todayPurchasesTotal,
-    todayRefundTotal,
-    todaySalesTotal,
-    unitType,
     updateCashBoxInput,
     updateInventoryDestructionInput,
     updateInventoryDestructionNoteInput,
     updateSettlementActualInput,
     updateSharesInput,
-    value,
-    inventoryDestructionInputs,
-    inventoryDestructionNoteInputs,
   } = useAppScreenContext() as any;
 
+  const sections = [
+    { key: "sales", data: settlementProductSalesSummaryRows },
+    { key: "destructionInput", data: isAdmin ? productSupplyRows : [] },
+    { key: "destructionHistory", data: settlementInventoryDestructionRows },
+    { key: "audit", data: pieceStockAuditRows },
+    { key: "archive", data: settlementArchiveRows },
+  ];
+
+  const sectionTitle = (section) => {
+    switch (section.key) {
+      case "sales":
+        return "ملخص بيع المنتجات";
+      case "destructionInput":
+        return "إتلاف من المخزون";
+      case "destructionHistory":
+        return "المنتجات المتلفة في الدورة";
+      case "audit":
+        return "تدقيق مخزون منتجات القطعة";
+      case "archive":
+        return `أرشيف تسويات ${selectedStore?.name ?? "الفرع"}`;
+      default:
+        return "";
+    }
+  };
+
   return (
-<>
-                    <View style={styles.section}>
-                      <View style={styles.sectionHeaderInline}>
-                        <Text style={styles.sectionTitle}>تسوية اليوم</Text>
-                        <Pressable
-                          style={styles.smallRefreshButton}
-                          onPress={() => void refreshSettlementData()}
-                        >
-                          <Text style={styles.smallRefreshText}>
-                            تحديث الكل
-                          </Text>
-                        </Pressable>
-                      </View>
-                      <View style={styles.settlementStatsGrid}>
-                        <View style={styles.settlementStatCard}>
-                          <Text style={styles.settlementStatLabel}>
-                            مبيعات الدورة
-                          </Text>
-                          <Text style={styles.settlementStatValue}>
-                            {formatMoney(settlementSalesTotalWithAudit)}
-                          </Text>
-                        </View>
-                        <View style={styles.settlementStatCard}>
-                          <Text style={styles.settlementStatLabel}>
-                            مرتجعات الدورة
-                          </Text>
-                          <Text style={styles.settlementStatValue}>
-                            {formatMoney(settlementRefundTotalWithAudit)}
-                          </Text>
-                        </View>
-                        <View style={styles.settlementStatCard}>
-                          <Text style={styles.settlementStatLabel}>
-                            صافي الدورة
-                          </Text>
-                          <Text style={styles.settlementStatValue}>
-                            {formatMoney(settlementNetSalesWithAudit)}
-                          </Text>
-                        </View>
-                        <View style={styles.settlementStatCard}>
-                          <Text style={styles.settlementStatLabel}>
-                            توريدات الدورة
-                          </Text>
-                          <Text style={styles.settlementStatValue}>
-                            {formatMoney(todayPurchasesTotal)}
-                          </Text>
-                        </View>
-                        <View style={styles.settlementStatCard}>
-                          <Text style={styles.settlementStatLabel}>
-                            مصاريف الدورة
-                          </Text>
-                          <Text style={styles.settlementStatValue}>
-                            {formatMoney(todayExpensesTotal)}
-                          </Text>
-                        </View>
-                        <View style={styles.settlementStatCard}>
-                          <Text style={styles.settlementStatLabel}>
-                            سحوبات الدورة
-                          </Text>
-                          <Text style={styles.settlementStatValue}>
-                            {formatMoney(todayEmployeeWithdrawalsTotal)}
-                          </Text>
-                        </View>
-                        <View style={styles.settlementStatCardHighlight}>
-                          <Text style={styles.settlementStatLabelHighlight}>
-                            المبلغ المفروض متبقي
-                          </Text>
-                          <Text style={styles.settlementStatValueHighlight}>
-                            {formatMoney(settlementExpectedRevenueAmount)}
-                          </Text>
-                        </View>
-                      </View>
+    <SectionList
+      style={styles.flexOne}
+      contentContainerStyle={styles.content}
+      sections={sections}
+      keyExtractor={(item, index) =>
+        item.productId ?? item.id ?? item.clientClosureId ?? `${index}`
+      }
+      initialNumToRender={12}
+      maxToRenderPerBatch={12}
+      windowSize={7}
+      refreshing={isRefreshingActiveScreen}
+      onRefresh={() =>
+        void refreshActiveScreenData({ force: true, showIndicator: true })
+      }
+      ListHeaderComponent={
+        <View style={styles.section}>
+          <View style={styles.sectionHeaderInline}>
+            <Text style={styles.sectionTitle}>تسوية اليوم</Text>
+            <Pressable
+              style={styles.smallRefreshButton}
+              onPress={() =>
+                void refreshActiveScreenData({
+                  force: true,
+                  showIndicator: false,
+                })
+              }
+            >
+              <Text style={styles.smallRefreshText}>تحديث الكل</Text>
+            </Pressable>
+          </View>
+          <View style={styles.settlementStatsGrid}>
+            {[
+              ["مبيعات الدورة", settlementSalesTotalWithAudit, false],
+              ["مرتجعات الدورة", settlementRefundTotalWithAudit, false],
+              ["صافي الدورة", settlementNetSalesWithAudit, false],
+              ["توريدات الدورة", todayPurchasesTotal, false],
+              ["مصاريف الدورة", todayExpensesTotal, false],
+              ["سحوبات الموظفين", todayEmployeeWithdrawalsTotal, false],
+              ["المبلغ المفروض متبقي", settlementExpectedRevenueAmount, true],
+            ].map(([label, value, highlighted]) => (
+              <View
+                key={label}
+                style={
+                  highlighted
+                    ? styles.settlementStatCardHighlight
+                    : styles.settlementStatCard
+                }
+              >
+                <Text
+                  style={
+                    highlighted
+                      ? styles.settlementStatLabelHighlight
+                      : styles.settlementStatLabel
+                  }
+                >
+                  {label}
+                </Text>
+                <Text
+                  style={
+                    highlighted
+                      ? styles.settlementStatValueHighlight
+                      : styles.settlementStatValue
+                  }
+                >
+                  {formatMoney(value)}
+                </Text>
+              </View>
+            ))}
+          </View>
+          {settlementCycleStartIso ? (
+            <Text style={styles.orderRowMeta}>
+              الدورة الحالية من بعد آخر تسوية: {toShortDate(settlementCycleStartIso)}
+            </Text>
+          ) : null}
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.input}
+              value={cashBoxInput}
+              onChangeText={updateCashBoxInput}
+              keyboardType="decimal-pad"
+              placeholder="قيمة الصندوق"
+              placeholderTextColor="#d7b3c4"
+            />
+            <TextInput
+              style={styles.input}
+              value={sharesInput}
+              onChangeText={updateSharesInput}
+              keyboardType="decimal-pad"
+              placeholder="قيمة الحصص"
+              placeholderTextColor="#d7b3c4"
+            />
+          </View>
+          <TextInput
+            style={styles.inputFull}
+            value={actualRemainingInput}
+            onChangeText={setActualRemainingInput}
+            keyboardType="decimal-pad"
+            placeholder="المبلغ الفعلي المتبقي مع الكاشير"
+            placeholderTextColor="#d7b3c4"
+          />
+          <Text style={styles.orderRowMeta}>
+            صافي فرق جرد القطع: {formatMoney(auditNetSalesAmount)}
+          </Text>
+          <Text style={styles.orderRowMeta}>
+            المتبقي الذي سيرحل: {formatMoney(settlementCarryForwardAmount)}
+          </Text>
+          <Text
+            style={
+              settlementDifferenceAmount === 0
+                ? styles.settlementDiffNeutral
+                : settlementDifferenceAmount > 0
+                  ? styles.settlementDiffPositive
+                  : styles.settlementDiffNegative
+            }
+          >
+            فرق التسوية: {formatMoney(settlementDifferenceAmount)}
+          </Text>
+          {settlementOverDistributedAmount > 0 ? (
+            <Text style={styles.pendingText}>
+              تنبيه: المدخلات أعلى من المبلغ الفعلي بمقدار {formatMoney(settlementOverDistributedAmount)}.
+            </Text>
+          ) : null}
+          <TextInput
+            style={styles.inputFull}
+            value={settlementNoteInput}
+            onChangeText={setSettlementNoteInput}
+            placeholder="ملاحظة اليوم اختيارية"
+            placeholderTextColor="#d7b3c4"
+          />
+          <Pressable
+            style={styles.secondaryButton}
+            onPress={() => void submitDailySettlement()}
+          >
+            <Text style={styles.secondaryButtonText}>إغلاق اليوم وحفظ التسوية</Text>
+          </Pressable>
+        </View>
+      }
+      renderSectionHeader={({ section }) => (
+        <View style={styles.sectionHeaderInline}>
+          <Text style={styles.sectionTitle}>{sectionTitle(section)}</Text>
+          {section.key === "archive" ? (
+            <Pressable
+              style={styles.smallRefreshButton}
+              onPress={() =>
+                void refreshActiveScreenData({
+                  force: true,
+                  showIndicator: false,
+                })
+              }
+            >
+              <Text style={styles.smallRefreshText}>تحديث</Text>
+            </Pressable>
+          ) : null}
+          {section.data.length === 0 ? (
+            <Text style={styles.emptyText}>لا توجد بيانات مسجلة.</Text>
+          ) : null}
+        </View>
+      )}
+      renderItem={({ item, section }) => {
+        if (section.key === "sales") {
+          return (
+            <View style={styles.orderRow}>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowId}>{item.name}</Text>
+                <Text style={styles.orderRowItems}>
+                  {item.unitType === "KG" ? "كيلو" : "قطعة"}
+                </Text>
+              </View>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowMeta}>مباع: {item.soldQty}</Text>
+                <Text style={styles.orderRowMeta}>مرتجع: {item.refundedQty}</Text>
+              </View>
+              <Text style={styles.orderRowTotal}>{formatMoney(item.netAmount)}</Text>
+            </View>
+          );
+        }
 
-                      <Text style={styles.orderRowMeta}>
-                        المعادلة: (المبيعات - المرتجعات) - المصاريف - التوريدات
-                        - سحوبات الموظفين + الكاش المدوّر (بالموجب)
-                      </Text>
-                      {settlementCycleStartIso ? (
-                        <Text style={styles.orderRowMeta}>
-                          الدورة الحالية محسوبة من بعد آخر تسوية:{" "}
-                          {toShortDate(settlementCycleStartIso)}
-                        </Text>
-                      ) : null}
+        if (section.key === "destructionInput") {
+          return (
+            <View style={styles.orderRow}>
+              <Text style={styles.orderRowId}>{item.name}</Text>
+              <Text style={styles.orderRowMeta}>
+                المتاح: {formatQuantity(item.remainingQty)} {item.unitType === "KG" ? "كيلو" : "قطعة"}
+              </Text>
+              <TextInput
+                style={styles.inputFull}
+                value={inventoryDestructionInputs[item.productId] ?? ""}
+                onChangeText={(value) => updateInventoryDestructionInput(item.productId, value)}
+                keyboardType="decimal-pad"
+                placeholder="كمية الإتلاف"
+                placeholderTextColor="#d7b3c4"
+              />
+              <TextInput
+                style={styles.inputFull}
+                value={inventoryDestructionNoteInputs[item.productId] ?? ""}
+                onChangeText={(value) =>
+                  updateInventoryDestructionNoteInput(item.productId, value)
+                }
+                placeholder="سبب الإتلاف اختياري"
+                placeholderTextColor="#d7b3c4"
+              />
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={() => void recordInventoryDestruction(item.productId)}
+              >
+                <Text style={styles.secondaryButtonText}>إتلاف الكمية</Text>
+              </Pressable>
+            </View>
+          );
+        }
 
-                      <View style={styles.inputRow}>
-                        <TextInput
-                          style={styles.input}
-                          value={cashBoxInput}
-                          onChangeText={updateCashBoxInput}
-                          keyboardType="decimal-pad"
-                          placeholder="قيمة الصندوق"
-                          placeholderTextColor="#d7b3c4"
-                        />
-                        <TextInput
-                          style={styles.input}
-                          value={sharesInput}
-                          onChangeText={updateSharesInput}
-                          keyboardType="decimal-pad"
-                          placeholder="قيمة الحصص"
-                          placeholderTextColor="#d7b3c4"
-                        />
-                      </View>
-                      <TextInput
-                        style={styles.inputFull}
-                        value={actualRemainingInput}
-                        onChangeText={setActualRemainingInput}
-                        keyboardType="decimal-pad"
-                        placeholder="المبلغ المتبقي الفعلي مع الكاشير"
-                        placeholderTextColor="#d7b3c4"
-                      />
-                      <Text style={styles.orderRowMeta}>
-                        صافي فرق جرد القطع على المبيعات:{" "}
-                        {formatMoney(auditNetSalesAmount)}
-                      </Text>
-                      <Text style={styles.orderRowMeta}>
-                        المفروض قبل التوزيع بعد الجرد:{" "}
-                        {formatMoney(settlementExpectedRevenueAmount)}
-                      </Text>
-                      <Text style={styles.orderRowMeta}>
-                        المتبقي الذي سيُرحّل تلقائياً للمدوّر:{" "}
-                        {formatMoney(settlementCarryForwardAmount)}
-                      </Text>
-                      <Text
-                        style={
-                          settlementDifferenceAmount === 0
-                            ? styles.settlementDiffNeutral
-                            : settlementDifferenceAmount > 0
-                              ? styles.settlementDiffPositive
-                              : styles.settlementDiffNegative
-                        }
-                      >
-                        فرق التسوية (الفعلي مع الكاشير - المفروض قبل التوزيع):{" "}
-                        {formatMoney(settlementDifferenceAmount)}
-                      </Text>
-                      {settlementOverDistributedAmount > 0 ? (
-                        <Text style={styles.pendingText}>
-                          تنبيه: المدخلات (صندوق + حصص) أعلى من المبلغ الفعلي مع الكاشير بمقدار{" "}
-                          {formatMoney(settlementOverDistributedAmount)}.
-                        </Text>
-                      ) : null}
-                      <TextInput
-                        style={styles.inputFull}
-                        value={settlementNoteInput}
-                        onChangeText={setSettlementNoteInput}
-                        placeholder="ملاحظة اليوم (اختياري)"
-                        placeholderTextColor="#d7b3c4"
-                      />
+        if (section.key === "destructionHistory") {
+          return (
+            <View style={styles.orderRow}>
+              <Text style={styles.orderRowId}>{item.productName}</Text>
+              <Text style={styles.orderRowMeta}>
+                كمية متلفة: {formatQuantity(item.quantity)}
+              </Text>
+              <Text style={styles.orderRowMeta}>{toShortDate(item.destroyedAt)}</Text>
+              {item.note ? <Text style={styles.orderRowMeta}>{item.note}</Text> : null}
+            </View>
+          );
+        }
 
-                      <Text style={styles.storeTableTitle}>
-                        ملخص بيع المنتجات للدورة الحالية
-                      </Text>
-                      {settlementProductSalesSummaryRows.length === 0 ? (
-                        <Text style={styles.emptyText}>
-                          لا يوجد حركات بيع/إرجاع ضمن الدورة الحالية.
-                        </Text>
-                      ) : (
-                        settlementProductSalesSummaryRows.map((row) => (
-                          <View key={row.productId} style={styles.orderRow}>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowId}>{row.name}</Text>
-                              <Text style={styles.orderRowItems}>
-                                {row.unitType === "KG" ? "كيلو" : "قطعة"}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                مباع: {row.soldQty}
-                              </Text>
-                              <Text style={styles.orderRowMeta}>
-                                مرتجع: {row.refundedQty}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                صافي كمية: {row.netQty}
-                              </Text>
-                              <Text style={styles.orderRowTotal}>
-                                {formatMoney(row.netAmount)}
-                              </Text>
-                            </View>
-                          </View>
-                        ))
-                      )}
+        if (section.key === "audit") {
+          return (
+            <View style={styles.orderRow}>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowId}>{item.productName}</Text>
+                <Text style={styles.orderRowItems}>النظري: {item.expectedQty}</Text>
+              </View>
+              <TextInput
+                style={styles.inputFull}
+                value={settlementActualInputs[item.productId] ?? ""}
+                onChangeText={(value) => updateSettlementActualInput(item.productId, value)}
+                onBlur={() => {
+                  if (isAdmin) {
+                    void commitInventoryAdjustment(item.productId);
+                  }
+                }}
+                keyboardType="decimal-pad"
+                placeholder="العدد الفعلي"
+                placeholderTextColor="#d7b3c4"
+              />
+              {item.diffQty !== null ? (
+                <Text
+                  style={
+                    item.diffQty === 0
+                      ? styles.settlementDiffNeutral
+                      : item.diffQty > 0
+                        ? styles.settlementDiffPositive
+                        : styles.settlementDiffNegative
+                  }
+                >
+                  الفرق: {item.diffQty}
+                </Text>
+              ) : null}
+              {!isAdmin && item.adjustmentAmount !== null ? (
+                <Text style={styles.orderRowMeta}>
+                  قيمة الفرق: {formatMoney(item.adjustmentAmount)}
+                </Text>
+              ) : null}
+            </View>
+          );
+        }
 
-                      {isAdmin ? (
-                        <>
-                          <Text style={styles.storeTableTitle}>
-                            إتلاف من المخزون
-                          </Text>
-                          <Text style={styles.orderRowMeta}>
-                            سجّل كمية الإتلاف من الرصيد المتاح. الإتلاف ينقص
-                            المخزون فقط ولا يولّد بيعاً أو إرجاعاً ولا يغيّر فرق
-                            التسوية المالي.
-                          </Text>
-                          {productSupplyRows.length === 0 ? (
-                            <Text style={styles.emptyText}>
-                              لا توجد منتجات متاحة للإتلاف.
-                            </Text>
-                          ) : (
-                            productSupplyRows.map((row) => (
-                              <View
-                                key={`destruction-${row.productId}`}
-                                style={styles.orderRow}
-                              >
-                                <View style={styles.orderRowMain}>
-                                  <Text style={styles.orderRowId}>
-                                    {row.name}
-                                  </Text>
-                                  <Text style={styles.orderRowItems}>
-                                    المتاح: {formatQuantity(row.remainingQty)}{" "}
-                                    {row.unitType === "KG" ? "كيلو" : "قطعة"}
-                                  </Text>
-                                </View>
-                                <TextInput
-                                  style={styles.inputFull}
-                                  value={
-                                    inventoryDestructionInputs[row.productId] ??
-                                    ""
-                                  }
-                                  onChangeText={(value) =>
-                                    updateInventoryDestructionInput(
-                                      row.productId,
-                                      value,
-                                    )
-                                  }
-                                  keyboardType="decimal-pad"
-                                  placeholder="كمية الإتلاف"
-                                  placeholderTextColor="#d7b3c4"
-                                />
-                                <TextInput
-                                  style={styles.inputFull}
-                                  value={
-                                    inventoryDestructionNoteInputs[
-                                      row.productId
-                                    ] ?? ""
-                                  }
-                                  onChangeText={(value) =>
-                                    updateInventoryDestructionNoteInput(
-                                      row.productId,
-                                      value,
-                                    )
-                                  }
-                                  maxLength={500}
-                                  placeholder="سبب الإتلاف (اختياري)"
-                                  placeholderTextColor="#d7b3c4"
-                                />
-                                <Pressable
-                                  style={styles.secondaryButton}
-                                  onPress={() =>
-                                    void recordInventoryDestruction(
-                                      row.productId,
-                                    )
-                                  }
-                                >
-                                  <Text style={styles.secondaryButtonText}>
-                                    إتلاف الكمية
-                                  </Text>
-                                </Pressable>
-                              </View>
-                            ))
-                          )}
-                        </>
-                      ) : null}
-
-                      <Text style={styles.storeTableTitle}>
-                        المنتجات المتلفة في الدورة الحالية
-                      </Text>
-                      {settlementInventoryDestructionRows.length === 0 ? (
-                        <Text style={styles.emptyText}>
-                          لا توجد عمليات إتلاف مسجلة ضمن هذه الدورة.
-                        </Text>
-                      ) : (
-                        settlementInventoryDestructionRows.map((row) => (
-                          <View key={row.id} style={styles.orderRow}>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowId}>
-                                {row.productName}
-                              </Text>
-                              <Text style={styles.orderRowItems}>
-                                كمية متلفة: {formatQuantity(row.quantity)}{" "}
-                                {row.unitType === "KG" ? "كيلو" : "قطعة"}
-                              </Text>
-                            </View>
-                            <Text style={styles.orderRowMeta}>
-                              {toShortDate(row.destroyedAt)}
-                            </Text>
-                            {row.note ? (
-                              <Text style={styles.orderRowMeta}>
-                                {row.note}
-                              </Text>
-                            ) : null}
-                          </View>
-                        ))
-                      )}
-
-                      <Text style={styles.storeTableTitle}>
-                        تدقيق مخزون منتجات القطعة
-                      </Text>
-                      {isAdmin ? (
-                        <Text style={styles.orderRowMeta}>
-                          أدخل الرصيد الفعلي، ثم غادر الخانة لاعتماده كمخزون
-                          جديد. لا يُسجل كتوريد ولا يدخل في الحساب المالي
-                          للتسوية.
-                        </Text>
-                      ) : null}
-                      {pieceStockAuditRows.length === 0 ? (
-                        <Text style={styles.emptyText}>
-                          لا يوجد منتجات قطعة للتدقيق.
-                        </Text>
-                      ) : (
-                        pieceStockAuditRows.map((row) => (
-                          <View key={row.productId} style={styles.orderRow}>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowId}>
-                                {row.productName}
-                              </Text>
-                              <Text style={styles.orderRowItems}>
-                                المتبقي النظري: {row.expectedQty}
-                              </Text>
-                            </View>
-                            <TextInput
-                              style={styles.inputFull}
-                              value={
-                                settlementActualInputs[row.productId] ?? ""
-                              }
-                              onChangeText={(value) =>
-                                updateSettlementActualInput(
-                                  row.productId,
-                                  value,
-                                )
-                              }
-                              onBlur={() => {
-                                if (isAdmin) {
-                                  void commitInventoryAdjustment(row.productId);
-                                }
-                              }}
-                              keyboardType="decimal-pad"
-                              placeholder="أدخل العدد الفعلي (قطعة)"
-                              placeholderTextColor="#d7b3c4"
-                            />
-                            {row.diffQty !== null ? (
-                              <Text
-                                style={
-                                  row.diffQty === 0
-                                    ? styles.settlementDiffNeutral
-                                    : row.diffQty > 0
-                                      ? styles.settlementDiffPositive
-                                      : styles.settlementDiffNegative
-                                }
-                              >
-                                الفرق: {row.diffQty}
-                              </Text>
-                            ) : null}
-                            {!isAdmin && row.adjustmentAmount !== null ? (
-                              <Text style={styles.orderRowMeta}>
-                                قيمة الفرق المحتسبة على المبيعات:{" "}
-                                {formatMoney(row.adjustmentAmount)}
-                              </Text>
-                            ) : null}
-                          </View>
-                        ))
-                      )}
-
-                      <View style={styles.summaryRow}>
-                        {isAdmin ? (
-                          <Text style={styles.summaryText}>
-                            ضبط الأدمن يغيّر المخزون فقط، ولا ينشئ حركة بيع أو
-                            إرجاع ولا يغيّر التوريدات أو نتيجة التسوية.
-                          </Text>
-                        ) : (
-                          <Text style={styles.summaryText}>
-                            ملاحظة: الفرق الموجب يولد إرجاع تلقائي، والفرق
-                            السالب يولد بيع تلقائي وتُضاف قيمته للمبيعات بعد
-                            التحصيل.
-                          </Text>
-                        )}
-                      </View>
-
-                      <Pressable
-                        style={styles.secondaryButton}
-                        onPress={() => void submitDailySettlement()}
-                      >
-                        <Text style={styles.secondaryButtonText}>
-                          إغلاق اليوم وحفظ التسوية
-                        </Text>
-                      </Pressable>
-                    </View>
-
-                    <View style={styles.section}>
-                      <View style={styles.sectionHeaderInline}>
-                        <Text style={styles.sectionTitle}>
-                          أرشيف تسويات {selectedStore?.name ?? "الفرع"}
-                        </Text>
-                        <Pressable
-                          style={styles.smallRefreshButton}
-                          onPress={() => void refreshSettlementData()}
-                        >
-                          <Text style={styles.smallRefreshText}>تحديث</Text>
-                        </Pressable>
-                      </View>
-
-                      {settlementArchiveRows.length === 0 ? (
-                        <Text style={styles.emptyText}>
-                          لا يوجد تسويات مسجلة بعد.
-                        </Text>
-                      ) : (
-                        settlementArchiveRows.map((item) => (
-                          <Pressable
-                            key={item.clientClosureId}
-                            style={styles.settlementRow}
-                            onPress={() => openSettlementDetails(item)}
-                          >
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowId}>
-                                {item.businessDate}
-                              </Text>
-                              <Text
-                                style={
-                                  item.synced
-                                    ? styles.syncedText
-                                    : styles.pendingText
-                                }
-                              >
-                                {item.synced ? "متزامن" : "معلق"}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                مبيعات: {formatMoney(item.salesAmount)}
-                              </Text>
-                              <Text style={styles.orderRowMeta}>
-                                مرتجعات: {formatMoney(item.refundAmount)}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                فواتير: {item.ordersCount}
-                              </Text>
-                              <Text style={styles.orderRowMeta}>
-                                مصاريف: {item.expensesCount} ({formatMoney(item.expensesAmount)})
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                توريدات: {item.purchasesCount} ({formatMoney(item.purchasesAmount)})
-                              </Text>
-                              <Text style={styles.orderRowMeta}>
-                                دفعات: {formatMoney(item.paymentsAmount)}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                مدوّر داخل: {formatMoney(item.carryInAmount)}
-                              </Text>
-                              <Text style={styles.orderRowMeta}>
-                                وقت الإغلاق: {toShortDate(item.syncedAt)}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                صندوق: {formatMoney(item.cashBoxAmount)}
-                              </Text>
-                              <Text style={styles.orderRowMeta}>
-                                حصص: {formatMoney(item.sharesAmount)}
-                              </Text>
-                            </View>
-                            <View style={styles.orderRowMain}>
-                              <Text style={styles.orderRowMeta}>
-                                متبقي فعلي:{" "}
-                                {formatMoney(item.actualRemainingAmount)}
-                              </Text>
-                              <Text
-                                style={
-                                  item.differenceAmount === 0
-                                    ? styles.settlementDiffNeutral
-                                    : item.differenceAmount > 0
-                                      ? styles.settlementDiffPositive
-                                      : styles.settlementDiffNegative
-                                }
-                              >
-                                فرق: {formatMoney(item.differenceAmount)}
-                              </Text>
-                            </View>
-                            <Text style={styles.orderRowHint}>
-                              اضغط لعرض تفاصيل التسوية
-                            </Text>
-                          </Pressable>
-                        ))
-                      )}
-                    </View>
-                  </>
+        return (
+          <Pressable style={styles.settlementRow} onPress={() => openSettlementDetails(item)}>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowId}>{item.businessDate}</Text>
+              <Text style={item.synced ? styles.syncedText : styles.pendingText}>
+                {item.synced ? "متزامن" : "معلق"}
+              </Text>
+            </View>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowMeta}>مبيعات: {formatMoney(item.salesAmount)}</Text>
+              <Text style={styles.orderRowMeta}>مرتجعات: {formatMoney(item.refundAmount)}</Text>
+            </View>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowMeta}>فواتير: {item.ordersCount}</Text>
+              <Text style={styles.orderRowMeta}>مصاريف: {formatMoney(item.expensesAmount)}</Text>
+            </View>
+            <Text style={styles.orderRowHint}>اضغط لعرض تفاصيل التسوية</Text>
+          </Pressable>
+        );
+      }}
+    />
   );
 }

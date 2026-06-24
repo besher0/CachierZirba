@@ -2,7 +2,7 @@
 import { Text, View } from "react-native";
 
 import { styles } from "../views/appStyles";
-import { useAppScreenContext } from "./AppScreenContext";
+import { useAppShellContext } from "./AppScreenContext";
 
 export function StoreSwitcher() {
   const {
@@ -12,7 +12,7 @@ export function StoreSwitcher() {
     selectedStoreId,
     setSelectedStoreId,
     stores,
-  } = useAppScreenContext();
+  } = useAppShellContext();
 
   return (
     <View style={styles.storeRow}>

@@ -4,7 +4,10 @@ import { RefreshControl, ScrollView, View } from "react-native";
 import { TapSoundContext } from "./src/components/TapPressable";
 import { useAppController } from "./src/controllers/useAppController";
 import { styles } from "./src/views/appStyles";
-import { AppScreenContext } from "./src/screens/AppScreenContext";
+import {
+  AppScreenContext,
+  AppShellContext,
+} from "./src/screens/AppScreenContext";
 import { ActiveScreenContent } from "./src/screens/ActiveScreenContent";
 import { AppBackdrop } from "./src/screens/AppBackdrop";
 import { AppHeader } from "./src/screens/AppHeader";
@@ -18,6 +21,7 @@ import { StoreSwitcher } from "./src/screens/StoreSwitcher";
 export default function App() {
   const {
     appScreenContext,
+    appShellContext,
     isBootstrapping,
     session,
     playTapSound,
@@ -28,6 +32,14 @@ export default function App() {
     isRefreshingActiveScreen,
     refreshActiveScreenData,
   } = useAppController();
+  const activeScreenUsesVirtualizedList = [
+    "orders",
+    "expenses",
+    "purchases",
+    "settlement",
+  ].includes(
+    appScreenContext.activeScreen as string,
+  );
 
   if (isBootstrapping) {
     return (
@@ -49,7 +61,8 @@ export default function App() {
 
   return (
     <TapSoundContext.Provider value={playTapSound}>
-      <AppScreenContext.Provider value={appScreenContext}>
+      <AppShellContext.Provider value={appShellContext}>
+        <AppScreenContext.Provider value={appScreenContext}>
         <View style={styles.flexOne}>
           <View style={styles.appRoot}>
             <StatusBar style="dark" />
@@ -68,20 +81,29 @@ export default function App() {
                 {appScreenContext.activeScreen !== "pos" && <StoreSwitcher />}
                 <MobilePageIndicator />
 
-                <ScrollView
-                  contentContainerStyle={styles.content}
-                  scrollEnabled={!isPosProductReordering}
-                  refreshControl={
-                    <RefreshControl
-                      refreshing={isRefreshingActiveScreen}
-                      onRefresh={() => void refreshActiveScreenData()}
-                      tintColor="#831843"
-                      colors={["#831843"]}
-                    />
-                  }
-                >
+                {activeScreenUsesVirtualizedList ? (
                   <ActiveScreenContent />
-                </ScrollView>
+                ) : (
+                  <ScrollView
+                    contentContainerStyle={styles.content}
+                    scrollEnabled={!isPosProductReordering}
+                    refreshControl={
+                      <RefreshControl
+                        refreshing={isRefreshingActiveScreen}
+                        onRefresh={() =>
+                          void refreshActiveScreenData({
+                            force: true,
+                            showIndicator: true,
+                          })
+                        }
+                        tintColor="#831843"
+                        colors={["#831843"]}
+                      />
+                    }
+                  >
+                    <ActiveScreenContent />
+                  </ScrollView>
+                )}
               </View>
 
               <DesktopSidebar />
@@ -90,7 +112,8 @@ export default function App() {
             <AppOverlays />
           </View>
         </View>
-      </AppScreenContext.Provider>
+        </AppScreenContext.Provider>
+      </AppShellContext.Provider>
     </TapSoundContext.Provider>
   );
 }

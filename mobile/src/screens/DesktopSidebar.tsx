@@ -2,7 +2,7 @@
 import { ScrollView, Text, View } from "react-native";
 
 import { styles } from "../views/appStyles";
-import { useAppScreenContext } from "./AppScreenContext";
+import { useAppShellContext } from "./AppScreenContext";
 
 export function DesktopSidebar() {
   const {
@@ -13,7 +13,7 @@ export function DesktopSidebar() {
     isDesktop,
     navItems,
     setActiveScreen,
-  } = useAppScreenContext();
+  } = useAppShellContext();
 
   return (
     <>

@@ -198,6 +198,7 @@ export const STORAGE_KEYS = {
   employeeWithdrawals: 'zirba.cached.employeeWithdrawals.v1',
   cashCarryByStore: 'zirba.cached.cashCarryByStore.v1',
   syncQueue: 'zirba.sync.queue.v1',
+  refreshTimestamps: 'zirba.refresh.timestamps.v1',
 } as const;
 
 export const FALLBACK_STORES: Store[] = [

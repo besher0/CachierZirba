@@ -2,10 +2,10 @@
 import { Text, View } from "react-native";
 
 import { styles } from "../views/appStyles";
-import { useAppScreenContext } from "./AppScreenContext";
+import { useAppShellContext } from "./AppScreenContext";
 
 export function MobilePageIndicator() {
-  const { activeScreenLabel, showPageSwitchControls } = useAppScreenContext();
+  const { activeScreenLabel, showPageSwitchControls } = useAppShellContext();
 
   return (
     <>

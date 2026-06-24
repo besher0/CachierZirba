@@ -2,7 +2,7 @@
 import { Text, View } from "react-native";
 
 import { styles } from "../views/appStyles";
-import { useAppScreenContext } from "./AppScreenContext";
+import { useAppShellContext } from "./AppScreenContext";
 
 export function AppHeader() {
   const {
@@ -17,7 +17,7 @@ export function AppHeader() {
     session,
     setActiveScreen,
     toggleMobileNav,
-  } = useAppScreenContext();
+  } = useAppShellContext();
 
   return (
     <View style={[styles.headerRow, !isDesktop && styles.headerRowMobile]}>
