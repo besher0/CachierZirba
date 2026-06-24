@@ -20,6 +20,7 @@ import {
   Animated,
   AppState,
   Image,
+  InteractionManager,
   Modal,
   PanResponder,
   Platform,
@@ -348,10 +349,19 @@ export function useAppController() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isRefreshingActiveScreen, setIsRefreshingActiveScreen] =
     useState(false);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [isSavingTawasi, setIsSavingTawasi] = useState(false);
+  const [isSavingSupplyPayment, setIsSavingSupplyPayment] = useState(false);
+  const [pendingPurchaseDeleteIds, setPendingPurchaseDeleteIds] = useState<
+    Record<string, true>
+  >({});
   const isSyncingRef = useRef(false);
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const hasLoadedCashCarryRef = useRef(false);
+  const deferredArrayPersistenceRef = useRef<
+    Map<string, { timeout: ReturnType<typeof setTimeout>; value: unknown[] }>
+  >(new Map());
   const refreshTimestampsRef = useRef<RefreshTimestamps>({});
   const resourceRefreshPromisesRef = useRef<Map<string, Promise<boolean>>>(
     new Map(),
@@ -1044,28 +1054,26 @@ export function useAppController() {
     const expensesByDate = new Map<string, ExpenseRow[]>();
     const purchasesByDate = new Map<string, PurchaseRow[]>();
     const withdrawals = new Map<string, EmployeeWithdrawalEntry[]>();
+    const append = <T,>(map: Map<string, T[]>, key: string, value: T) => {
+      const rows = map.get(key);
+      if (rows) {
+        rows.push(value);
+        return;
+      }
+      map.set(key, [value]);
+    };
 
     allMergedOrderRows.forEach((item) => {
-      const date = toBusinessDateFromTimestamp(item.orderedAt);
-      orders.set(date, [...(orders.get(date) ?? []), item]);
+      append(orders, toBusinessDateFromTimestamp(item.orderedAt), item);
     });
     mergedExpenseRows.forEach((item) => {
-      expensesByDate.set(item.expenseDate, [
-        ...(expensesByDate.get(item.expenseDate) ?? []),
-        item,
-      ]);
+      append(expensesByDate, item.expenseDate, item);
     });
     mergedPurchaseRows.forEach((item) => {
-      purchasesByDate.set(item.purchaseDate, [
-        ...(purchasesByDate.get(item.purchaseDate) ?? []),
-        item,
-      ]);
+      append(purchasesByDate, item.purchaseDate, item);
     });
     selectedStoreWithdrawals.forEach((item) => {
-      withdrawals.set(item.withdrawalDate, [
-        ...(withdrawals.get(item.withdrawalDate) ?? []),
-        item,
-      ]);
+      append(withdrawals, item.withdrawalDate, item);
     });
 
     return { orders, expenses: expensesByDate, purchases: purchasesByDate, withdrawals };
@@ -2116,6 +2124,48 @@ export function useAppController() {
     [logout],
   );
 
+  const persistArrayDeferred = useCallback((key: string, value: unknown[]) => {
+    const previous = deferredArrayPersistenceRef.current.get(key);
+    if (previous) {
+      clearTimeout(previous.timeout);
+    }
+
+    const timeout = setTimeout(() => {
+      const pending = deferredArrayPersistenceRef.current.get(key);
+      if (!pending || pending.timeout !== timeout) {
+        return;
+      }
+
+      deferredArrayPersistenceRef.current.delete(key);
+      InteractionManager.runAfterInteractions(() => {
+        void saveArray(key, pending.value);
+      });
+    }, 350);
+
+    deferredArrayPersistenceRef.current.set(key, { timeout, value });
+  }, []);
+
+  const flushDeferredArrayPersistence = useCallback(() => {
+    deferredArrayPersistenceRef.current.forEach(({ timeout, value }, key) => {
+      clearTimeout(timeout);
+      void saveArray(key, value);
+    });
+    deferredArrayPersistenceRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        flushDeferredArrayPersistence();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+      flushDeferredArrayPersistence();
+    };
+  }, [flushDeferredArrayPersistence]);
+
   const markOrderSynced = useCallback((referenceId: string) => {
     setOrders((previous) => {
       const next = previous.map((order) =>
@@ -2123,10 +2173,10 @@ export function useAppController() {
           ? { ...order, synced: true }
           : order,
       );
-      void saveArray(STORAGE_KEYS.orders, next);
+      persistArrayDeferred(STORAGE_KEYS.orders, next);
       return next;
     });
-  }, []);
+  }, [persistArrayDeferred]);
 
   const markSettlementSynced = useCallback((referenceId: string) => {
     setDailySettlements((previous) => {
@@ -2153,10 +2203,10 @@ export function useAppController() {
       const next = previous.filter(
         (item) => item.clientPurchaseId !== referenceId,
       );
-      void saveArray(STORAGE_KEYS.purchases, next);
+      persistArrayDeferred(STORAGE_KEYS.purchases, next);
       return next;
     });
-  }, []);
+  }, [persistArrayDeferred]);
 
   const replaceRemotePurchases = useCallback((data: ApiPurchase[]) => {
     const remoteIds = new Set(data.map((item) => item.clientPurchaseId));
@@ -2166,10 +2216,43 @@ export function useAppController() {
         (item) => item.synced !== true && !remoteIds.has(item.clientPurchaseId),
       );
       if (next.length !== previous.length) {
-        void saveArray(STORAGE_KEYS.purchases, next);
+        persistArrayDeferred(STORAGE_KEYS.purchases, next);
       }
       return next;
     });
+  }, [persistArrayDeferred]);
+
+  const upsertRemoteOrder = useCallback((order: ApiOrder) => {
+    setRemoteOrders((previous) => {
+      const rows = new Map(previous.map((item) => [item.clientOrderId, item]));
+      rows.set(order.clientOrderId, order);
+      return Array.from(rows.values()).sort((a, b) =>
+        b.orderedAt.localeCompare(a.orderedAt),
+      );
+    });
+  }, []);
+
+  const upsertRemotePurchase = useCallback((purchase: ApiPurchase) => {
+    setRemotePurchases((previous) => {
+      const rows = new Map(
+        previous.map((item) => [item.clientPurchaseId, item]),
+      );
+      rows.set(purchase.clientPurchaseId, purchase);
+      return Array.from(rows.values()).sort((a, b) => {
+        const dateCompare = b.purchaseDate.localeCompare(a.purchaseDate);
+        return dateCompare !== 0
+          ? dateCompare
+          : b.createdAt.localeCompare(a.createdAt);
+      });
+    });
+  }, []);
+
+  const removeRemotePurchase = useCallback((clientPurchaseId: string) => {
+    setRemotePurchases((previous) =>
+      previous.filter(
+        (item) => item.clientPurchaseId !== clientPurchaseId,
+      ),
+    );
   }, []);
 
   const markProductSynced = useCallback((referenceId: string) => {
@@ -4170,6 +4253,10 @@ export function useAppController() {
   };
 
   const addTawasiSupplyFromPad = async () => {
+    if (isSubmittingOrder) {
+      return;
+    }
+
     if (!posPadInput.trim()) {
       setStatusMessage("أدخل مبلغ التواصي من لوحة الأرقام أولاً.");
       return;
@@ -4194,6 +4281,7 @@ export function useAppController() {
       return;
     }
 
+    setIsSubmittingOrder(true);
     const orderedAt = new Date().toISOString();
     const clientOrderId = makeId("order");
     const payload: CreateOrderPayload = {
@@ -4225,7 +4313,7 @@ export function useAppController() {
 
     setOrders((previous) => {
       const next = [localOrder, ...previous];
-      void saveArray(STORAGE_KEYS.orders, next);
+      persistArrayDeferred(STORAGE_KEYS.orders, next);
       return next;
     });
 
@@ -4246,10 +4334,10 @@ export function useAppController() {
 
     if (isOnline && authToken) {
       try {
-        await postOrder(authToken, payload);
+        const remoteOrder = await postOrder(authToken, payload);
         markOrderSynced(clientOrderId);
-        void refreshDashboardData();
-        void refreshOrdersData();
+        upsertRemoteOrder(remoteOrder as ApiOrder);
+        setIsSubmittingOrder(false);
         setStatusMessage(
           `تم تسجيل تواصي بقيمة ${formatMoney(tawasiAmount)} كبيع مباشر.`,
         );
@@ -4258,16 +4346,19 @@ export function useAppController() {
         enqueueJob(syncJob);
 
         if (error instanceof ApiError && error.status === 401) {
+          setIsSubmittingOrder(false);
           logout("انتهت الجلسة وتم حفظ بيع التواصي محلياً لحين تسجيل الدخول.");
           return;
         }
 
+        setIsSubmittingOrder(false);
         setStatusMessage("تم حفظ بيع التواصي محلياً بانتظار المزامنة.");
         return;
       }
     }
 
     enqueueJob(syncJob);
+    setIsSubmittingOrder(false);
     setStatusMessage("لا يوجد إنترنت: تم تخزين بيع التواصي محلياً.");
   };
 
@@ -4326,6 +4417,10 @@ export function useAppController() {
   };
 
   const submitOrder = async () => {
+    if (isSubmittingOrder) {
+      return;
+    }
+
     if (!session) {
       setStatusMessage('سجّل الدخول أولاً.');
       return;
@@ -4342,6 +4437,7 @@ export function useAppController() {
       return;
     }
 
+    setIsSubmittingOrder(true);
     const orderedAt = new Date().toISOString();
     const clientOrderId = makeId('order');
     const payload: CreateOrderPayload = {
@@ -4371,7 +4467,7 @@ export function useAppController() {
 
     setOrders((previous) => {
       const next = [localOrder, ...previous];
-      void saveArray(STORAGE_KEYS.orders, next);
+      persistArrayDeferred(STORAGE_KEYS.orders, next);
       return next;
     });
 
@@ -4394,26 +4490,29 @@ export function useAppController() {
 
     if (isOnline && authToken) {
       try {
-        await postOrder(authToken, payload);
+        const remoteOrder = await postOrder(authToken, payload);
         markOrderSynced(clientOrderId);
+        upsertRemoteOrder(remoteOrder as ApiOrder);
+        setIsSubmittingOrder(false);
         setStatusMessage('تم تسجيل الطلب في السيرفر مباشرة.');
-        void refreshDashboardData();
-        void refreshOrdersData();
         return;
       } catch (error: unknown) {
         enqueueJob(syncJob);
 
         if (error instanceof ApiError && error.status === 401) {
+          setIsSubmittingOrder(false);
           logout('انتهت الجلسة وتم حفظ الطلب محلياً لحين تسجيل الدخول.');
           return;
         }
 
+        setIsSubmittingOrder(false);
         setStatusMessage('تم حفظ الطلب محلياً وسيتم رفعه عند استقرار الاتصال.');
         return;
       }
     }
 
     enqueueJob(syncJob);
+    setIsSubmittingOrder(false);
     setStatusMessage('الإنترنت غير متاح: تم تخزين الطلب محلياً في انتظار المزامنة.');
   };
 
@@ -4468,7 +4567,7 @@ export function useAppController() {
     if (adjustmentRecords.length > 0) {
       setOrders((previous) => {
         const next = [...adjustmentRecords, ...previous];
-        void saveArray(STORAGE_KEYS.orders, next);
+        persistArrayDeferred(STORAGE_KEYS.orders, next);
         return next;
       });
     }
@@ -5221,7 +5320,7 @@ export function useAppController() {
 
     setPurchases((previous) => {
       const next = [...localRecords, ...previous];
-      void saveArray(STORAGE_KEYS.purchases, next);
+      persistArrayDeferred(STORAGE_KEYS.purchases, next);
       return next;
     });
 
@@ -5264,8 +5363,9 @@ export function useAppController() {
 
       if (isOnline && authToken) {
         try {
-          await postPurchase(authToken, payload);
+          const remotePurchase = await postPurchase(authToken, payload);
           markPurchaseSynced(record.clientPurchaseId);
+          upsertRemotePurchase(remotePurchase as ApiPurchase);
           syncedCount += 1;
           continue;
         } catch (error: unknown) {
@@ -5286,7 +5386,6 @@ export function useAppController() {
     }
 
     if (isOnline && authToken && queuedCount === 0) {
-      void refreshSettlementData();
       setStatusMessage(`تم استلام ${syncedCount} توريد اليوم على السيرفر.`);
       return;
     }
@@ -5300,6 +5399,10 @@ export function useAppController() {
   };
 
   const registerTawasiSupply = async () => {
+    if (isSavingTawasi) {
+      return;
+    }
+
     if (!session) {
       setStatusMessage('سجّل الدخول أولاً.');
       return;
@@ -5323,6 +5426,7 @@ export function useAppController() {
       return;
     }
 
+    setIsSavingTawasi(true);
     const nowDate = new Date();
     const now = nowDate.toISOString();
     const payload: CreatePurchasePayload = {
@@ -5349,7 +5453,7 @@ export function useAppController() {
 
     setPurchases((previous) => {
       const next = [localRecord, ...previous];
-      void saveArray(STORAGE_KEYS.purchases, next);
+      persistArrayDeferred(STORAGE_KEYS.purchases, next);
       return next;
     });
 
@@ -5368,29 +5472,37 @@ export function useAppController() {
 
     if (isOnline && authToken) {
       try {
-        await postPurchase(authToken, payload);
+        const remotePurchase = await postPurchase(authToken, payload);
         markPurchaseSynced(localRecord.clientPurchaseId);
-        void refreshPurchasesData();
+        upsertRemotePurchase(remotePurchase as ApiPurchase);
+        setIsSavingTawasi(false);
         setStatusMessage('تم تسجيل التواصي على السيرفر.');
         return;
       } catch (error: unknown) {
         enqueueJob(syncJob);
 
         if (error instanceof ApiError && error.status === 401) {
+          setIsSavingTawasi(false);
           logout('انتهت الجلسة وتم حفظ التواصي محلياً لحين تسجيل الدخول.');
           return;
         }
 
+        setIsSavingTawasi(false);
         setStatusMessage('تم حفظ التواصي محلياً بانتظار المزامنة.');
         return;
       }
     }
 
     enqueueJob(syncJob);
+    setIsSavingTawasi(false);
     setStatusMessage('لا يوجد إنترنت: تم تخزين التواصي محلياً.');
   };
 
   const registerSupplyPayment = async () => {
+    if (isSavingSupplyPayment) {
+      return;
+    }
+
     if (!session) {
       setStatusMessage('سجّل الدخول أولاً.');
       return;
@@ -5413,6 +5525,7 @@ export function useAppController() {
       return;
     }
 
+    setIsSavingSupplyPayment(true);
     const nowDate = new Date();
     const now = nowDate.toISOString();
     const payload: CreatePurchasePayload = {
@@ -5437,7 +5550,7 @@ export function useAppController() {
 
     setPurchases((previous) => {
       const next = [localRecord, ...previous];
-      void saveArray(STORAGE_KEYS.purchases, next);
+      persistArrayDeferred(STORAGE_KEYS.purchases, next);
       return next;
     });
     setSupplyPaymentAmountInput('');
@@ -5455,23 +5568,27 @@ export function useAppController() {
 
     if (isOnline && authToken) {
       try {
-        await postPurchase(authToken, payload);
+        const remotePurchase = await postPurchase(authToken, payload);
         markPurchaseSynced(localRecord.clientPurchaseId);
-        void refreshPurchasesData();
+        upsertRemotePurchase(remotePurchase as ApiPurchase);
+        setIsSavingSupplyPayment(false);
         setStatusMessage('تم تسجيل دفعة فاتورة التوريدات من دون احتسابها في التسوية.');
         return;
       } catch (error: unknown) {
         enqueueJob(syncJob);
         if (error instanceof ApiError && error.status === 401) {
+          setIsSavingSupplyPayment(false);
           logout('انتهت الجلسة وتم حفظ الدفعة محلياً.');
           return;
         }
+        setIsSavingSupplyPayment(false);
         setStatusMessage('تم حفظ الدفعة محلياً بانتظار المزامنة.');
         return;
       }
     }
 
     enqueueJob(syncJob);
+    setIsSavingSupplyPayment(false);
     setStatusMessage('لا يوجد إنترنت: تم تخزين الدفعة محلياً.');
   };
 
@@ -5481,10 +5598,25 @@ export function useAppController() {
       return;
     }
 
+    if (pendingPurchaseDeleteIds[clientPurchaseId]) {
+      return;
+    }
+
+    setPendingPurchaseDeleteIds((previous) => ({
+      ...previous,
+      [clientPurchaseId]: true,
+    }));
+    const finishDelete = () => {
+      setPendingPurchaseDeleteIds((previous) => {
+        const { [clientPurchaseId]: _, ...next } = previous;
+        return next;
+      });
+    };
+
     const now = new Date().toISOString();
     setPurchases((previous) => {
       const next = previous.filter((item) => item.clientPurchaseId !== clientPurchaseId);
-      void saveArray(STORAGE_KEYS.purchases, next);
+      persistArrayDeferred(STORAGE_KEYS.purchases, next);
       return next;
     });
 
@@ -5501,17 +5633,20 @@ export function useAppController() {
     if (isOnline && authToken) {
       try {
         await deletePurchase(authToken, clientPurchaseId);
-        void refreshPurchasesData();
+        removeRemotePurchase(clientPurchaseId);
+        finishDelete();
         setStatusMessage('تم حذف التوريد من السيرفر.');
         return;
       } catch {
         enqueueJob(syncJob);
+        finishDelete();
         setStatusMessage('تم حذف التوريد محلياً بانتظار المزامنة.');
         return;
       }
     }
 
     enqueueJob(syncJob);
+    finishDelete();
     setStatusMessage('تم حذف التوريد محلياً بانتظار المزامنة.');
   };
 
@@ -6407,6 +6542,9 @@ export function useAppController() {
     isProductFormOpen,
     isRefundMode,
     isRefreshingActiveScreen,
+    isSavingSupplyPayment,
+    isSavingTawasi,
+    isSubmittingOrder,
     isTodayPurchasesInvoiceOpen,
     isSyncing,
     loginUser,
@@ -6433,6 +6571,7 @@ export function useAppController() {
     orders,
     padAmountPreview,
     passwordInput,
+    pendingPurchaseDeleteIds,
     pendingMultiplier,
     pickExpenseImage,
     pieceStockAuditRows,

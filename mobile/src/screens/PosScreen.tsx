@@ -99,6 +99,7 @@ export function PosScreen() {
     isPosProductReordering,
     isPosSplit,
     isRefundMode,
+    isSubmittingOrder,
     item,
     itemHeight,
     key,
@@ -552,10 +553,16 @@ export function PosScreen() {
                             <Text style={styles.padActionText}>المنوعات</Text>
                           </Pressable>
                           <Pressable
-                            style={styles.padActionButton}
+                            style={[
+                              styles.padActionButton,
+                              isSubmittingOrder && styles.buttonDisabled,
+                            ]}
+                            disabled={isSubmittingOrder}
                             onPress={() => void addTawasiSupplyFromPad()}
                           >
-                            <Text style={styles.padActionText}>تواصي</Text>
+                            <Text style={styles.padActionText}>
+                              {isSubmittingOrder ? "جار الحفظ..." : "تواصي"}
+                            </Text>
                           </Pressable>
                           <Pressable
                             style={styles.padActionButton}
@@ -671,11 +678,19 @@ export function PosScreen() {
                         </View>
 
                         <Pressable
-                          style={styles.primaryButton}
+                          style={[
+                            styles.primaryButton,
+                            isSubmittingOrder && styles.buttonDisabled,
+                          ]}
+                          disabled={isSubmittingOrder}
                           onPress={() => void submitOrder()}
                         >
                           <Text style={styles.primaryButtonText}>
-                            {isRefundMode ? "تسجيل إرجاع" : "حفظ الطلب"}
+                            {isSubmittingOrder
+                              ? "جار الحفظ..."
+                              : isRefundMode
+                                ? "تسجيل إرجاع"
+                                : "حفظ الطلب"}
                           </Text>
                         </Pressable>
                         <Pressable

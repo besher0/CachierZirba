@@ -20,6 +20,8 @@ export function PurchasesScreen() {
     isAdmin,
     isProductFormOpen,
     isRefreshingActiveScreen,
+    isSavingSupplyPayment,
+    isSavingTawasi,
     newProductCostPriceInput,
     newProductNameInput,
     newProductSellPriceInput,
@@ -28,6 +30,7 @@ export function PurchasesScreen() {
     openProductCreateForm,
     productEditingId,
     productSupplyRows,
+    pendingPurchaseDeleteIds,
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
@@ -262,10 +265,19 @@ export function PurchasesScreen() {
             {canManageInventory ? (
               <View style={styles.rowActionButtons}>
                 <Pressable
-                  style={styles.dangerButton}
+                  style={[
+                    styles.dangerButton,
+                    pendingPurchaseDeleteIds[item.clientPurchaseId] &&
+                      styles.buttonDisabled,
+                  ]}
+                  disabled={Boolean(pendingPurchaseDeleteIds[item.clientPurchaseId])}
                   onPress={() => void deletePurchaseRecord(item.clientPurchaseId)}
                 >
-                  <Text style={styles.dangerButtonText}>حذف</Text>
+                  <Text style={styles.dangerButtonText}>
+                    {pendingPurchaseDeleteIds[item.clientPurchaseId]
+                      ? "جار الحذف..."
+                      : "حذف"}
+                  </Text>
                 </Pressable>
               </View>
             ) : null}
@@ -342,12 +354,14 @@ export function PurchasesScreen() {
             <Pressable
               style={[
                 styles.supplyActionButtonPrimary,
-                !canManageInventory && styles.buttonDisabled,
+                (!canManageInventory || isSavingTawasi) && styles.buttonDisabled,
               ]}
-              disabled={!canManageInventory}
+              disabled={!canManageInventory || isSavingTawasi}
               onPress={() => void registerTawasiSupply()}
             >
-              <Text style={styles.supplyActionButtonTextPrimary}>تسجيل تواصي</Text>
+              <Text style={styles.supplyActionButtonTextPrimary}>
+                {isSavingTawasi ? "جار الحفظ..." : "تسجيل تواصي"}
+              </Text>
             </Pressable>
           </View>
 
@@ -373,12 +387,15 @@ export function PurchasesScreen() {
             <Pressable
               style={[
                 styles.supplyActionButtonPrimary,
-                !canManageInventory && styles.buttonDisabled,
+                (!canManageInventory || isSavingSupplyPayment) &&
+                  styles.buttonDisabled,
               ]}
-              disabled={!canManageInventory}
+              disabled={!canManageInventory || isSavingSupplyPayment}
               onPress={() => void registerSupplyPayment()}
             >
-              <Text style={styles.supplyActionButtonTextPrimary}>تسجيل الدفعة</Text>
+              <Text style={styles.supplyActionButtonTextPrimary}>
+                {isSavingSupplyPayment ? "جار الحفظ..." : "تسجيل الدفعة"}
+              </Text>
             </Pressable>
           </View>
 
