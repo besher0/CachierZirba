@@ -876,6 +876,20 @@ export function mergeSyncJobs(
   inFlightJobIds: ReadonlySet<string> = new Set(),
 ): SyncJob[] {
   const entity = incoming.entity ?? incoming.type;
+
+  if (entity === "ORDER") {
+    const existingOrderJob = previous.find((job) => {
+      const jobEntity = job.entity ?? job.type;
+      return jobEntity === "ORDER" && job.referenceId === incoming.referenceId;
+    });
+
+    if (!existingOrderJob) {
+      return [...previous, incoming];
+    }
+
+    return previous;
+  }
+
   if (
     entity !== "EXPENSE" &&
     entity !== "PURCHASE" &&

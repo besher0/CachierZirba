@@ -239,6 +239,33 @@ interface TodayPurchasePaymentRow {
   synced: boolean;
 }
 
+function buildOrderCreateSyncJob(order: LocalOrder): SyncJob {
+  const payload: CreateOrderPayload = {
+    clientOrderId: order.clientOrderId,
+    storeId: order.storeId,
+    cashierName: order.cashierName,
+    status: order.status,
+    paymentMethod: order.paymentMethod,
+    subtotal: order.subtotal,
+    discount: order.discount,
+    tax: order.tax,
+    total: order.total,
+    items: order.items,
+    orderedAt: order.orderedAt,
+    note: order.note,
+  };
+
+  return {
+    id: makeId("job"),
+    referenceId: order.clientOrderId,
+    retries: 0,
+    createdAt: order.createdLocallyAt || order.orderedAt,
+    entity: "ORDER",
+    action: "CREATE",
+    payload,
+  };
+}
+
 class UnsupportedSyncOperationError extends Error {}
 
 function escapeHtml(value: unknown): string {
@@ -356,8 +383,10 @@ export function useAppController() {
     Record<string, true>
   >({});
   const isSyncingRef = useRef(false);
+  const isBuildingOrderRef = useRef(false);
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  const ordersPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const hasLoadedCashCarryRef = useRef(false);
   const deferredArrayPersistenceRef = useRef<
     Map<string, { timeout: ReturnType<typeof setTimeout>; value: unknown[] }>
@@ -2166,6 +2195,19 @@ export function useAppController() {
     };
   }, [flushDeferredArrayPersistence]);
 
+  const persistOrders = useCallback((next: LocalOrder[]) => {
+    ordersPersistenceRef.current = ordersPersistenceRef.current
+      .catch(() => undefined)
+      .then(() => saveArray(STORAGE_KEYS.orders, next));
+  }, []);
+
+  const releaseOrderBuildLock = useCallback(() => {
+    setTimeout(() => {
+      isBuildingOrderRef.current = false;
+      setIsSubmittingOrder(false);
+    }, 200);
+  }, []);
+
   const markOrderSynced = useCallback((referenceId: string) => {
     setOrders((previous) => {
       const next = previous.map((order) =>
@@ -2173,10 +2215,10 @@ export function useAppController() {
           ? { ...order, synced: true }
           : order,
       );
-      persistArrayDeferred(STORAGE_KEYS.orders, next);
+      persistOrders(next);
       return next;
     });
-  }, [persistArrayDeferred]);
+  }, [persistOrders]);
 
   const markSettlementSynced = useCallback((referenceId: string) => {
     setDailySettlements((previous) => {
@@ -3437,6 +3479,12 @@ export function useAppController() {
           .map(correctCachedPurchaseDate)
           .filter((item) => item.synced !== true);
         const correctedQueue = cachedQueue.map(correctPurchaseSyncJobDate);
+        const recoveredQueue = cachedOrders
+          .filter((order) => order.synced !== true)
+          .reduce<SyncJob[]>(
+            (next, order) => mergeSyncJobs(next, buildOrderCreateSyncJob(order)),
+            correctedQueue,
+          );
         if (
           correctedPurchases.length !== cachedPurchases.length ||
           correctedPurchases.some(
@@ -3446,9 +3494,10 @@ export function useAppController() {
           await saveArray(STORAGE_KEYS.purchases, correctedPurchases);
         }
         if (
-          correctedQueue.some((item, index) => item !== cachedQueue[index])
+          recoveredQueue.length !== cachedQueue.length ||
+          recoveredQueue.some((item, index) => item !== cachedQueue[index])
         ) {
-          await saveArray(STORAGE_KEYS.syncQueue, correctedQueue);
+          await saveArray(STORAGE_KEYS.syncQueue, recoveredQueue);
         }
         const scopedStores =
           cachedSession?.user.role === "CASHIER" && cachedSession.user.storeId
@@ -3493,7 +3542,7 @@ export function useAppController() {
         hasLoadedCashCarryRef.current = true;
         setCashCarryByStore(cachedCashCarryByStore ?? {});
         setProductOrderByStore(cachedProductOrderByStore ?? {});
-        setQueue(correctedQueue);
+        setQueue(recoveredQueue);
         refreshTimestampsRef.current = cachedRefreshTimestamps ?? {};
         setSelectedStoreId(initialStoreId);
       } catch {
@@ -4253,7 +4302,7 @@ export function useAppController() {
   };
 
   const addTawasiSupplyFromPad = async () => {
-    if (isSubmittingOrder) {
+    if (isBuildingOrderRef.current) {
       return;
     }
 
@@ -4281,6 +4330,7 @@ export function useAppController() {
       return;
     }
 
+    isBuildingOrderRef.current = true;
     setIsSubmittingOrder(true);
     const orderedAt = new Date().toISOString();
     const clientOrderId = makeId("order");
@@ -4313,7 +4363,7 @@ export function useAppController() {
 
     setOrders((previous) => {
       const next = [localOrder, ...previous];
-      persistArrayDeferred(STORAGE_KEYS.orders, next);
+      persistOrders(next);
       return next;
     });
 
@@ -4332,34 +4382,13 @@ export function useAppController() {
       payload,
     };
 
-    if (isOnline && authToken) {
-      try {
-        const remoteOrder = await postOrder(authToken, payload);
-        markOrderSynced(clientOrderId);
-        upsertRemoteOrder(remoteOrder as ApiOrder);
-        setIsSubmittingOrder(false);
-        setStatusMessage(
-          `تم تسجيل تواصي بقيمة ${formatMoney(tawasiAmount)} كبيع مباشر.`,
-        );
-        return;
-      } catch (error: unknown) {
-        enqueueJob(syncJob);
-
-        if (error instanceof ApiError && error.status === 401) {
-          setIsSubmittingOrder(false);
-          logout("انتهت الجلسة وتم حفظ بيع التواصي محلياً لحين تسجيل الدخول.");
-          return;
-        }
-
-        setIsSubmittingOrder(false);
-        setStatusMessage("تم حفظ بيع التواصي محلياً بانتظار المزامنة.");
-        return;
-      }
-    }
-
     enqueueJob(syncJob);
-    setIsSubmittingOrder(false);
-    setStatusMessage("لا يوجد إنترنت: تم تخزين بيع التواصي محلياً.");
+    releaseOrderBuildLock();
+    setStatusMessage(
+      `تم حفظ بيع التواصي بقيمة ${formatMoney(tawasiAmount)} محلياً وجاري رفعه بالخلفية.`,
+    );
+    return;
+
   };
 
   const handlePosProductDragEnd = ({ data }: { data: LocalProduct[] }) => {
@@ -4417,7 +4446,7 @@ export function useAppController() {
   };
 
   const submitOrder = async () => {
-    if (isSubmittingOrder) {
+    if (isBuildingOrderRef.current) {
       return;
     }
 
@@ -4437,6 +4466,7 @@ export function useAppController() {
       return;
     }
 
+    isBuildingOrderRef.current = true;
     setIsSubmittingOrder(true);
     const orderedAt = new Date().toISOString();
     const clientOrderId = makeId('order');
@@ -4467,7 +4497,7 @@ export function useAppController() {
 
     setOrders((previous) => {
       const next = [localOrder, ...previous];
-      persistArrayDeferred(STORAGE_KEYS.orders, next);
+      persistOrders(next);
       return next;
     });
 
@@ -4488,32 +4518,11 @@ export function useAppController() {
       payload,
     };
 
-    if (isOnline && authToken) {
-      try {
-        const remoteOrder = await postOrder(authToken, payload);
-        markOrderSynced(clientOrderId);
-        upsertRemoteOrder(remoteOrder as ApiOrder);
-        setIsSubmittingOrder(false);
-        setStatusMessage('تم تسجيل الطلب في السيرفر مباشرة.');
-        return;
-      } catch (error: unknown) {
-        enqueueJob(syncJob);
-
-        if (error instanceof ApiError && error.status === 401) {
-          setIsSubmittingOrder(false);
-          logout('انتهت الجلسة وتم حفظ الطلب محلياً لحين تسجيل الدخول.');
-          return;
-        }
-
-        setIsSubmittingOrder(false);
-        setStatusMessage('تم حفظ الطلب محلياً وسيتم رفعه عند استقرار الاتصال.');
-        return;
-      }
-    }
-
     enqueueJob(syncJob);
-    setIsSubmittingOrder(false);
-    setStatusMessage('الإنترنت غير متاح: تم تخزين الطلب محلياً في انتظار المزامنة.');
+    releaseOrderBuildLock();
+    setStatusMessage('تم حفظ الطلب محلياً وجاري رفعه بالخلفية.');
+    return;
+
   };
 
   const submitDailySettlement = async () => {
@@ -4567,7 +4576,7 @@ export function useAppController() {
     if (adjustmentRecords.length > 0) {
       setOrders((previous) => {
         const next = [...adjustmentRecords, ...previous];
-        persistArrayDeferred(STORAGE_KEYS.orders, next);
+        persistOrders(next);
         return next;
       });
     }
