@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compare } from 'bcryptjs';
 import { JWT_EXPIRES_IN } from './constants/auth.constants';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { UserRole } from './enums/user-role.enum';
 import { AuthUser } from './interfaces/auth-user.interface';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
@@ -42,6 +43,24 @@ export class AuthService {
       user: authUser,
       expiresIn: JWT_EXPIRES_IN,
     };
+  }
+
+  async changePassword(dto: ChangePasswordDto): Promise<{ message: string }> {
+    const username = dto.username.trim().toLowerCase();
+    const user = await this.usersService.findByUsername(username);
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Invalid username or password.');
+    }
+
+    const isValid = await compare(dto.oldPassword, user.passwordHash);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid username or password.');
+    }
+
+    await this.usersService.updatePassword(user, dto.newPassword);
+
+    return { message: 'Password updated successfully.' };
   }
 
   async me(authUser: AuthUser): Promise<AuthUser> {

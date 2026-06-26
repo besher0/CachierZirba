@@ -765,6 +765,66 @@ export function useAppController() {
     () => sortProductsByLocalOrder(products, orderedProductIdsForStore),
     [orderedProductIdsForStore, products],
   );
+  const productOrderIndexById = useMemo(() => {
+    const entries: Array<[string, number]> = [];
+    posProducts.forEach((product, index) => {
+      entries.push([product.id, index]);
+      if (product.clientProductId !== product.id) {
+        entries.push([product.clientProductId, index]);
+      }
+    });
+    return new Map(entries);
+  }, [posProducts]);
+  const productOrderIndexByName = useMemo(
+    () =>
+      new Map(
+        posProducts.map((product, index) => [
+          normalizeProductKey(product.name),
+          index,
+        ]),
+      ),
+    [posProducts],
+  );
+  const getProductDisplayOrderIndex = useCallback(
+    (productId?: string | null, productName?: string | null) => {
+      if (productId) {
+        const idIndex = productOrderIndexById.get(productId);
+        if (idIndex !== undefined) {
+          return idIndex;
+        }
+      }
+
+      if (productName) {
+        const nameIndex = productOrderIndexByName.get(
+          normalizeProductKey(productName),
+        );
+        if (nameIndex !== undefined) {
+          return nameIndex;
+        }
+      }
+
+      return Number.MAX_SAFE_INTEGER;
+    },
+    [productOrderIndexById, productOrderIndexByName],
+  );
+  const compareProductDisplayRows = useCallback(
+    (
+      a: { productId?: string; name?: string; productName?: string },
+      b: { productId?: string; name?: string; productName?: string },
+    ) => {
+      const aName = a.name ?? a.productName ?? "";
+      const bName = b.name ?? b.productName ?? "";
+      const aIndex = getProductDisplayOrderIndex(a.productId, aName);
+      const bIndex = getProductDisplayOrderIndex(b.productId, bName);
+
+      if (aIndex !== bIndex) {
+        return aIndex - bIndex;
+      }
+
+      return aName.localeCompare(bName, "ar");
+    },
+    [getProductDisplayOrderIndex],
+  );
   const productByNormalizedName = useMemo(
     () =>
       new Map(
@@ -1711,7 +1771,7 @@ export function useAppController() {
       );
     });
 
-    return products.map((product) => {
+    return posProducts.map((product) => {
       const key = normalizeProductKey(product.name);
       const purchased = purchasedByProduct.get(key) ?? 0;
       const sold = soldByProduct.get(key) ?? 0;
@@ -1741,6 +1801,7 @@ export function useAppController() {
     latestInventoryAdjustmentByProduct,
     mergedInventoryDestructions,
     mergedPurchaseRows,
+    posProducts,
     productByClientProductId,
     productByNormalizedName,
     todayDate,
@@ -2079,15 +2140,17 @@ export function useAppController() {
         byProduct.set(row.productId, base);
       });
 
-      return Array.from(byProduct.values()).map((row) => ({
-        ...row,
-        soldQty: Number(row.soldQty.toFixed(3)),
-        refundedQty: Number(row.refundedQty.toFixed(3)),
-        netQty: Number(row.netQty.toFixed(3)),
-        netAmount: Number(row.netAmount.toFixed(2)),
-      }));
+      return Array.from(byProduct.values())
+        .map((row) => ({
+          ...row,
+          soldQty: Number(row.soldQty.toFixed(3)),
+          refundedQty: Number(row.refundedQty.toFixed(3)),
+          netQty: Number(row.netQty.toFixed(3)),
+          netAmount: Number(row.netAmount.toFixed(2)),
+        }))
+        .sort(compareProductDisplayRows);
     },
-    [financialStockAuditRows, productSalesSummaryRows],
+    [compareProductDisplayRows, financialStockAuditRows, productSalesSummaryRows],
   );
 
   const settlementExpectedRevenueAmount = useMemo(

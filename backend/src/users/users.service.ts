@@ -47,6 +47,11 @@ export class UsersService implements OnModuleInit {
     };
   }
 
+  async updatePassword(user: User, password: string): Promise<void> {
+    user.passwordHash = await hash(password, 10);
+    await this.userRepository.save(user);
+  }
+
   private async seedDefaults(): Promise<void> {
     const stores = await this.storesService.findAll();
     const mainStore = stores.find((store) => store.code === 'ZIRBA_MAIN') ?? null;
@@ -125,8 +130,11 @@ export class UsersService implements OnModuleInit {
       : [];
 
     const account = existingPrimary ?? legacyUsers[0] ?? this.userRepository.create();
+    const isNewAccount = !account.id;
     account.username = normalizedUsername;
-    account.passwordHash = await hash(password, 10);
+    if (isNewAccount) {
+      account.passwordHash = await hash(password, 10);
+    }
     account.role = role;
     account.displayName = displayName;
     account.storeId = role === UserRole.ADMIN ? null : storeId;

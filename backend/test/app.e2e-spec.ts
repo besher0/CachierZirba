@@ -25,6 +25,7 @@ interface LoginResponse {
 describe('Zirba API (e2e)', () => {
   let app: INestApplication<App>;
   let adminToken = '';
+  let adminUsername = '';
   let cashierMainToken = '';
   let adminCreatedExpenseId = '';
   let adminCreatedPurchaseId = '';
@@ -79,11 +80,48 @@ describe('Zirba API (e2e)', () => {
     const cashierBody = cashier.body as LoginResponse;
 
     adminToken = adminBody.accessToken;
+    adminUsername = adminBody.user.username;
     cashierMainToken = cashierBody.accessToken;
 
     expect(adminBody.user.role).toBe('ADMIN');
     expect(cashierBody.user.role).toBe('CASHIER');
     expect(cashierBody.user.storeId).toBe(MAIN_STORE_ID);
+  });
+
+  it('POST /api/auth/change-password should validate the old password before updating', async () => {
+    await request(app.getHttpServer())
+      .post('/api/auth/change-password')
+      .send({
+        username: adminUsername,
+        oldPassword: 'wrong-password',
+        newPassword: 'abcd2',
+      })
+      .expect(401);
+
+    const response = await request(app.getHttpServer())
+      .post('/api/auth/change-password')
+      .send({
+        username: adminUsername,
+        oldPassword: 'abcd',
+        newPassword: 'abcd2',
+      })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      message: 'Password updated successfully.',
+    });
+
+    await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: adminUsername, password: 'abcd' })
+      .expect(401);
+
+    const loginResponse = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: adminUsername, password: 'abcd2' })
+      .expect(201);
+
+    adminToken = (loginResponse.body as LoginResponse).accessToken;
   });
 
   it('GET /api/admin/dashboard should reject unauthenticated requests', async () => {
