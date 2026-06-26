@@ -99,7 +99,6 @@ export function PosScreen() {
     isPosProductReordering,
     isPosSplit,
     isRefundMode,
-    isSubmittingOrder,
     item,
     itemHeight,
     key,
@@ -553,15 +552,11 @@ export function PosScreen() {
                             <Text style={styles.padActionText}>المنوعات</Text>
                           </Pressable>
                           <Pressable
-                            style={[
-                              styles.padActionButton,
-                              isSubmittingOrder && styles.buttonDisabled,
-                            ]}
-                            disabled={isSubmittingOrder}
+                            style={styles.padActionButton}
                             onPress={() => void addTawasiSupplyFromPad()}
                           >
                             <Text style={styles.padActionText}>
-                              {isSubmittingOrder ? "جار الحفظ..." : "تواصي"}
+                              تواصي
                             </Text>
                           </Pressable>
                           <Pressable
@@ -678,19 +673,11 @@ export function PosScreen() {
                         </View>
 
                         <Pressable
-                          style={[
-                            styles.primaryButton,
-                            isSubmittingOrder && styles.buttonDisabled,
-                          ]}
-                          disabled={isSubmittingOrder}
+                          style={styles.primaryButton}
                           onPress={() => void submitOrder()}
                         >
                           <Text style={styles.primaryButtonText}>
-                            {isSubmittingOrder
-                              ? "جار الحفظ..."
-                              : isRefundMode
-                                ? "تسجيل إرجاع"
-                                : "حفظ الطلب"}
+                            {isRefundMode ? "تسجيل إرجاع" : "حفظ الطلب"}
                           </Text>
                         </Pressable>
                         <Pressable

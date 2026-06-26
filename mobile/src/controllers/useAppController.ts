@@ -374,9 +374,9 @@ export function useAppController() {
   const [activeScreen, setActiveScreen] = useState<AppScreenKey>("pos");
   const [isOnline, setIsOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const isSubmittingOrder = false;
   const [isRefreshingActiveScreen, setIsRefreshingActiveScreen] =
     useState(false);
-  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [isSavingTawasi, setIsSavingTawasi] = useState(false);
   const [isSavingSupplyPayment, setIsSavingSupplyPayment] = useState(false);
   const [pendingPurchaseDeleteIds, setPendingPurchaseDeleteIds] = useState<
@@ -387,6 +387,13 @@ export function useAppController() {
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const ordersPersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingOrdersPersistenceRef = useRef<{
+    timeout: ReturnType<typeof setTimeout>;
+    value: LocalOrder[];
+    version: number;
+  } | null>(null);
+  const ordersPersistenceVersionRef = useRef(0);
+  const reportOrdersSyncVersionRef = useRef(0);
   const hasLoadedCashCarryRef = useRef(false);
   const deferredArrayPersistenceRef = useRef<
     Map<string, { timeout: ReturnType<typeof setTimeout>; value: unknown[] }>
@@ -409,6 +416,7 @@ export function useAppController() {
   const [selectedStoreId, setSelectedStoreId] = useState("");
 
   const [orders, setOrders] = useState<LocalOrder[]>([]);
+  const [reportOrders, setReportOrders] = useState<LocalOrder[]>([]);
   const [dailySettlements, setDailySettlements] = useState<
     LocalDailySettlement[]
   >([]);
@@ -810,8 +818,8 @@ export function useAppController() {
   }, [pendingAmountValue]);
 
   const selectedStoreOrders = useMemo(
-    () => orders.filter((order) => order.storeId === selectedStoreId),
-    [orders, selectedStoreId],
+    () => reportOrders.filter((order) => order.storeId === selectedStoreId),
+    [reportOrders, selectedStoreId],
   );
 
   const selectedStoreSettlements = useMemo(
@@ -879,6 +887,31 @@ export function useAppController() {
       subscription.remove();
     };
   }, []);
+
+  const syncReportOrders = useCallback(
+    (nextOrders: LocalOrder[], immediate = false) => {
+      const version = reportOrdersSyncVersionRef.current + 1;
+      reportOrdersSyncVersionRef.current = version;
+
+      if (immediate) {
+        setReportOrders(nextOrders);
+        return;
+      }
+
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => {
+          if (reportOrdersSyncVersionRef.current === version) {
+            setReportOrders(nextOrders);
+          }
+        }, 300);
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    syncReportOrders(orders, activeScreen !== "pos");
+  }, [activeScreen, orders, syncReportOrders]);
 
   const settlementCycleStartIso = useMemo(() => {
     const candidates: string[] = [];
@@ -2182,30 +2215,69 @@ export function useAppController() {
     deferredArrayPersistenceRef.current.clear();
   }, []);
 
+  const persistOrdersNow = useCallback((next: LocalOrder[]) => {
+    ordersPersistenceRef.current = ordersPersistenceRef.current
+      .catch(() => undefined)
+      .then(() => saveArray(STORAGE_KEYS.orders, next));
+  }, []);
+
+  const persistOrders = useCallback((next: LocalOrder[]) => {
+    const previous = pendingOrdersPersistenceRef.current;
+    if (previous) {
+      clearTimeout(previous.timeout);
+    }
+
+    const version = ordersPersistenceVersionRef.current + 1;
+    ordersPersistenceVersionRef.current = version;
+    const timeout = setTimeout(() => {
+      const pending = pendingOrdersPersistenceRef.current;
+      if (!pending || pending.timeout !== timeout) {
+        return;
+      }
+
+      pendingOrdersPersistenceRef.current = null;
+      InteractionManager.runAfterInteractions(() => {
+        if (ordersPersistenceVersionRef.current === version) {
+          persistOrdersNow(pending.value);
+        }
+      });
+    }, 250);
+
+    pendingOrdersPersistenceRef.current = { timeout, value: next, version };
+  }, [persistOrdersNow]);
+
+  const flushOrdersPersistence = useCallback(() => {
+    const pending = pendingOrdersPersistenceRef.current;
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    pendingOrdersPersistenceRef.current = null;
+    ordersPersistenceVersionRef.current = Math.max(
+      ordersPersistenceVersionRef.current,
+      pending.version,
+    );
+    persistOrdersNow(pending.value);
+  }, [persistOrdersNow]);
+
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       if (state !== "active") {
         flushDeferredArrayPersistence();
+        flushOrdersPersistence();
       }
     });
 
     return () => {
       subscription.remove();
       flushDeferredArrayPersistence();
+      flushOrdersPersistence();
     };
-  }, [flushDeferredArrayPersistence]);
-
-  const persistOrders = useCallback((next: LocalOrder[]) => {
-    ordersPersistenceRef.current = ordersPersistenceRef.current
-      .catch(() => undefined)
-      .then(() => saveArray(STORAGE_KEYS.orders, next));
-  }, []);
+  }, [flushDeferredArrayPersistence, flushOrdersPersistence]);
 
   const releaseOrderBuildLock = useCallback(() => {
-    setTimeout(() => {
-      isBuildingOrderRef.current = false;
-      setIsSubmittingOrder(false);
-    }, 200);
+    isBuildingOrderRef.current = false;
   }, []);
 
   const markOrderSynced = useCallback((referenceId: string) => {
@@ -3529,6 +3601,7 @@ export function useAppController() {
         setSession(cachedSession);
         setStores(effectiveStores);
         setOrders(cachedOrders);
+        setReportOrders(cachedOrders);
         setDailySettlements(cachedSettlements);
         setExpenses(cachedExpenses);
         setExpenseCategoryOptions(initialExpenseCategories);
@@ -3553,6 +3626,7 @@ export function useAppController() {
         setSession(null);
         setStores(FALLBACK_STORES);
         setOrders([]);
+        setReportOrders([]);
         setDailySettlements([]);
         setExpenses([]);
         setExpenseCategoryOptions(DEFAULT_EXPENSE_CATEGORY_OPTIONS);
@@ -3975,12 +4049,15 @@ export function useAppController() {
 
   const syncQueueTrigger = useMemo(
     () =>
-      JSON.stringify(
-        queue.map((job) => ({
-          ...job,
-          retries: 0,
-        })),
-      ),
+      queue
+        .map((job) =>
+          [
+            job.id,
+            job.retries,
+            job.permanentFailure ? "1" : "0",
+          ].join(":"),
+        )
+        .join("|"),
     [queue],
   );
 
@@ -4331,7 +4408,6 @@ export function useAppController() {
     }
 
     isBuildingOrderRef.current = true;
-    setIsSubmittingOrder(true);
     const orderedAt = new Date().toISOString();
     const clientOrderId = makeId("order");
     const payload: CreateOrderPayload = {
@@ -4467,7 +4543,6 @@ export function useAppController() {
     }
 
     isBuildingOrderRef.current = true;
-    setIsSubmittingOrder(true);
     const orderedAt = new Date().toISOString();
     const clientOrderId = makeId('order');
     const payload: CreateOrderPayload = {
