@@ -1046,6 +1046,19 @@ export function useAppController() {
     [allMergedOrderRows],
   );
 
+  const lastTwoCompletedSalesOrders = useMemo(
+    () =>
+      allMergedOrderRows
+        .filter((order) => order.status === "COMPLETED")
+        .slice(0, 2)
+        .map((order) => ({
+          clientOrderId: order.clientOrderId,
+          total: order.total,
+          orderedAt: order.orderedAt,
+        })),
+    [allMergedOrderRows],
+  );
+
   const mergedSettlementRows = useMemo(() => {
     const rows = new Map<string, SettlementHistoryRow>();
 
@@ -6883,10 +6896,12 @@ export function useAppController() {
       activeScreenLabel,
       assignedStoreId,
       canSwitchStore,
+      formatMoney,
       isAdmin,
       isDesktop,
       isMobileNavOpen,
       isOnline,
+      lastTwoCompletedSalesOrders,
       logout,
       navItems,
       selectedStoreId,
@@ -6902,6 +6917,7 @@ export function useAppController() {
       activeScreenLabel,
       assignedStoreId,
       canSwitchStore,
+      lastTwoCompletedSalesOrders,
       isAdmin,
       isDesktop,
       isMobileNavOpen,

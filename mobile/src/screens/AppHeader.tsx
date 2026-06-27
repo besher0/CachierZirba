@@ -9,15 +9,21 @@ export function AppHeader() {
     BRAND_FULL,
     BRAND_NAME,
     Pressable,
+    activeScreen,
+    formatMoney,
     isAdmin,
     isDesktop,
     isMobileNavOpen,
     isOnline,
+    lastTwoCompletedSalesOrders,
     logout,
     session,
     setActiveScreen,
     toggleMobileNav,
   } = useAppShellContext();
+  const recentOrderLabels = ["آخر طلب", "الطلب السابق"];
+  const showRecentSales =
+    activeScreen === "pos" && lastTwoCompletedSalesOrders.length > 0;
 
   return (
     <View style={[styles.headerRow, !isDesktop && styles.headerRowMobile]}>
@@ -28,6 +34,37 @@ export function AppHeader() {
         <Text style={[styles.subtitleSmall, !isDesktop && styles.subtitleSmallMobile]}>
           {isAdmin ? 'صلاحية: إدارة عامة' : 'صلاحية: كاشير فرع'}
         </Text>
+        {showRecentSales && (
+          <View
+            style={[
+              styles.recentSalesBox,
+              !isDesktop && styles.recentSalesBoxMobile,
+            ]}
+          >
+            {lastTwoCompletedSalesOrders.map((order, index) => (
+              <View key={order.clientOrderId} style={styles.recentSalesLine}>
+                <Text
+                  style={[
+                    styles.recentSalesLabel,
+                    !isDesktop && styles.recentSalesLabelMobile,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {recentOrderLabels[index]}:
+                </Text>
+                <Text
+                  style={[
+                    styles.recentSalesValue,
+                    !isDesktop && styles.recentSalesValueMobile,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {formatMoney(order.total)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
       <View style={[styles.headerActions, !isDesktop && styles.headerActionsMobile]}>
         <View
