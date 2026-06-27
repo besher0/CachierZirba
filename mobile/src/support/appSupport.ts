@@ -138,6 +138,7 @@ export interface SettlementDayDetail {
   expensesAmount: number;
   purchasesAmount: number;
   withdrawalsAmount: number;
+  productSalesSummaryRows: ProductSalesSummaryRow[];
   carryInAmount: number;
   expectedBeforeDistributionAmount: number;
   distributedAmount: number;

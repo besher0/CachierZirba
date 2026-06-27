@@ -14,7 +14,9 @@ export function AppOverlays() {
     Pressable,
     ScrollView,
     Text,
+    TextInput,
     View,
+    activePurchaseInvoiceDate,
     activeScreen,
     actualRemainingAmount,
     adminDatePickerTarget,
@@ -116,6 +118,15 @@ export function AppOverlays() {
     pointerEvents,
     productName,
     purchase,
+    purchaseInvoiceBalance,
+    purchaseInvoiceNoteInput,
+    purchaseInvoicePaymentRows,
+    purchaseInvoicePaymentsTotal,
+    purchaseInvoiceProductRows,
+    purchaseInvoiceRows,
+    purchaseInvoiceTawasiRows,
+    purchaseInvoiceTitle,
+    purchaseInvoiceTotal,
     purchases,
     purchasesAmount,
     quantity,
@@ -154,14 +165,8 @@ export function AppOverlays() {
     summaryText,
     summaryTextStrong,
     todayDate,
-    todayPurchaseInvoiceRows,
-    todayPurchaseInvoiceTotal,
-    todayPurchaseProductRows,
-    todayPurchaseTawasiRows,
-    todayPurchasePaymentRows,
-    todayPurchasePaymentsTotal,
-    todayPurchaseInvoiceBalance,
-    exportTodayPurchasesInvoicePdf,
+    exportPurchaseInvoicePdf,
+    updatePurchaseInvoiceNoteInput,
     toExpenseCategoryLabel,
     toOrderStatusLabel,
     toPaymentMethodLabel,
@@ -528,6 +533,45 @@ export function AppOverlays() {
                           ) : null}
 
                           <Text style={styles.storeTableTitle}>
+                            ملخص مبيعات المنتجات (
+                            {selectedSettlementDetail.productSalesSummaryRows.length})
+                          </Text>
+                          <View>
+                            {selectedSettlementDetail.productSalesSummaryRows.length === 0 ? (
+                              <Text style={styles.emptyText}>
+                                لا توجد مبيعات منتجات في هذه التسوية.
+                              </Text>
+                            ) : (
+                              selectedSettlementDetail.productSalesSummaryRows.map((row) => (
+                                <View key={row.productId} style={styles.orderRow}>
+                                  <View style={styles.orderRowMain}>
+                                    <Text style={styles.orderRowId}>{row.name}</Text>
+                                    <Text style={styles.orderRowItems}>
+                                      {row.unitType === "KG" ? "كيلو" : "قطعة"}
+                                    </Text>
+                                  </View>
+                                  <View style={styles.orderRowMain}>
+                                    <Text style={styles.orderRowMeta}>
+                                      مباع: {formatQuantity(row.soldQty)}
+                                    </Text>
+                                    <Text style={styles.orderRowMeta}>
+                                      مرتجع: {formatQuantity(row.refundedQty)}
+                                    </Text>
+                                  </View>
+                                  <View style={styles.orderRowMain}>
+                                    <Text style={styles.orderRowMeta}>
+                                      صافي: {formatQuantity(row.netQty)}
+                                    </Text>
+                                    <Text style={styles.orderRowTotal}>
+                                      {formatMoney(row.netAmount)}
+                                    </Text>
+                                  </View>
+                                </View>
+                              ))
+                            )}
+                          </View>
+
+                          <Text style={styles.storeTableTitle}>
                             فواتير البيع (
                             {selectedSettlementDetail.orders.length})
                           </Text>
@@ -684,12 +728,12 @@ export function AppOverlays() {
                     <View style={styles.invoiceCard}>
                       <View style={styles.sectionHeaderInline}>
                         <Text style={styles.sectionTitle}>
-                          فاتورة توريدات اليوم
+                          {purchaseInvoiceTitle}
                         </Text>
                         <View style={styles.supplyHeaderActions}>
                           <Pressable
                             style={styles.smallRefreshButton}
-                            onPress={() => void exportTodayPurchasesInvoicePdf()}
+                            onPress={() => void exportPurchaseInvoicePdf()}
                           >
                             <Text style={styles.smallRefreshText}>PDF</Text>
                           </Pressable>
@@ -706,23 +750,30 @@ export function AppOverlays() {
                         الفرع: {selectedStore?.name ?? "-"}
                       </Text>
                       <Text style={styles.orderRowMeta}>
-                        التاريخ: {todayDate}
+                        التاريخ: {activePurchaseInvoiceDate}
                       </Text>
+                      <TextInput
+                        style={styles.inputFull}
+                        value={purchaseInvoiceNoteInput}
+                        onChangeText={updatePurchaseInvoiceNoteInput}
+                        placeholder="ملاحظة الفاتورة"
+                        placeholderTextColor="#d7b3c4"
+                      />
 
                       <Text style={styles.storeTableTitle}>المنتجات</Text>
                       <ScrollView style={styles.invoiceItemsList}>
-                        {todayPurchaseProductRows.length === 0 ? (
+                        {purchaseInvoiceProductRows.length === 0 ? (
                           <Text style={styles.emptyText}>
-                            لا توجد منتجات موردة اليوم.
+                            لا توجد منتجات موردة لهذا التاريخ.
                           </Text>
                         ) : (
-                          todayPurchaseProductRows.map(renderPurchaseInvoiceRow)
+                          purchaseInvoiceProductRows.map(renderPurchaseInvoiceRow)
                         )}
 
-                        {todayPurchaseTawasiRows.length > 0 ? (
+                        {purchaseInvoiceTawasiRows.length > 0 ? (
                           <>
                             <Text style={styles.storeTableTitle}>التواصي</Text>
-                            {todayPurchaseTawasiRows.map(
+                            {purchaseInvoiceTawasiRows.map(
                               renderPurchaseInvoiceRow,
                             )}
                           </>
@@ -730,10 +781,10 @@ export function AppOverlays() {
                       </ScrollView>
 
                       <Text style={styles.storeTableTitle}>الدفعات</Text>
-                      {todayPurchasePaymentRows.length === 0 ? (
+                      {purchaseInvoicePaymentRows.length === 0 ? (
                         <Text style={styles.emptyText}>لا توجد دفعات.</Text>
                       ) : (
-                        todayPurchasePaymentRows.map((row) => (
+                        purchaseInvoicePaymentRows.map((row) => (
                           <View key={row.key} style={styles.orderRow}>
                             <View style={styles.orderRowMain}>
                               <Text style={styles.orderRowId}>
@@ -754,7 +805,7 @@ export function AppOverlays() {
 
                       <View style={styles.summaryRow}>
                         <Text style={styles.summaryTextStrong}>
-                          التوريدات: {formatMoney(todayPurchaseInvoiceTotal)} | المدفوع: {formatMoney(todayPurchasePaymentsTotal)} | المتبقي: {formatMoney(todayPurchaseInvoiceBalance)}
+                          التوريدات: {formatMoney(purchaseInvoiceTotal)} | المدفوع: {formatMoney(purchaseInvoicePaymentsTotal)} | المتبقي: {formatMoney(purchaseInvoiceBalance)}
                         </Text>
                       </View>
                     </View>

@@ -12,6 +12,7 @@ import { StoresService } from '../stores/stores.service';
 import { CreateEmployeeAbsenceDto } from './dto/create-employee-absence.dto';
 import { CreateEmployeeWithdrawalDto } from './dto/create-employee-withdrawal.dto';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeeAbsence } from './entities/employee-absence.entity';
 import { EmployeeWithdrawal } from './entities/employee-withdrawal.entity';
 import { Employee } from './entities/employee.entity';
@@ -60,6 +61,31 @@ export class EmployeesService {
       }
       throw error;
     }
+  }
+
+  async updateEmployee(
+    clientEmployeeId: string,
+    dto: UpdateEmployeeDto,
+    authUser: AuthUser,
+  ): Promise<Employee> {
+    const record = await this.findEmployeeByClientId(clientEmployeeId);
+    this.assertRecordWritePermission(record.storeId, authUser);
+
+    if (dto.name !== undefined) {
+      record.name = dto.name;
+    }
+
+    if (dto.weeklySalary !== undefined) {
+      record.weeklySalary = dto.weeklySalary;
+    }
+
+    if (dto.isActive !== undefined) {
+      record.isActive = dto.isActive;
+    }
+
+    record.syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
+
+    return this.employeeRepository.save(record);
   }
 
   async findAbsences(

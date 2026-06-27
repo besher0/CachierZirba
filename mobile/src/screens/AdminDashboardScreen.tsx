@@ -16,7 +16,8 @@ export function AdminDashboardScreen() {
     Text,
     View,
     activeScreen,
-    actualRemainingAmount,
+    adminDashboardAllStoresKey,
+    adminDashboardStoreId,
     adminDatePickerTarget,
     adminDatePickerValue,
     adminFromDateInput,
@@ -29,6 +30,7 @@ export function AdminDashboardScreen() {
     cashBoxAmount,
     cashierName,
     category,
+    categoryRow,
     clearAdminDateFilters,
     clientExpenseId,
     clientOrderId,
@@ -55,7 +57,6 @@ export function AdminDashboardScreen() {
     employeeName,
     emptyText,
     expectedBeforeDistributionAmount,
-    expectedCarryForwardAmount,
     expectedRemainingAmount,
     expense,
     expenseDate,
@@ -87,11 +88,8 @@ export function AdminDashboardScreen() {
     map,
     maximumDate,
     metricCard,
-    metricCardHighlight,
     metricLabel,
-    metricLabelHighlight,
     metricValue,
-    metricValueHighlight,
     metricsGrid,
     minimumDate,
     mobileNavBackdrop,
@@ -150,14 +148,11 @@ export function AdminDashboardScreen() {
     selectedOrderInvoice,
     selectedSettlementDetail,
     selectedStore,
+    setAdminDashboardStoreId,
     setActiveScreen,
     setSelectedExpenseDetails,
     setSelectedOrderInvoice,
     setSelectedSettlementDetail,
-    settlementDiffNegative,
-    settlementDiffNeutral,
-    settlementDiffPositive,
-    settlementDifferenceAmount,
     sharesAmount,
     smallRefreshButton,
     smallRefreshText,
@@ -166,9 +161,14 @@ export function AdminDashboardScreen() {
     status,
     statusBarTranslucent,
     statusMessage,
+    storeChip,
+    storeChipSelected,
+    storeChipText,
+    storeChipTextSelected,
     storeId,
     storeName,
     storeTableTitle,
+    stores,
     style,
     styles,
     subtitle,
@@ -216,6 +216,54 @@ export function AdminDashboardScreen() {
                           </Pressable>
                         </View>
 
+                        <Text style={styles.orderRowMeta}>
+                          اختر الفرع والمدة لعرض إجمالي الحصص والصندوق.
+                        </Text>
+                        <View style={styles.categoryRow}>
+                          <Pressable
+                            style={[
+                              styles.storeChip,
+                              adminDashboardStoreId === adminDashboardAllStoresKey &&
+                                styles.storeChipSelected,
+                            ]}
+                            onPress={() =>
+                              setAdminDashboardStoreId(adminDashboardAllStoresKey)
+                            }
+                          >
+                            <Text
+                              style={[
+                                styles.storeChipText,
+                                adminDashboardStoreId === adminDashboardAllStoresKey &&
+                                  styles.storeChipTextSelected,
+                              ]}
+                            >
+                              كل الفروع
+                            </Text>
+                          </Pressable>
+                          {stores.map((store) => {
+                            const selected = adminDashboardStoreId === store.id;
+                            return (
+                              <Pressable
+                                key={store.id}
+                                style={[
+                                  styles.storeChip,
+                                  selected && styles.storeChipSelected,
+                                ]}
+                                onPress={() => setAdminDashboardStoreId(store.id)}
+                              >
+                                <Text
+                                  style={[
+                                    styles.storeChipText,
+                                    selected && styles.storeChipTextSelected,
+                                  ]}
+                                >
+                                  {store.name}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+
                         <View style={styles.inputRow}>
                           <Pressable
                             style={styles.input}
@@ -257,8 +305,8 @@ export function AdminDashboardScreen() {
                           </Pressable>
                         </View>
                         <Text style={styles.orderRowMeta}>
-                          التقرير يحسب الحصص/الصندوق/المدوّر المرحّل والفرق بين
-                          الفعلي والمفروض قبل التوزيع ضمن الفترة المحددة.
+                          التقرير يحسب إجمالي الحصص والصندوق ضمن الفترة
+                          المحددة.
                         </Text>
 
                         <View style={styles.metricsGrid}>
@@ -280,30 +328,12 @@ export function AdminDashboardScreen() {
                               )}
                             </Text>
                           </View>
-                          <View style={styles.metricCard}>
-                            <Text style={styles.metricLabel}>
-                              المدوّر المرحّل
-                            </Text>
-                            <Text style={styles.metricValue}>
-                              {formatMoney(
-                                effectiveDashboardTotals.expectedCarryForwardAmount,
-                              )}
-                            </Text>
-                          </View>
-                          <View style={styles.metricCardHighlight}>
-                            <Text style={styles.metricLabelHighlight}>
-                              فرق التسوية
-                            </Text>
-                            <Text style={styles.metricValueHighlight}>
-                              {formatMoney(
-                                effectiveDashboardTotals.settlementDifferenceAmount,
-                              )}
-                            </Text>
-                          </View>
                         </View>
 
                         <Text style={styles.storeTableTitle}>
-                          ملخص كل المحلات
+                          {adminDashboardStoreId === adminDashboardAllStoresKey
+                            ? "ملخص كل الفروع"
+                            : "ملخص الفرع المختار"}
                         </Text>
                         {dashboardSummaries.length === 0 ? (
                           <Text style={styles.emptyText}>
@@ -319,20 +349,6 @@ export function AdminDashboardScreen() {
                                 <Text style={styles.dashboardStoreName}>
                                   {summary.storeName}
                                 </Text>
-                                <Text
-                                  style={
-                                    summary.settlementDifferenceAmount === 0
-                                      ? styles.settlementDiffNeutral
-                                      : summary.settlementDifferenceAmount > 0
-                                        ? styles.settlementDiffPositive
-                                        : styles.settlementDiffNegative
-                                  }
-                                >
-                                  فرق:{" "}
-                                  {formatMoney(
-                                    summary.settlementDifferenceAmount,
-                                  )}
-                                </Text>
                               </View>
                               <View style={styles.orderRowMain}>
                                 <Text style={styles.orderRowMeta}>
@@ -340,18 +356,6 @@ export function AdminDashboardScreen() {
                                 </Text>
                                 <Text style={styles.orderRowMeta}>
                                   صندوق: {formatMoney(summary.cashBoxAmount)}
-                                </Text>
-                              </View>
-                              <View style={styles.orderRowMain}>
-                                <Text style={styles.orderRowMeta}>
-                                  مدوّر مرحّل:{" "}
-                                  {formatMoney(
-                                    summary.expectedCarryForwardAmount,
-                                  )}
-                                </Text>
-                                <Text style={styles.orderRowMeta}>
-                                  متبقي فعلي:{" "}
-                                  {formatMoney(summary.actualRemainingAmount)}
                                 </Text>
                               </View>
                             </View>

@@ -26,6 +26,7 @@ export function PurchasesScreen() {
     newProductNameInput,
     newProductSellPriceInput,
     newProductUnitType,
+    openSelectedPurchasesInvoice,
     openTodayPurchasesInvoice,
     openProductCreateForm,
     productEditingId,
@@ -34,6 +35,7 @@ export function PurchasesScreen() {
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
+    purchaseInvoiceDateInput,
     receiveTodaySupplies,
     refreshActiveScreenData,
     registerSupplyPayment,
@@ -48,15 +50,18 @@ export function PurchasesScreen() {
     setPurchaseFilterFrom,
     setPurchaseFilterProduct,
     setPurchaseFilterTo,
+    setPurchaseInvoiceDateInput,
     setStatusMessage,
     setSupplyPaymentAmountInput,
     setSupplyPaymentNoteInput,
     setTawasiCapitalInput,
+    setTawasiNoteInput,
     setTawasiSellPriceInput,
     styles,
     supplyPaymentAmountInput,
     supplyPaymentNoteInput,
     tawasiCapitalInput,
+    tawasiNoteInput,
     tawasiSellPriceInput,
     todaySupplyInputs,
     updateTodaySupplyInput,
@@ -332,6 +337,25 @@ export function PurchasesScreen() {
           </Pressable>
 
           <View style={styles.supplyAddBox}>
+            <Text style={styles.supplyAddTitle}>فاتورة المشتريات</Text>
+            <View style={styles.inputRow}>
+              <TextInput
+                style={styles.input}
+                value={purchaseInvoiceDateInput}
+                onChangeText={setPurchaseInvoiceDateInput}
+                placeholder="تاريخ الفاتورة YYYY-MM-DD"
+                placeholderTextColor="#d7b3c4"
+              />
+              <Pressable
+                style={styles.supplyActionButtonPrimary}
+                onPress={() => openSelectedPurchasesInvoice()}
+              >
+                <Text style={styles.supplyActionButtonTextPrimary}>عرض الفاتورة</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.supplyAddBox}>
             <Text style={styles.supplyAddTitle}>تواصي</Text>
             <View style={styles.inputRow}>
               <TextInput
@@ -351,6 +375,13 @@ export function PurchasesScreen() {
                 placeholderTextColor="#d7b3c4"
               />
             </View>
+            <TextInput
+              style={styles.inputFull}
+              value={tawasiNoteInput}
+              onChangeText={setTawasiNoteInput}
+              placeholder="ملاحظة التواصي"
+              placeholderTextColor="#d7b3c4"
+            />
             <Pressable
               style={[
                 styles.supplyActionButtonPrimary,

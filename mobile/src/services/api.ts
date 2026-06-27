@@ -26,6 +26,7 @@ import {
   LoginPayload,
   Store,
   UpdateProductPayload,
+  UpdateEmployeePayload,
   UpdateExpensePayload,
   UpdatePurchasePayload,
 } from '../types';
@@ -356,6 +357,19 @@ export function postEmployee(
 ): Promise<ApiEmployee> {
   return request<ApiEmployee>('/employees', {
     method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+    ...WRITE_REQUEST_OPTIONS,
+  });
+}
+
+export function patchEmployee(
+  token: string,
+  clientEmployeeId: string,
+  payload: UpdateEmployeePayload,
+): Promise<ApiEmployee> {
+  return request<ApiEmployee>(`/employees/${encodeURIComponent(clientEmployeeId)}`, {
+    method: 'PATCH',
     body: JSON.stringify(payload),
     token,
     ...WRITE_REQUEST_OPTIONS,

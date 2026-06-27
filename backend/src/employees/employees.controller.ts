@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../auth/enums/user-role.enum';
@@ -7,6 +7,7 @@ import { CreateEmployeeAbsenceDto } from './dto/create-employee-absence.dto';
 import { CreateEmployeeWithdrawalDto } from './dto/create-employee-withdrawal.dto';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { ListEmployeesQueryDto } from './dto/list-employees-query.dto';
+import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeeAbsence } from './entities/employee-absence.entity';
 import { EmployeeWithdrawal } from './entities/employee-withdrawal.entity';
 import { Employee } from './entities/employee.entity';
@@ -31,6 +32,15 @@ export class EmployeesController {
     @CurrentUser() authUser: AuthUser,
   ): Promise<Employee> {
     return this.employeesService.createEmployee(dto, authUser);
+  }
+
+  @Patch(':clientEmployeeId')
+  updateEmployee(
+    @Param('clientEmployeeId') clientEmployeeId: string,
+    @Body() dto: UpdateEmployeeDto,
+    @CurrentUser() authUser: AuthUser,
+  ): Promise<Employee> {
+    return this.employeesService.updateEmployee(clientEmployeeId, dto, authUser);
   }
 
   @Get('absences')

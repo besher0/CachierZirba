@@ -21,6 +21,7 @@ export function EmployeesScreen() {
     amount,
     attendanceDays,
     balance,
+    beginEmployeeEdit,
     buttonDisabled,
     canManageInventory,
     categoryRow,
@@ -31,6 +32,7 @@ export function EmployeesScreen() {
     disabled,
     earnedAmount,
     employee,
+    employeeEditingId,
     employeeId,
     employeeName,
     employeeNameInput,
@@ -71,6 +73,7 @@ export function EmployeesScreen() {
     refreshEmployeesData,
     removeEmployeeAbsence,
     removeEmployeeWithdrawal,
+    resetEmployeeForm,
     rowActionButtons,
     section,
     sectionActions,
@@ -155,9 +158,17 @@ export function EmployeesScreen() {
                         onPress={addEmployeeDefinition}
                       >
                         <Text style={styles.primaryButtonText}>
-                          + إضافة موظف
+                          {employeeEditingId ? "حفظ تعديل الموظف" : "+ إضافة موظف"}
                         </Text>
                       </Pressable>
+                      {employeeEditingId ? (
+                        <Pressable
+                          style={styles.smallRefreshButton}
+                          onPress={resetEmployeeForm}
+                        >
+                          <Text style={styles.smallRefreshText}>إلغاء التعديل</Text>
+                        </Pressable>
+                      ) : null}
 
                       {employeeWeeklySnapshots.length === 0 ? (
                         <Text style={styles.emptyText}>
@@ -203,6 +214,18 @@ export function EmployeesScreen() {
                                 المستحق النهائي: {formatMoney(item.balance)}
                               </Text>
                             </View>
+                            {canManageInventory ? (
+                              <View style={styles.rowActionButtons}>
+                                <Pressable
+                                  style={styles.smallRefreshButton}
+                                  onPress={() => beginEmployeeEdit(item.employeeId)}
+                                >
+                                  <Text style={styles.smallRefreshText}>
+                                    تعديل الراتب
+                                  </Text>
+                                </Pressable>
+                              </View>
+                            ) : null}
                           </View>
                         ))
                       )}

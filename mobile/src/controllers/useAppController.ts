@@ -61,6 +61,7 @@ import {
   fetchStores,
   login,
   patchProduct,
+  patchEmployee,
   patchExpense,
   patchPurchase,
   postDailySettlement,
@@ -118,6 +119,7 @@ import {
   Store,
   SyncJob,
   UpdateProductPayload,
+  UpdateEmployeePayload,
   UpdateExpensePayload,
   UpdatePurchasePayload,
 } from "../types";
@@ -211,6 +213,7 @@ const SYNC_RETRY_DELAY_MS = 10000;
 const MAX_SYNC_JOB_RETRIES = 5;
 const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 15000;
 const RESOURCE_REFRESH_TTL_MS = 60000;
+const ADMIN_DASHBOARD_ALL_STORES = "__ALL__";
 
 type RefreshTimestamps = Record<string, number>;
 
@@ -237,6 +240,10 @@ interface TodayPurchasePaymentRow {
   amount: number;
   note?: string;
   synced: boolean;
+}
+
+function buildPurchaseInvoiceNoteKey(storeId: string, invoiceDate: string): string {
+  return `${storeId}:${invoiceDate}`;
 }
 
 function buildOrderCreateSyncJob(order: LocalOrder): SyncJob {
@@ -508,8 +515,20 @@ export function useAppController() {
   const [purchaseFilterProduct, setPurchaseFilterProduct] = useState("");
   const [purchaseFilterFrom, setPurchaseFilterFrom] = useState("");
   const [purchaseFilterTo, setPurchaseFilterTo] = useState("");
+  const [purchaseInvoiceDateInput, setPurchaseInvoiceDateInput] = useState(
+    () => toIsoDateOnlyInTimeZone(new Date()),
+  );
+  const [activePurchaseInvoiceDate, setActivePurchaseInvoiceDate] = useState(
+    () => toIsoDateOnlyInTimeZone(new Date()),
+  );
+  const [purchaseInvoiceNotesByKey, setPurchaseInvoiceNotesByKey] = useState<
+    Record<string, string>
+  >({});
+  const [purchaseInvoiceNoteInput, setPurchaseInvoiceNoteInput] =
+    useState("");
   const [tawasiCapitalInput, setTawasiCapitalInput] = useState("");
   const [tawasiSellPriceInput, setTawasiSellPriceInput] = useState("");
+  const [tawasiNoteInput, setTawasiNoteInput] = useState("");
   const [supplyPaymentAmountInput, setSupplyPaymentAmountInput] = useState("");
   const [supplyPaymentNoteInput, setSupplyPaymentNoteInput] = useState("");
   const [products, setProducts] = useState<LocalProduct[]>(
@@ -538,6 +557,9 @@ export function useAppController() {
   const [employeeNameInput, setEmployeeNameInput] = useState("");
   const [employeeWeeklySalaryInput, setEmployeeWeeklySalaryInput] =
     useState("");
+  const [employeeEditingId, setEmployeeEditingId] = useState<string | null>(
+    null,
+  );
   const [absenceEmployeeIdInput, setAbsenceEmployeeIdInput] = useState("");
   const [absenceDateInput, setAbsenceDateInput] = useState(
     toIsoDateOnly(new Date()),
@@ -560,6 +582,9 @@ export function useAppController() {
     useState<Record<string, string>>({});
   const [adminFromDateInput, setAdminFromDateInput] = useState("");
   const [adminToDateInput, setAdminToDateInput] = useState("");
+  const [adminDashboardStoreId, setAdminDashboardStoreId] = useState(
+    ADMIN_DASHBOARD_ALL_STORES,
+  );
   const [adminDatePickerTarget, setAdminDatePickerTarget] = useState<
     "from" | "to" | null
   >(null);
@@ -1450,7 +1475,7 @@ export function useAppController() {
     ],
   );
 
-  const todayPurchaseInvoiceRows = useMemo<TodayPurchaseInvoiceRow[]>(() => {
+  const purchaseInvoiceRows = useMemo<TodayPurchaseInvoiceRow[]>(() => {
     const orderIndexByProduct = new Map(
       posProducts.map((product, index) => [
         normalizeProductKey(product.name),
@@ -1465,7 +1490,8 @@ export function useAppController() {
     mergedPurchaseRows
       .filter(
         (item) =>
-          item.purchaseDate === todayDate && item.purchaseKind !== "PAYMENT",
+          item.purchaseDate === activePurchaseInvoiceDate &&
+          item.purchaseKind !== "PAYMENT",
       )
       .forEach((item) => {
         const key =
@@ -1519,14 +1545,15 @@ export function useAppController() {
             quantity > 0 ? Number((totalCost / quantity).toFixed(2)) : 0,
         };
       });
-  }, [mergedPurchaseRows, posProducts, todayDate]);
+  }, [activePurchaseInvoiceDate, mergedPurchaseRows, posProducts]);
 
-  const todayPurchasePaymentRows = useMemo<TodayPurchasePaymentRow[]>(
+  const purchaseInvoicePaymentRows = useMemo<TodayPurchasePaymentRow[]>(
     () =>
       mergedPurchaseRows
         .filter(
           (item) =>
-            item.purchaseDate === todayDate && item.purchaseKind === "PAYMENT",
+            item.purchaseDate === activePurchaseInvoiceDate &&
+            item.purchaseKind === "PAYMENT",
         )
         .map((item) => ({
           key: item.clientPurchaseId,
@@ -1534,71 +1561,185 @@ export function useAppController() {
           note: item.note,
           synced: item.synced,
         })),
-    [mergedPurchaseRows, todayDate],
+    [activePurchaseInvoiceDate, mergedPurchaseRows],
   );
 
-  const todayPurchaseProductRows = useMemo(
+  const purchaseInvoiceProductRows = useMemo(
     () =>
-      todayPurchaseInvoiceRows.filter(
+      purchaseInvoiceRows.filter(
         (item) => item.purchaseKind === "SUPPLY",
       ),
-    [todayPurchaseInvoiceRows],
+    [purchaseInvoiceRows],
   );
 
-  const todayPurchaseTawasiRows = useMemo(
+  const purchaseInvoiceTawasiRows = useMemo(
     () =>
-      todayPurchaseInvoiceRows.filter(
+      purchaseInvoiceRows.filter(
         (item) => item.purchaseKind === "TAWASI",
       ),
-    [todayPurchaseInvoiceRows],
+    [purchaseInvoiceRows],
   );
 
-  const todayPurchaseInvoiceTotal = useMemo(
+  const purchaseInvoiceTotal = useMemo(
     () =>
       Number(
-        todayPurchaseInvoiceRows
+        purchaseInvoiceRows
           .reduce((sum, item) => sum + item.totalCost, 0)
           .toFixed(2),
       ),
-    [todayPurchaseInvoiceRows],
+    [purchaseInvoiceRows],
   );
 
-  const todayPurchasePaymentsTotal = useMemo(
+  const purchaseInvoicePaymentsTotal = useMemo(
     () =>
       Number(
-        todayPurchasePaymentRows
+        purchaseInvoicePaymentRows
           .reduce((sum, item) => sum + item.amount, 0)
           .toFixed(2),
       ),
-    [todayPurchasePaymentRows],
+    [purchaseInvoicePaymentRows],
   );
 
-  const todayPurchaseInvoiceBalance = useMemo(
+  const purchaseInvoiceBalance = useMemo(
     () =>
       Number(
         Math.max(
-          todayPurchaseInvoiceTotal - todayPurchasePaymentsTotal,
+          purchaseInvoiceTotal - purchaseInvoicePaymentsTotal,
           0,
         ).toFixed(2),
       ),
-    [todayPurchaseInvoiceTotal, todayPurchasePaymentsTotal],
+    [purchaseInvoicePaymentsTotal, purchaseInvoiceTotal],
+  );
+
+  const updatePurchaseInvoiceNoteInput = useCallback(
+    (value: string) => {
+      setPurchaseInvoiceNoteInput(value);
+
+      if (!selectedStoreId || !activePurchaseInvoiceDate) {
+        return;
+      }
+
+      const key = buildPurchaseInvoiceNoteKey(
+        selectedStoreId,
+        activePurchaseInvoiceDate,
+      );
+      setPurchaseInvoiceNotesByKey((previous) => {
+        const next = { ...previous };
+        const trimmed = value.trim();
+        if (trimmed.length === 0) {
+          delete next[key];
+        } else {
+          next[key] = value;
+        }
+        return next;
+      });
+    },
+    [activePurchaseInvoiceDate, selectedStoreId],
+  );
+
+  const openSelectedPurchasesInvoice = useCallback(
+    (dateOverride?: string) => {
+      if (!selectedStoreId) {
+        setStatusMessage("اختر الفرع أولاً.");
+        return;
+      }
+
+      const requestedDate = (dateOverride ?? purchaseInvoiceDateInput).trim();
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ||
+        toIsoDateOnly(dateFromIsoOnly(requestedDate)) !== requestedDate
+      ) {
+        setStatusMessage("أدخل تاريخ الفاتورة بصيغة YYYY-MM-DD.");
+        return;
+      }
+
+      const hasInvoiceRows = mergedPurchaseRows.some(
+        (item) => item.purchaseDate === requestedDate,
+      );
+      if (!hasInvoiceRows) {
+        setStatusMessage("لا توجد توريدات أو دفعات مسجلة لهذا التاريخ.");
+        return;
+      }
+
+      setActivePurchaseInvoiceDate(requestedDate);
+      setPurchaseInvoiceDateInput(requestedDate);
+      setPurchaseInvoiceNoteInput(
+        purchaseInvoiceNotesByKey[
+          buildPurchaseInvoiceNoteKey(selectedStoreId, requestedDate)
+        ] ?? "",
+      );
+      setIsTodayPurchasesInvoiceOpen(true);
+    },
+    [
+      mergedPurchaseRows,
+      purchaseInvoiceDateInput,
+      purchaseInvoiceNotesByKey,
+      selectedStoreId,
+    ],
   );
 
   const openTodayPurchasesInvoice = useCallback(() => {
-    if (
-      todayPurchaseInvoiceRows.length === 0 &&
-      todayPurchasePaymentRows.length === 0
-    ) {
-      setStatusMessage("لا توجد توريدات مسجلة اليوم.");
-      return;
-    }
-
-    setIsTodayPurchasesInvoiceOpen(true);
-  }, [todayPurchaseInvoiceRows.length, todayPurchasePaymentRows.length]);
+    openSelectedPurchasesInvoice(todayDate);
+  }, [openSelectedPurchasesInvoice, todayDate]);
 
   const closeTodayPurchasesInvoice = useCallback(() => {
     setIsTodayPurchasesInvoiceOpen(false);
   }, []);
+
+  const activePurchaseInvoiceTitle = useMemo(
+    () =>
+      activePurchaseInvoiceDate === todayDate
+        ? "فاتورة توريدات اليوم"
+        : `فاتورة توريدات ${activePurchaseInvoiceDate}`,
+    [activePurchaseInvoiceDate, todayDate],
+  );
+
+  const activePurchaseInvoiceNote = purchaseInvoiceNoteInput.trim();
+
+  const buildProductSalesSummaryRowsForOrders = useCallback(
+    (sourceOrders: OrderHistoryRow[]): ProductSalesSummaryRow[] => {
+      const byProduct = new Map<string, ProductSalesSummaryRow>();
+
+      sourceOrders.forEach((order) => {
+        order.items.forEach((item) => {
+          const key = normalizeProductKey(item.productName);
+          const fromCatalog = productByNormalizedName.get(key);
+          const base = byProduct.get(key) ?? {
+            productId: fromCatalog?.id ?? key,
+            name: item.productName,
+            unitType: fromCatalog?.unitType ?? "PIECE",
+            soldQty: 0,
+            refundedQty: 0,
+            netQty: 0,
+            netAmount: 0,
+          };
+
+          if (order.status === "REFUNDED") {
+            base.refundedQty += item.quantity;
+            base.netQty -= item.quantity;
+            base.netAmount -= item.lineTotal;
+          } else {
+            base.soldQty += item.quantity;
+            base.netQty += item.quantity;
+            base.netAmount += item.lineTotal;
+          }
+
+          byProduct.set(key, base);
+        });
+      });
+
+      return Array.from(byProduct.values())
+        .map((item) => ({
+          ...item,
+          soldQty: Number(item.soldQty.toFixed(3)),
+          refundedQty: Number(item.refundedQty.toFixed(3)),
+          netQty: Number(item.netQty.toFixed(3)),
+          netAmount: Number(item.netAmount.toFixed(2)),
+        }))
+        .sort(compareProductDisplayRows);
+    },
+    [compareProductDisplayRows, productByNormalizedName],
+  );
 
   const openExpenseDetails = useCallback((item: ExpenseRow) => {
     setSelectedExpenseDetails(item);
@@ -1617,6 +1758,8 @@ export function useAppController() {
           employeeName:
             employeeNameById.get(item.employeeId) ?? item.employeeId,
         }));
+      const dayProductSalesSummaryRows =
+        buildProductSalesSummaryRowsForOrders(dayOrders);
 
       const salesAmount = dayOrders
         .filter((item) => item.status === "COMPLETED")
@@ -1682,6 +1825,7 @@ export function useAppController() {
         expensesAmount,
         purchasesAmount,
         withdrawalsAmount,
+        productSalesSummaryRows: dayProductSalesSummaryRows,
         carryInAmount,
         expectedBeforeDistributionAmount,
         distributedAmount,
@@ -1693,6 +1837,7 @@ export function useAppController() {
       });
     },
     [
+      buildProductSalesSummaryRowsForOrders,
       employeeNameById,
       settlementRecordsByDate,
     ],
@@ -2013,45 +2158,10 @@ export function useAppController() {
     [settlementActualRemainingAmount, settlementDistributedAmount],
   );
 
-  const productSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(() => {
-    const byProduct = new Map<string, ProductSalesSummaryRow>();
-
-    ordersInCurrentCycle.forEach((order) => {
-      order.items.forEach((item) => {
-        const key = normalizeProductKey(item.productName);
-        const fromCatalog = productByNormalizedName.get(key);
-        const base = byProduct.get(key) ?? {
-          productId: fromCatalog?.id ?? key,
-          name: item.productName,
-          unitType: fromCatalog?.unitType ?? "PIECE",
-          soldQty: 0,
-          refundedQty: 0,
-          netQty: 0,
-          netAmount: 0,
-        };
-
-        if (order.status === "REFUNDED") {
-          base.refundedQty += item.quantity;
-          base.netQty -= item.quantity;
-          base.netAmount -= item.lineTotal;
-        } else {
-          base.soldQty += item.quantity;
-          base.netQty += item.quantity;
-          base.netAmount += item.lineTotal;
-        }
-
-        byProduct.set(key, base);
-      });
-    });
-
-    return Array.from(byProduct.values()).map((item) => ({
-      ...item,
-      soldQty: Number(item.soldQty.toFixed(3)),
-      refundedQty: Number(item.refundedQty.toFixed(3)),
-      netQty: Number(item.netQty.toFixed(3)),
-      netAmount: Number(item.netAmount.toFixed(2)),
-    }));
-  }, [ordersInCurrentCycle, productByNormalizedName]);
+  const productSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(
+    () => buildProductSalesSummaryRowsForOrders(ordersInCurrentCycle),
+    [buildProductSalesSummaryRowsForOrders, ordersInCurrentCycle],
+  );
 
   const pieceStockAuditRows = useMemo<PieceStockAuditRow[]>(
     () =>
@@ -2184,47 +2294,64 @@ export function useAppController() {
     [settlementActualRemainingAmount, settlementExpectedRevenueAmount],
   );
 
+  const visibleDashboardSummaries = useMemo(
+    () =>
+      adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES
+        ? dashboardSummaries
+        : dashboardSummaries.filter(
+            (item) => item.storeId === adminDashboardStoreId,
+          ),
+    [adminDashboardStoreId, dashboardSummaries],
+  );
+
+  const reducedDashboardTotals = useMemo(
+    () => ({
+      ordersCount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.ordersCount,
+        0,
+      ),
+      completedRevenue: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.completedRevenue,
+        0,
+      ),
+      refundAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.refundAmount,
+        0,
+      ),
+      sharesAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.sharesAmount,
+        0,
+      ),
+      cashBoxAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.cashBoxAmount,
+        0,
+      ),
+      expectedCarryForwardAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.expectedCarryForwardAmount,
+        0,
+      ),
+      actualRemainingAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.actualRemainingAmount,
+        0,
+      ),
+      settlementDifferenceAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.settlementDifferenceAmount,
+        0,
+      ),
+      netProfit: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + item.netProfit,
+        0,
+      ),
+    }),
+    [visibleDashboardSummaries],
+  );
+
   const effectiveDashboardTotals = useMemo(
     () =>
-      dashboardTotals ?? {
-        ordersCount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.ordersCount,
-          0,
-        ),
-        completedRevenue: dashboardSummaries.reduce(
-          (sum, item) => sum + item.completedRevenue,
-          0,
-        ),
-        refundAmount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.refundAmount,
-          0,
-        ),
-        sharesAmount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.sharesAmount,
-          0,
-        ),
-        cashBoxAmount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.cashBoxAmount,
-          0,
-        ),
-        expectedCarryForwardAmount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.expectedCarryForwardAmount,
-          0,
-        ),
-        actualRemainingAmount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.actualRemainingAmount,
-          0,
-        ),
-        settlementDifferenceAmount: dashboardSummaries.reduce(
-          (sum, item) => sum + item.settlementDifferenceAmount,
-          0,
-        ),
-        netProfit: dashboardSummaries.reduce(
-          (sum, item) => sum + item.netProfit,
-          0,
-        ),
-      },
-    [dashboardSummaries, dashboardTotals],
+      adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES && dashboardTotals
+        ? dashboardTotals
+        : reducedDashboardTotals,
+    [adminDashboardStoreId, dashboardTotals, reducedDashboardTotals],
   );
 
   const logout = useCallback((message: string) => {
@@ -3376,6 +3503,13 @@ export function useAppController() {
         } else if (entity === "EMPLOYEE" && action === "CREATE") {
           await postEmployee(authToken, job.payload as CreateEmployeePayload);
           markEmployeeSynced(job.referenceId);
+        } else if (entity === "EMPLOYEE" && action === "UPDATE") {
+          await patchEmployee(
+            authToken,
+            job.referenceId,
+            job.payload as UpdateEmployeePayload,
+          );
+          markEmployeeSynced(job.referenceId);
         } else if (entity === "EMPLOYEE_ABSENCE" && action === "CREATE") {
           await postEmployeeAbsence(
             authToken,
@@ -3591,6 +3725,7 @@ export function useAppController() {
           cachedEmployeeWithdrawals,
           cachedCashCarryByStore,
           cachedProductOrderByStore,
+          cachedPurchaseInvoiceNotes,
           cachedQueue,
           cachedRefreshTimestamps,
         ] = await Promise.all([
@@ -3613,6 +3748,7 @@ export function useAppController() {
           loadArray<EmployeeWithdrawalEntry>(STORAGE_KEYS.employeeWithdrawals),
           loadObject<Record<string, number>>(STORAGE_KEYS.cashCarryByStore),
           loadObject<Record<string, string[]>>(PRODUCT_ORDER_STORAGE_KEY),
+          loadObject<Record<string, string>>(STORAGE_KEYS.purchaseInvoiceNotes),
           loadArray<SyncJob>(STORAGE_KEYS.syncQueue),
           loadObject<RefreshTimestamps>(STORAGE_KEYS.refreshTimestamps),
         ]);
@@ -3691,6 +3827,7 @@ export function useAppController() {
         hasLoadedCashCarryRef.current = true;
         setCashCarryByStore(cachedCashCarryByStore ?? {});
         setProductOrderByStore(cachedProductOrderByStore ?? {});
+        setPurchaseInvoiceNotesByKey(cachedPurchaseInvoiceNotes ?? {});
         setQueue(recoveredQueue);
         refreshTimestampsRef.current = cachedRefreshTimestamps ?? {};
         setSelectedStoreId(initialStoreId);
@@ -3716,6 +3853,7 @@ export function useAppController() {
         hasLoadedCashCarryRef.current = true;
         setCashCarryByStore({});
         setProductOrderByStore({});
+        setPurchaseInvoiceNotesByKey({});
         setQueue([]);
         refreshTimestampsRef.current = {};
         setSelectedStoreId(FALLBACK_STORES[0]?.id ?? "");
@@ -3759,6 +3897,14 @@ export function useAppController() {
   useEffect(() => {
     void saveObject(PRODUCT_ORDER_STORAGE_KEY, productOrderByStore);
   }, [productOrderByStore]);
+
+  useEffect(() => {
+    if (isBootstrapping) {
+      return;
+    }
+
+    void saveObject(STORAGE_KEYS.purchaseInvoiceNotes, purchaseInvoiceNotesByKey);
+  }, [isBootstrapping, purchaseInvoiceNotesByKey]);
 
   useEffect(() => {
     void saveArray(STORAGE_KEYS.employees, employees);
@@ -3984,8 +4130,16 @@ export function useAppController() {
     setSharesInput("");
     setActualRemainingInput("");
     setSettlementNoteInput("");
+    setEmployeeEditingId(null);
+    setEmployeeNameInput("");
+    setEmployeeWeeklySalaryInput("");
     setTawasiCapitalInput("");
     setTawasiSellPriceInput("");
+    setTawasiNoteInput("");
+    const currentDate = toIsoDateOnlyInTimeZone(new Date());
+    setPurchaseInvoiceDateInput(currentDate);
+    setActivePurchaseInvoiceDate(currentDate);
+    setPurchaseInvoiceNoteInput("");
     setSupplyPaymentAmountInput("");
     setSupplyPaymentNoteInput("");
     setSelectedOrderInvoice(null);
@@ -5589,6 +5743,7 @@ export function useAppController() {
     setIsSavingTawasi(true);
     const nowDate = new Date();
     const now = nowDate.toISOString();
+    const tawasiNote = tawasiNoteInput.trim();
     const payload: CreatePurchasePayload = {
       clientPurchaseId: makeId('pur'),
       storeId: effectiveStoreId,
@@ -5600,7 +5755,7 @@ export function useAppController() {
       sellPrice: sellAmount,
       paymentAmount: 0,
       purchaseDate: toIsoDateOnly(nowDate),
-      note: `تواصي | رأس المال: ${capitalAmount} | سعر المبيع: ${sellAmount}`,
+      note: tawasiNote || undefined,
       syncedAt: now,
     };
 
@@ -5619,6 +5774,7 @@ export function useAppController() {
 
     setTawasiCapitalInput('');
     setTawasiSellPriceInput('');
+    setTawasiNoteInput('');
 
     const syncJob: SyncJob = {
       id: makeId('job'),
@@ -5810,6 +5966,30 @@ export function useAppController() {
     setStatusMessage('تم حذف التوريد محلياً بانتظار المزامنة.');
   };
 
+  const resetEmployeeForm = () => {
+    setEmployeeEditingId(null);
+    setEmployeeNameInput("");
+    setEmployeeWeeklySalaryInput("");
+  };
+
+  const beginEmployeeEdit = (employeeId: string) => {
+    if (!canManageInventory) {
+      setStatusMessage("وضع القراءة فقط: تعديل الموظفين متاح للكاشير أو الأدمن فقط.");
+      return;
+    }
+
+    const employee = employees.find((item) => item.id === employeeId);
+    if (!employee) {
+      setStatusMessage("تعذر إيجاد الموظف المطلوب تعديله.");
+      return;
+    }
+
+    setEmployeeEditingId(employee.id);
+    setEmployeeNameInput(employee.name);
+    setEmployeeWeeklySalaryInput(String(employee.weeklySalary));
+    setStatusMessage(`تعديل راتب ${employee.name}.`);
+  };
+
   const addEmployeeDefinition = () => {
     if (!canManageInventory) {
       setStatusMessage('وضع القراءة فقط: إدارة الموظفين متاحة للكاشير أو الأدمن فقط.');
@@ -5834,9 +6014,19 @@ export function useAppController() {
       return;
     }
 
+    const isEditing = Boolean(employeeEditingId);
+    const existingEmployee = isEditing
+      ? employees.find((item) => item.id === employeeEditingId)
+      : null;
+    if (isEditing && !existingEmployee) {
+      setStatusMessage("تعذر إيجاد الموظف المطلوب تعديله.");
+      return;
+    }
+
     const exists = employees.some(
       (item) =>
         item.storeId === effectiveStoreId &&
+        item.id !== employeeEditingId &&
         normalizeProductKey(item.name) === normalizeProductKey(name) &&
         item.isActive,
     );
@@ -5846,41 +6036,71 @@ export function useAppController() {
     }
 
     const now = new Date().toISOString();
+    const employeeId = existingEmployee?.id ?? makeId('emp');
     const employee: Employee = {
-      id: makeId('emp'),
+      id: employeeId,
       storeId: effectiveStoreId,
       name,
       weeklySalary,
-      isActive: true,
-      createdAt: now,
+      isActive: existingEmployee?.isActive ?? true,
+      createdAt: existingEmployee?.createdAt ?? now,
       updatedAt: now,
       synced: false,
     };
 
-    setEmployees((previous) =>
-      [...previous, employee].sort((a, b) => a.name.localeCompare(b.name, 'ar')),
-    );
-    enqueueJob({
-      id: makeId('job'),
-      referenceId: employee.id,
-      retries: 0,
-      createdAt: now,
-      entity: 'EMPLOYEE',
-      action: 'CREATE',
-      payload: {
-        clientEmployeeId: employee.id,
-        storeId: employee.storeId,
-        name: employee.name,
-        weeklySalary: employee.weeklySalary,
-        isActive: employee.isActive,
-        syncedAt: now,
-      },
+    setEmployees((previous) => {
+      const next = isEditing
+        ? previous.map((item) => (item.id === employee.id ? employee : item))
+        : [...previous, employee];
+      return next.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
     });
-    setEmployeeNameInput('');
-    setEmployeeWeeklySalaryInput('');
-    setAbsenceEmployeeIdInput((previous) => previous || employee.id);
-    setWithdrawalEmployeeIdInput((previous) => previous || employee.id);
-    setStatusMessage(`تمت إضافة الموظف ${name}.`);
+
+    const createPayload: CreateEmployeePayload = {
+      clientEmployeeId: employee.id,
+      storeId: employee.storeId,
+      name: employee.name,
+      weeklySalary: employee.weeklySalary,
+      isActive: employee.isActive,
+      syncedAt: now,
+    };
+    const updatePayload: UpdateEmployeePayload = {
+      name: employee.name,
+      weeklySalary: employee.weeklySalary,
+      isActive: employee.isActive,
+      syncedAt: now,
+    };
+
+    const syncJob: SyncJob = isEditing
+      ? {
+          id: makeId('job'),
+          referenceId: employee.id,
+          retries: 0,
+          createdAt: now,
+          entity: 'EMPLOYEE',
+          action: 'UPDATE',
+          payload: updatePayload,
+        }
+      : {
+          id: makeId('job'),
+          referenceId: employee.id,
+          retries: 0,
+          createdAt: now,
+          entity: 'EMPLOYEE',
+          action: 'CREATE',
+          payload: createPayload,
+        };
+
+    enqueueJob(syncJob);
+    resetEmployeeForm();
+    if (!isEditing) {
+      setAbsenceEmployeeIdInput((previous) => previous || employee.id);
+      setWithdrawalEmployeeIdInput((previous) => previous || employee.id);
+    }
+    setStatusMessage(
+      isEditing
+        ? `تم تعديل راتب الموظف ${name}.`
+        : `تمت إضافة الموظف ${name}.`,
+    );
   };
 
   const addEmployeeAbsence = () => {
@@ -6402,12 +6622,12 @@ export function useAppController() {
     setStatusMessage('تم تصدير المشتريات.');
   };
 
-  const exportTodayPurchasesInvoicePdf = async () => {
+  const exportPurchaseInvoicePdf = async () => {
     if (
-      todayPurchaseInvoiceRows.length === 0 &&
-      todayPurchasePaymentRows.length === 0
+      purchaseInvoiceRows.length === 0 &&
+      purchaseInvoicePaymentRows.length === 0
     ) {
-      setStatusMessage("لا توجد توريدات مسجلة اليوم لإنشاء فاتورة.");
+      setStatusMessage("لا توجد توريدات أو دفعات مسجلة لهذا التاريخ لإنشاء فاتورة.");
       return;
     }
 
@@ -6430,19 +6650,19 @@ export function useAppController() {
             <td>${row.synced ? "متزامن" : `معلق (${row.pendingCount})`}</td>
           </tr>
         `;
-    const productRowsHtml = todayPurchaseProductRows
+    const productRowsHtml = purchaseInvoiceProductRows
       .map((row, index) => buildSupplyRowHtml(row, index))
       .join("");
-    const tawasiRowsHtml = todayPurchaseTawasiRows
+    const tawasiRowsHtml = purchaseInvoiceTawasiRows
       .map((row, index) =>
-        buildSupplyRowHtml(row, todayPurchaseProductRows.length + index),
+        buildSupplyRowHtml(row, purchaseInvoiceProductRows.length + index),
       )
       .join("");
-    const paymentRowsHtml = todayPurchasePaymentRows
+    const paymentRowsHtml = purchaseInvoicePaymentRows
       .map(
         (row, index) => `
           <tr>
-            <td>${todayPurchaseInvoiceRows.length + index + 1}</td>
+            <td>${purchaseInvoiceRows.length + index + 1}</td>
             <td>دفعة</td>
             <td>دفعة فاتورة التوريدات</td>
             <td>-</td>
@@ -6524,10 +6744,15 @@ export function useAppController() {
           </style>
         </head>
         <body>
-          <h1>فاتورة توريدات اليوم</h1>
+          <h1>${escapeHtml(activePurchaseInvoiceTitle)}</h1>
           <div class="meta">المحل: ${escapeHtml(selectedStore?.name ?? "-")}</div>
-          <div class="meta">التاريخ: ${escapeHtml(todayDate)}</div>
+          <div class="meta">التاريخ: ${escapeHtml(activePurchaseInvoiceDate)}</div>
           <div class="meta">وقت الإنشاء: ${escapeHtml(generatedAt)}</div>
+          ${
+            activePurchaseInvoiceNote
+              ? `<div class="meta">ملاحظة الفاتورة: ${escapeHtml(activePurchaseInvoiceNote)}</div>`
+              : ""
+          }
           <table>
             <thead>
               <tr>
@@ -6552,9 +6777,9 @@ export function useAppController() {
             </tbody>
           </table>
           <div class="summary">
-            <div class="total">إجمالي التوريدات: ${escapeHtml(formatMoney(todayPurchaseInvoiceTotal))}</div>
-            <div class="total">إجمالي الدفعات: ${escapeHtml(formatMoney(todayPurchasePaymentsTotal))}</div>
-            <div class="total">الرصيد المتبقي: ${escapeHtml(formatMoney(todayPurchaseInvoiceBalance))}</div>
+            <div class="total">إجمالي التوريدات: ${escapeHtml(formatMoney(purchaseInvoiceTotal))}</div>
+            <div class="total">إجمالي الدفعات: ${escapeHtml(formatMoney(purchaseInvoicePaymentsTotal))}</div>
+            <div class="total">الرصيد المتبقي: ${escapeHtml(formatMoney(purchaseInvoiceBalance))}</div>
           </div>
         </body>
       </html>
@@ -6579,7 +6804,7 @@ export function useAppController() {
 
       const pdf = await Print.printToFileAsync({ html });
       if (!pdf?.uri) {
-        setStatusMessage("تم فتح نافذة الطباعة لفاتورة اليوم.");
+        setStatusMessage("تم فتح نافذة الطباعة لفاتورة التوريدات.");
         return;
       }
 
@@ -6591,12 +6816,12 @@ export function useAppController() {
 
       await Sharing.shareAsync(pdf.uri, {
         mimeType: "application/pdf",
-        dialogTitle: "فاتورة توريدات اليوم",
+        dialogTitle: activePurchaseInvoiceTitle,
         UTI: "com.adobe.pdf",
       });
-      setStatusMessage("تم إنشاء ومشاركة فاتورة توريدات اليوم PDF.");
+      setStatusMessage("تم إنشاء ومشاركة فاتورة التوريدات PDF.");
     } catch (error: unknown) {
-      setStatusMessage("تعذر إنشاء ملف PDF لفاتورة اليوم.");
+      setStatusMessage("تعذر إنشاء ملف PDF لفاتورة التوريدات.");
     }
   };
 
@@ -6636,6 +6861,8 @@ export function useAppController() {
     addTawasiSupplyFromPad,
     adminDatePickerTarget,
     adminDatePickerValue,
+    adminDashboardAllStoresKey: ADMIN_DASHBOARD_ALL_STORES,
+    adminDashboardStoreId,
     adminFromDateInput,
     adminToDateInput,
     applyDiscountFromPad,
@@ -6643,6 +6870,7 @@ export function useAppController() {
     auditNetSalesAmount,
     backspacePad,
     beginExpenseEdit,
+    beginEmployeeEdit,
     beginProductEdit,
     canManageExpenses,
     canManageInventory,
@@ -6659,7 +6887,7 @@ export function useAppController() {
     closeMobileNav,
     closeTodayPurchasesInvoice,
     confirmAdminDatePicker,
-    dashboardSummaries,
+    dashboardSummaries: visibleDashboardSummaries,
     decreaseProductInCart,
     deleteExpenseRecord,
     deleteProductDefinition,
@@ -6668,6 +6896,7 @@ export function useAppController() {
     effectiveDashboardTotals,
     effectiveExpenseCategoryOptions,
     employeeNameInput,
+    employeeEditingId,
     employeeWeeklySalaryInput,
     employeeWeeklySnapshots,
     expenseAmountInput,
@@ -6683,8 +6912,8 @@ export function useAppController() {
     expenseNoteInput,
     expenses,
     exportExpensesData,
+    exportPurchaseInvoicePdf,
     exportPurchasesData,
-    exportTodayPurchasesInvoicePdf,
     filteredExpenseRows,
     filteredPurchaseRows,
     formatMoney,
@@ -6726,6 +6955,7 @@ export function useAppController() {
     openAdminDatePicker,
     openExpenseDetails,
     openProductCreateForm,
+    openSelectedPurchasesInvoice,
     openSettlementDetails,
     openTodayPurchasesInvoice,
     orders,
@@ -6746,6 +6976,9 @@ export function useAppController() {
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
+    purchaseInvoiceDateInput,
+    purchaseInvoiceNoteInput,
+    purchaseInvoiceTitle: activePurchaseInvoiceTitle,
     purchases,
     pushPadToken,
     queue,
@@ -6768,6 +7001,7 @@ export function useAppController() {
     removeEmployeeAbsence,
     removeEmployeeWithdrawal,
     resetExpenseForm,
+    resetEmployeeForm,
     resetProductForm,
     roundPadValue,
     saveExpense,
@@ -6785,6 +7019,7 @@ export function useAppController() {
     setActivePosProductKey,
     setActiveScreen,
     setActualRemainingInput,
+    setAdminDashboardStoreId,
     setDiscountInput,
     setEmployeeNameInput,
     setEmployeeWeeklySalaryInput,
@@ -6808,6 +7043,7 @@ export function useAppController() {
     setPurchaseFilterFrom,
     setPurchaseFilterProduct,
     setPurchaseFilterTo,
+    setPurchaseInvoiceDateInput,
     setSelectedExpenseDetails,
     setSelectedOrderInvoice,
     setSelectedSettlementDetail,
@@ -6815,6 +7051,7 @@ export function useAppController() {
     setSettlementNoteInput,
     setStatusMessage,
     setTawasiCapitalInput,
+    setTawasiNoteInput,
     setTawasiSellPriceInput,
     setSupplyPaymentAmountInput,
     setSupplyPaymentNoteInput,
@@ -6846,6 +7083,7 @@ export function useAppController() {
     submitOrder,
     subtotal,
     tawasiCapitalInput,
+    tawasiNoteInput,
     tawasiSellPriceInput,
     supplyPaymentAmountInput,
     supplyPaymentNoteInput,
@@ -6858,13 +7096,14 @@ export function useAppController() {
     todayExpectedRemaining,
     todayExpensesTotal,
     todayNetSales,
-    todayPurchaseInvoiceRows,
-    todayPurchaseInvoiceTotal,
-    todayPurchaseProductRows,
-    todayPurchaseTawasiRows,
-    todayPurchasePaymentRows,
-    todayPurchasePaymentsTotal,
-    todayPurchaseInvoiceBalance,
+    activePurchaseInvoiceDate,
+    purchaseInvoiceRows,
+    purchaseInvoiceTotal,
+    purchaseInvoiceProductRows,
+    purchaseInvoiceTawasiRows,
+    purchaseInvoicePaymentRows,
+    purchaseInvoicePaymentsTotal,
+    purchaseInvoiceBalance,
     todayPurchasesTotal,
     todayRefundTotal,
     todaySalesTotal,
@@ -6876,6 +7115,7 @@ export function useAppController() {
     updateInventoryDestructionNoteInput,
     updateSettlementActualInput,
     updateSharesInput,
+    updatePurchaseInvoiceNoteInput,
     updateTodaySupplyInput,
     usernameInput,
     weekEndDate,
@@ -6917,11 +7157,11 @@ export function useAppController() {
       activeScreenLabel,
       assignedStoreId,
       canSwitchStore,
-      lastTwoCompletedSalesOrders,
       isAdmin,
       isDesktop,
       isMobileNavOpen,
       isOnline,
+      lastTwoCompletedSalesOrders,
       logout,
       navItems,
       selectedStoreId,

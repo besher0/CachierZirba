@@ -296,6 +296,13 @@ export interface CreateEmployeePayload {
   syncedAt: string;
 }
 
+export interface UpdateEmployeePayload {
+  name?: string;
+  weeklySalary?: number;
+  isActive?: boolean;
+  syncedAt?: string;
+}
+
 export interface ApiEmployee extends CreateEmployeePayload {
   id: string;
   createdAt: string;
@@ -460,6 +467,12 @@ export interface EmployeeCreateSyncJob extends SyncJobBase {
   payload: CreateEmployeePayload;
 }
 
+export interface EmployeeUpdateSyncJob extends SyncJobBase {
+  action: 'UPDATE';
+  entity: 'EMPLOYEE';
+  payload: UpdateEmployeePayload;
+}
+
 export interface EmployeeAbsenceCreateSyncJob extends SyncJobBase {
   action: 'CREATE';
   entity: 'EMPLOYEE_ABSENCE';
@@ -501,6 +514,7 @@ export type SyncJob =
   | InventoryAdjustmentCreateSyncJob
   | InventoryDestructionCreateSyncJob
   | EmployeeCreateSyncJob
+  | EmployeeUpdateSyncJob
   | EmployeeAbsenceCreateSyncJob
   | EmployeeAbsenceDeleteSyncJob
   | EmployeeWithdrawalCreateSyncJob
