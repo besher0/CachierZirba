@@ -235,6 +235,21 @@ interface TodayPurchaseInvoiceRow {
   pendingCount: number;
 }
 
+interface PurchaseHistorySummaryRow {
+  key: string;
+  productName: string;
+  purchaseKind: "SUPPLY" | "TAWASI";
+  quantity: number;
+  unitCost: number;
+  totalCost: number;
+  sellPrice: number;
+  firstPurchaseDate: string;
+  lastPurchaseDate: string;
+  purchaseDatesCount: number;
+  synced: boolean;
+  pendingCount: number;
+}
+
 interface TodayPurchasePaymentRow {
   key: string;
   amount: number;
@@ -589,6 +604,11 @@ export function useAppController() {
     "from" | "to" | null
   >(null);
   const [adminDatePickerValue, setAdminDatePickerValue] = useState(new Date());
+  const [purchaseDatePickerTarget, setPurchaseDatePickerTarget] = useState<
+    "from" | "to" | null
+  >(null);
+  const [purchaseDatePickerValue, setPurchaseDatePickerValue] =
+    useState(new Date());
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isMobileNavVisible, setIsMobileNavVisible] = useState(false);
   const mobileNavTranslateX = useRef(new Animated.Value(420)).current;
@@ -1475,6 +1495,87 @@ export function useAppController() {
     ],
   );
 
+  const purchaseHistorySummaryRows = useMemo<PurchaseHistorySummaryRow[]>(() => {
+    const orderIndexByProduct = new Map(
+      posProducts.map((product, index) => [
+        normalizeProductKey(product.name),
+        index,
+      ]),
+    );
+    const grouped = new Map<
+      string,
+      PurchaseHistorySummaryRow & {
+        purchaseDates: Set<string>;
+        sortIndex: number;
+      }
+    >();
+
+    filteredPurchaseRows
+      .filter((item) => item.purchaseKind !== "PAYMENT")
+      .forEach((item) => {
+        const productKey = normalizeProductKey(item.productName);
+        const key = `${item.purchaseKind}:${productKey}`;
+        const existing = grouped.get(key);
+
+        if (existing) {
+          existing.quantity += item.quantity;
+          existing.totalCost += item.totalCost;
+          existing.sellPrice += item.sellPrice;
+          existing.synced = existing.synced && item.synced;
+          existing.pendingCount += item.synced ? 0 : 1;
+          existing.firstPurchaseDate =
+            item.purchaseDate < existing.firstPurchaseDate
+              ? item.purchaseDate
+              : existing.firstPurchaseDate;
+          existing.lastPurchaseDate =
+            item.purchaseDate > existing.lastPurchaseDate
+              ? item.purchaseDate
+              : existing.lastPurchaseDate;
+          existing.purchaseDates.add(item.purchaseDate);
+          return;
+        }
+
+        grouped.set(key, {
+          key,
+          productName: item.productName,
+          purchaseKind: item.purchaseKind === "TAWASI" ? "TAWASI" : "SUPPLY",
+          quantity: item.quantity,
+          unitCost: item.unitCost,
+          totalCost: item.totalCost,
+          sellPrice: item.sellPrice,
+          firstPurchaseDate: item.purchaseDate,
+          lastPurchaseDate: item.purchaseDate,
+          purchaseDatesCount: 1,
+          synced: item.synced,
+          pendingCount: item.synced ? 0 : 1,
+          purchaseDates: new Set([item.purchaseDate]),
+          sortIndex:
+            orderIndexByProduct.get(productKey) ?? Number.MAX_SAFE_INTEGER,
+        });
+      });
+
+    return Array.from(grouped.values())
+      .sort((a, b) => {
+        if (a.sortIndex !== b.sortIndex) {
+          return a.sortIndex - b.sortIndex;
+        }
+        return a.productName.localeCompare(b.productName, "ar");
+      })
+      .map(({ purchaseDates, sortIndex, ...row }) => {
+        const quantity = Number(row.quantity.toFixed(3));
+        const totalCost = Number(row.totalCost.toFixed(2));
+        return {
+          ...row,
+          quantity,
+          totalCost,
+          unitCost:
+            quantity > 0 ? Number((totalCost / quantity).toFixed(2)) : 0,
+          sellPrice: Number(row.sellPrice.toFixed(2)),
+          purchaseDatesCount: purchaseDates.size,
+        };
+      });
+  }, [filteredPurchaseRows, posProducts]);
+
   const purchaseInvoiceRows = useMemo<TodayPurchaseInvoiceRow[]>(() => {
     const orderIndexByProduct = new Map(
       posProducts.map((product, index) => [
@@ -1850,6 +1951,10 @@ export function useAppController() {
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
     const destroyedByProduct = new Map<string, number>();
+    const previousPurchasedByProduct = new Map<string, number>();
+    const previousSoldByProduct = new Map<string, number>();
+    const previousRefundedByProduct = new Map<string, number>();
+    const previousDestroyedByProduct = new Map<string, number>();
     const todayReceivedByProduct = new Map<string, number>();
 
     mergedPurchaseRows.forEach((entry) => {
@@ -1879,9 +1984,16 @@ export function useAppController() {
         key,
         (purchasedByProduct.get(key) ?? 0) + entry.quantity,
       );
+      if (entry.purchaseDate < todayDate) {
+        previousPurchasedByProduct.set(
+          key,
+          (previousPurchasedByProduct.get(key) ?? 0) + entry.quantity,
+        );
+      }
     });
 
     allMergedOrderRows.forEach((order) => {
+      const orderDate = toBusinessDateFromTimestamp(order.orderedAt);
       order.items.forEach((item) => {
         const key = normalizeProductKey(item.productName);
         const product = productByNormalizedName.get(key);
@@ -1899,8 +2011,20 @@ export function useAppController() {
             key,
             (refundedByProduct.get(key) ?? 0) + item.quantity,
           );
+          if (orderDate < todayDate) {
+            previousRefundedByProduct.set(
+              key,
+              (previousRefundedByProduct.get(key) ?? 0) + item.quantity,
+            );
+          }
         } else {
           soldByProduct.set(key, (soldByProduct.get(key) ?? 0) + item.quantity);
+          if (orderDate < todayDate) {
+            previousSoldByProduct.set(
+              key,
+              (previousSoldByProduct.get(key) ?? 0) + item.quantity,
+            );
+          }
         }
       });
     });
@@ -1927,6 +2051,15 @@ export function useAppController() {
         key,
         (destroyedByProduct.get(key) ?? 0) + destruction.quantity,
       );
+      if (
+        destructionTime &&
+        toIsoDateOnlyInTimeZone(new Date(destructionTime)) < todayDate
+      ) {
+        previousDestroyedByProduct.set(
+          key,
+          (previousDestroyedByProduct.get(key) ?? 0) + destruction.quantity,
+        );
+      }
     });
 
     return posProducts.map((product) => {
@@ -1935,11 +2068,24 @@ export function useAppController() {
       const sold = soldByProduct.get(key) ?? 0;
       const refunded = refundedByProduct.get(key) ?? 0;
       const destroyed = destroyedByProduct.get(key) ?? 0;
+      const previousPurchased = previousPurchasedByProduct.get(key) ?? 0;
+      const previousSold = previousSoldByProduct.get(key) ?? 0;
+      const previousRefunded = previousRefundedByProduct.get(key) ?? 0;
+      const previousDestroyed = previousDestroyedByProduct.get(key) ?? 0;
       const inventoryBaseline =
         latestInventoryAdjustmentByProduct.get(product.clientProductId)
           ?.actualQuantity ?? 0;
       const remainingQty = Number(
         (inventoryBaseline + purchased - sold + refunded - destroyed).toFixed(3),
+      );
+      const previousRemainingQty = Number(
+        (
+          inventoryBaseline +
+          previousPurchased -
+          previousSold +
+          previousRefunded -
+          previousDestroyed
+        ).toFixed(3),
       );
       const loggedToday = Number(
         (todayReceivedByProduct.get(key) ?? 0).toFixed(3),
@@ -1951,6 +2097,7 @@ export function useAppController() {
         sellPrice: product.price,
         costPrice: product.costPrice,
         remainingQty,
+        previousRemainingQty,
         loggedToday,
       };
     });
@@ -3276,6 +3423,80 @@ export function useAppController() {
       }
     },
     [adminDatePickerTarget, applyAdminDateSelection, closeAdminDatePicker],
+  );
+
+  const applyPurchaseDateSelection = useCallback(
+    (target: "from" | "to", selectedDate: Date) => {
+      const isoDate = toIsoDateOnly(selectedDate);
+      if (target === "from") {
+        setPurchaseFilterFrom(isoDate);
+        return;
+      }
+      setPurchaseFilterTo(isoDate);
+    },
+    [],
+  );
+
+  const openPurchaseDatePicker = useCallback(
+    (target: "from" | "to") => {
+      const source = target === "from" ? purchaseFilterFrom : purchaseFilterTo;
+      const isIsoDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(source);
+      setPurchaseDatePickerValue(
+        isIsoDateOnly ? dateFromIsoOnly(source) : new Date(),
+      );
+      setPurchaseDatePickerTarget(target);
+    },
+    [purchaseFilterFrom, purchaseFilterTo],
+  );
+
+  const clearPurchaseDateFilters = useCallback(() => {
+    setPurchaseFilterFrom("");
+    setPurchaseFilterTo("");
+    setStatusMessage("تم مسح فلتر تاريخ المشتريات.");
+  }, []);
+
+  const closePurchaseDatePicker = useCallback(() => {
+    setPurchaseDatePickerTarget(null);
+  }, []);
+
+  const confirmPurchaseDatePicker = useCallback(() => {
+    if (!purchaseDatePickerTarget) {
+      return;
+    }
+
+    applyPurchaseDateSelection(
+      purchaseDatePickerTarget,
+      purchaseDatePickerValue,
+    );
+    closePurchaseDatePicker();
+  }, [
+    applyPurchaseDateSelection,
+    closePurchaseDatePicker,
+    purchaseDatePickerTarget,
+    purchaseDatePickerValue,
+  ]);
+
+  const onPurchaseDatePickerChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS === "android") {
+        const target = purchaseDatePickerTarget;
+        closePurchaseDatePicker();
+
+        if (event.type === "set" && selectedDate && target) {
+          applyPurchaseDateSelection(target, selectedDate);
+        }
+        return;
+      }
+
+      if (selectedDate) {
+        setPurchaseDatePickerValue(selectedDate);
+      }
+    },
+    [
+      applyPurchaseDateSelection,
+      closePurchaseDatePicker,
+      purchaseDatePickerTarget,
+    ],
   );
 
   const validateSession = useCallback(async () => {
@@ -6882,11 +7103,14 @@ export function useAppController() {
     clearAdminDateFilters,
     clearExpenseImage,
     clearPad,
+    clearPurchaseDateFilters,
     commitInventoryAdjustment,
     closeAdminDatePicker,
+    closePurchaseDatePicker,
     closeMobileNav,
     closeTodayPurchasesInvoice,
     confirmAdminDatePicker,
+    confirmPurchaseDatePicker,
     dashboardSummaries: visibleDashboardSummaries,
     decreaseProductInCart,
     deleteExpenseRecord,
@@ -6952,9 +7176,11 @@ export function useAppController() {
     newProductSellPriceInput,
     newProductUnitType,
     onAdminDatePickerChange,
+    onPurchaseDatePickerChange,
     openAdminDatePicker,
     openExpenseDetails,
     openProductCreateForm,
+    openPurchaseDatePicker,
     openSelectedPurchasesInvoice,
     openSettlementDetails,
     openTodayPurchasesInvoice,
@@ -6976,6 +7202,9 @@ export function useAppController() {
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
+    purchaseDatePickerTarget,
+    purchaseDatePickerValue,
+    purchaseHistorySummaryRows,
     purchaseInvoiceDateInput,
     purchaseInvoiceNoteInput,
     purchaseInvoiceTitle: activePurchaseInvoiceTitle,

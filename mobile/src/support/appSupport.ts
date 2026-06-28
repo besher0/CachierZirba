@@ -111,6 +111,7 @@ export interface ProductSupplyRow {
   sellPrice: number;
   costPrice: number;
   remainingQty: number;
+  previousRemainingQty: number;
   receivedToday: number;
   loggedToday: number;
 }

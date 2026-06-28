@@ -5,18 +5,22 @@ import { useAppScreenContext } from "./AppScreenContext";
 
 export function PurchasesScreen() {
   const {
+    DateTimePicker,
+    Modal,
+    Platform,
     Pressable,
     Text,
     TextInput,
     View,
     beginProductEdit,
-    buttonDisabled,
     canManageInventory,
+    clearPurchaseDateFilters,
+    closePurchaseDatePicker,
+    confirmPurchaseDatePicker,
     deleteProductDefinition,
-    deletePurchaseRecord,
     exportPurchasesData,
-    filteredPurchaseRows,
     formatMoney,
+    formatQuantity,
     isAdmin,
     isProductFormOpen,
     isRefreshingActiveScreen,
@@ -28,13 +32,17 @@ export function PurchasesScreen() {
     newProductUnitType,
     openSelectedPurchasesInvoice,
     openTodayPurchasesInvoice,
+    openPurchaseDatePicker,
     openProductCreateForm,
+    onPurchaseDatePickerChange,
     productEditingId,
     productSupplyRows,
-    pendingPurchaseDeleteIds,
+    purchaseDatePickerTarget,
+    purchaseDatePickerValue,
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
+    purchaseHistorySummaryRows,
     purchaseInvoiceDateInput,
     receiveTodaySupplies,
     refreshActiveScreenData,
@@ -47,9 +55,7 @@ export function PurchasesScreen() {
     setNewProductNameInput,
     setNewProductSellPriceInput,
     setNewProductUnitType,
-    setPurchaseFilterFrom,
     setPurchaseFilterProduct,
-    setPurchaseFilterTo,
     setPurchaseInvoiceDateInput,
     setStatusMessage,
     setSupplyPaymentAmountInput,
@@ -69,17 +75,18 @@ export function PurchasesScreen() {
 
   const sections = [
     { key: "supply", data: productSupplyRows },
-    { key: "history", data: filteredPurchaseRows },
+    { key: "history", data: purchaseHistorySummaryRows },
   ];
 
   return (
-    <SectionList
-      style={styles.flexOne}
-      contentContainerStyle={styles.content}
-      sections={sections}
-      keyExtractor={(item, index) =>
-        item.productId ?? item.clientPurchaseId ?? `${index}`
-      }
+    <>
+      <SectionList
+        style={styles.flexOne}
+        contentContainerStyle={styles.content}
+        sections={sections}
+        keyExtractor={(item, index) =>
+          item.key ?? item.productId ?? item.clientPurchaseId ?? `${index}`
+        }
       initialNumToRender={12}
       maxToRenderPerBatch={12}
       windowSize={7}
@@ -123,20 +130,42 @@ export function PurchasesScreen() {
               </Pressable>
             </View>
             <View style={styles.inputRow}>
-              <TextInput
+              <Pressable
                 style={styles.input}
-                value={purchaseFilterFrom}
-                onChangeText={setPurchaseFilterFrom}
-                placeholder="من تاريخ"
-                placeholderTextColor="#d7b3c4"
-              />
-              <TextInput
+                onPress={() => openPurchaseDatePicker("from")}
+              >
+                <Text
+                  style={
+                    purchaseFilterFrom
+                      ? styles.datePickerInputText
+                      : styles.datePickerInputPlaceholder
+                  }
+                >
+                  {purchaseFilterFrom || "من تاريخ"}
+                </Text>
+              </Pressable>
+              <Pressable
                 style={styles.input}
-                value={purchaseFilterTo}
-                onChangeText={setPurchaseFilterTo}
-                placeholder="إلى تاريخ"
-                placeholderTextColor="#d7b3c4"
-              />
+                onPress={() => openPurchaseDatePicker("to")}
+              >
+                <Text
+                  style={
+                    purchaseFilterTo
+                      ? styles.datePickerInputText
+                      : styles.datePickerInputPlaceholder
+                  }
+                >
+                  {purchaseFilterTo || "إلى تاريخ"}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.rowActionButtons}>
+              <Pressable
+                style={styles.smallRefreshButton}
+                onPress={clearPurchaseDateFilters}
+              >
+                <Text style={styles.smallRefreshText}>مسح التاريخ</Text>
+              </Pressable>
             </View>
             <TextInput
               style={styles.inputFull}
@@ -146,7 +175,7 @@ export function PurchasesScreen() {
               placeholderTextColor="#d7b3c4"
             />
             {section.data.length === 0 ? (
-              <Text style={styles.emptyText}>لا يوجد قيود مشتريات.</Text>
+              <Text style={styles.emptyText}>لا توجد كميات مشتريات.</Text>
             ) : null}
           </View>
         )
@@ -243,48 +272,28 @@ export function PurchasesScreen() {
             <View style={styles.orderRowMain}>
               <Text style={styles.orderRowId}>{item.productName}</Text>
               <Text style={styles.orderRowItems}>
-                {item.purchaseKind === "PAYMENT"
-                  ? "دفعة فاتورة"
-                  : `${item.quantity} × ${formatMoney(item.unitCost)}`}
+                الكمية: {formatQuantity(item.quantity)}
               </Text>
             </View>
             <View style={styles.orderRowMain}>
-              <Text style={styles.orderRowTotal}>
-                {formatMoney(
-                  item.purchaseKind === "PAYMENT"
-                    ? item.paymentAmount
-                    : item.totalCost,
-                )}
-              </Text>
+              <Text style={styles.orderRowTotal}>{formatMoney(item.totalCost)}</Text>
               <Text style={item.synced ? styles.syncedText : styles.pendingText}>
-                {item.synced ? "متزامن" : "معلق"}
+                {item.synced ? "متزامن" : `${item.pendingCount} معلق`}
               </Text>
             </View>
-            <Text style={styles.orderRowMeta}>{item.purchaseDate}</Text>
+            <Text style={styles.orderRowMeta}>
+              {item.firstPurchaseDate === item.lastPurchaseDate
+                ? item.firstPurchaseDate
+                : `${item.firstPurchaseDate} - ${item.lastPurchaseDate}`}
+              {item.purchaseDatesCount > 1 ? ` | ${item.purchaseDatesCount} أيام` : ""}
+            </Text>
+            <Text style={styles.orderRowMeta}>
+              متوسط رأس المال: {formatMoney(item.unitCost)}
+            </Text>
             {item.purchaseKind === "TAWASI" ? (
               <Text style={styles.orderRowMeta}>
-                رأس المال: {formatMoney(item.totalCost)} | سعر المبيع: {formatMoney(item.sellPrice)}
+                سعر المبيع: {formatMoney(item.sellPrice)}
               </Text>
-            ) : null}
-            {item.note ? <Text style={styles.orderRowMeta}>{item.note}</Text> : null}
-            {canManageInventory ? (
-              <View style={styles.rowActionButtons}>
-                <Pressable
-                  style={[
-                    styles.dangerButton,
-                    pendingPurchaseDeleteIds[item.clientPurchaseId] &&
-                      styles.buttonDisabled,
-                  ]}
-                  disabled={Boolean(pendingPurchaseDeleteIds[item.clientPurchaseId])}
-                  onPress={() => void deletePurchaseRecord(item.clientPurchaseId)}
-                >
-                  <Text style={styles.dangerButtonText}>
-                    {pendingPurchaseDeleteIds[item.clientPurchaseId]
-                      ? "جار الحذف..."
-                      : "حذف"}
-                  </Text>
-                </Pressable>
-              </View>
             ) : null}
           </View>
         )
@@ -493,6 +502,56 @@ export function PurchasesScreen() {
           ) : null}
         </View>
       }
-    />
+      />
+      {purchaseDatePickerTarget && Platform.OS === "android" ? (
+        <DateTimePicker
+          mode="date"
+          value={purchaseDatePickerValue}
+          onChange={onPurchaseDatePickerChange}
+          maximumDate={new Date("2100-12-31T00:00:00")}
+          minimumDate={new Date("2000-01-01T00:00:00")}
+        />
+      ) : null}
+      <Modal
+        visible={purchaseDatePickerTarget !== null && Platform.OS !== "android"}
+        transparent
+        animationType="fade"
+        onRequestClose={closePurchaseDatePicker}
+      >
+        <View style={styles.invoiceOverlay}>
+          <View style={styles.datePickerModalCard}>
+            <Text style={styles.sectionTitle}>
+              {purchaseDatePickerTarget === "from"
+                ? "اختر تاريخ البداية"
+                : "اختر تاريخ النهاية"}
+            </Text>
+            {purchaseDatePickerTarget ? (
+              <DateTimePicker
+                mode="date"
+                display="spinner"
+                value={purchaseDatePickerValue}
+                onChange={onPurchaseDatePickerChange}
+                maximumDate={new Date("2100-12-31T00:00:00")}
+                minimumDate={new Date("2000-01-01T00:00:00")}
+              />
+            ) : null}
+            <View style={styles.rowActionButtons}>
+              <Pressable
+                style={styles.smallRefreshButton}
+                onPress={closePurchaseDatePicker}
+              >
+                <Text style={styles.smallRefreshText}>إلغاء</Text>
+              </Pressable>
+              <Pressable
+                style={styles.datePickerConfirmButton}
+                onPress={confirmPurchaseDatePicker}
+              >
+                <Text style={styles.datePickerConfirmText}>اعتماد التاريخ</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }

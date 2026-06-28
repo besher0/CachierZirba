@@ -6,6 +6,8 @@ export interface PieceStockAuditInput {
   unitType: ProductTemplate["unitType"];
   sellPrice: number;
   remainingQty: number;
+  previousRemainingQty: number;
+  loggedToday: number;
 }
 
 export interface PieceStockAuditRow {
@@ -16,6 +18,8 @@ export interface PieceStockAuditRow {
   diffQty: number | null;
   unitPrice: number;
   adjustmentAmount: number | null;
+  previousRemainingQty: number;
+  receivedTodayQty: number;
 }
 
 export function getExpectedSettlementCarryForwardAmount(
@@ -65,6 +69,8 @@ export function buildPieceStockAuditRows(
         diffQty,
         unitPrice: item.sellPrice,
         adjustmentAmount,
+        previousRemainingQty: item.previousRemainingQty,
+        receivedTodayQty: item.loggedToday,
       };
     });
 }

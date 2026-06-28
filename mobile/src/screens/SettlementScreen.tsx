@@ -311,6 +311,14 @@ export function SettlementScreen() {
                 <Text style={styles.orderRowId}>{item.productName}</Text>
                 <Text style={styles.orderRowItems}>النظري: {item.expectedQty}</Text>
               </View>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowMeta}>
+                  زائد من قبل: {formatQuantity(item.previousRemainingQty)}
+                </Text>
+                <Text style={styles.orderRowMeta}>
+                  نزل اليوم: {formatQuantity(item.receivedTodayQty)}
+                </Text>
+              </View>
               <TextInput
                 style={styles.inputFull}
                 value={settlementActualInputs[item.productId] ?? ""}
