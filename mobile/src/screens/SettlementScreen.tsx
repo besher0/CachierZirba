@@ -89,6 +89,8 @@ export function SettlementScreen() {
       }
       initialNumToRender={12}
       maxToRenderPerBatch={12}
+      removeClippedSubviews
+      updateCellsBatchingPeriod={50}
       windowSize={7}
       refreshing={isRefreshingActiveScreen}
       onRefresh={() =>

@@ -79,6 +79,14 @@ export class OrdersService {
       qb.andWhere('o.orderedAt <= :to', { to: query.to });
     }
 
+    if (query.offset !== undefined) {
+      qb.skip(query.offset);
+    }
+
+    if (query.limit !== undefined) {
+      qb.take(query.limit);
+    }
+
     return qb.getMany();
   }
 

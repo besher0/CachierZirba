@@ -78,6 +78,8 @@ export function ExpensesScreen() {
       keyExtractor={(item) => item.clientExpenseId}
       initialNumToRender={12}
       maxToRenderPerBatch={12}
+      removeClippedSubviews
+      updateCellsBatchingPeriod={50}
       windowSize={7}
       refreshing={isRefreshingActiveScreen}
       onRefresh={() =>

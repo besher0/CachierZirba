@@ -64,6 +64,8 @@ interface ListQuery {
   storeId?: string;
   from?: string;
   to?: string;
+  limit?: number;
+  offset?: number;
 }
 
 interface ExpenseListQuery extends ListQuery {
@@ -138,6 +140,8 @@ function buildListQuery(params: ListQuery): string {
     storeId: params.storeId,
     from: params.from,
     to: params.to,
+    limit: params.limit === undefined ? undefined : String(params.limit),
+    offset: params.offset === undefined ? undefined : String(params.offset),
   });
 }
 

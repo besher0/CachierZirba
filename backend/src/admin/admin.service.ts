@@ -235,6 +235,14 @@ export class AdminService {
       qb.andWhere('o.orderedAt <= :to', { to: toValue });
     }
 
+    if (query.offset !== undefined) {
+      qb.skip(query.offset);
+    }
+
+    if (query.limit !== undefined) {
+      qb.take(query.limit);
+    }
+
     return qb.getMany();
   }
 

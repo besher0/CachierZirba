@@ -214,6 +214,7 @@ const MAX_SYNC_JOB_RETRIES = 5;
 const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 15000;
 const RESOURCE_REFRESH_TTL_MS = 60000;
 const ADMIN_DASHBOARD_ALL_STORES = "__ALL__";
+const ORDER_REFRESH_LIMIT = 200;
 
 type RefreshTimestamps = Record<string, number>;
 
@@ -405,9 +406,17 @@ export function useAppController() {
     Record<string, true>
   >({});
   const isSyncingRef = useRef(false);
+  const activeScreenRef = useRef<AppScreenKey>("pos");
   const isBuildingOrderRef = useRef(false);
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
+  const pendingOrderSyncMarkIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSyncQueuePersistenceRef = useRef<{
+    timeout: ReturnType<typeof setTimeout>;
+    value: SyncJob[];
+    version: number;
+  } | null>(null);
+  const syncQueuePersistenceVersionRef = useRef(0);
   const ordersPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const pendingOrdersPersistenceRef = useRef<{
     timeout: ReturnType<typeof setTimeout>;
@@ -416,6 +425,7 @@ export function useAppController() {
   } | null>(null);
   const ordersPersistenceVersionRef = useRef(0);
   const reportOrdersSyncVersionRef = useRef(0);
+  const heavyReportScreenVersionRef = useRef(0);
   const hasLoadedCashCarryRef = useRef(false);
   const deferredArrayPersistenceRef = useRef<
     Map<string, { timeout: ReturnType<typeof setTimeout>; value: unknown[] }>
@@ -439,6 +449,8 @@ export function useAppController() {
 
   const [orders, setOrders] = useState<LocalOrder[]>([]);
   const [reportOrders, setReportOrders] = useState<LocalOrder[]>([]);
+  const [heavyReportScreen, setHeavyReportScreen] =
+    useState<AppScreenKey>("pos");
   const [dailySettlements, setDailySettlements] = useState<
     LocalDailySettlement[]
   >([]);
@@ -451,6 +463,8 @@ export function useAppController() {
     LocalInventoryDestruction[]
   >([]);
   const [queue, setQueue] = useState<SyncJob[]>([]);
+
+  activeScreenRef.current = activeScreen;
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discountInput, setDiscountInput] = useState("0");
@@ -1018,6 +1032,32 @@ export function useAppController() {
     syncReportOrders(orders, activeScreen !== "pos");
   }, [activeScreen, orders, syncReportOrders]);
 
+  useEffect(() => {
+    const version = heavyReportScreenVersionRef.current + 1;
+    heavyReportScreenVersionRef.current = version;
+
+    if (activeScreen === "pos") {
+      setHeavyReportScreen("pos");
+      return;
+    }
+
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => {
+        if (heavyReportScreenVersionRef.current === version) {
+          setHeavyReportScreen(activeScreen);
+        }
+      }, 0);
+    });
+  }, [activeScreen]);
+
+  const shouldComputePurchaseReports =
+    heavyReportScreen === "purchases" || heavyReportScreen === "settlement";
+  const shouldComputeExpenseReports =
+    heavyReportScreen === "expenses" || heavyReportScreen === "settlement";
+  const shouldComputeSettlementReports = heavyReportScreen === "settlement";
+  const shouldComputeEmployeeReports =
+    heavyReportScreen === "employees" || heavyReportScreen === "settlement";
+
   const settlementCycleStartIso = useMemo(() => {
     const candidates: string[] = [];
 
@@ -1150,6 +1190,10 @@ export function useAppController() {
   );
 
   const mergedExpenseRows = useMemo(() => {
+    if (!shouldComputeExpenseReports) {
+      return [];
+    }
+
     const rows = new Map<string, ExpenseRow>();
 
     remoteExpenses
@@ -1172,6 +1216,7 @@ export function useAppController() {
     remoteExpenses,
     selectedStoreExpenses,
     selectedStoreId,
+    shouldComputeExpenseReports,
   ]);
 
   const effectiveExpenseCategoryOptions = useMemo(() => {
@@ -1205,6 +1250,10 @@ export function useAppController() {
   );
 
   const mergedPurchaseRows = useMemo(() => {
+    if (!shouldComputePurchaseReports) {
+      return [];
+    }
+
     const rows = new Map<string, PurchaseRow>();
 
     remotePurchases
@@ -1227,6 +1276,7 @@ export function useAppController() {
     remotePurchases,
     selectedStoreId,
     selectedStorePurchases,
+    shouldComputePurchaseReports,
   ]);
 
   const settlementRecordsByDate = useMemo(() => {
@@ -1234,6 +1284,16 @@ export function useAppController() {
     const expensesByDate = new Map<string, ExpenseRow[]>();
     const purchasesByDate = new Map<string, PurchaseRow[]>();
     const withdrawals = new Map<string, EmployeeWithdrawalEntry[]>();
+
+    if (!shouldComputeSettlementReports) {
+      return {
+        orders,
+        expenses: expensesByDate,
+        purchases: purchasesByDate,
+        withdrawals,
+      };
+    }
+
     const append = <T,>(map: Map<string, T[]>, key: string, value: T) => {
       const rows = map.get(key);
       if (rows) {
@@ -1262,6 +1322,7 @@ export function useAppController() {
     mergedExpenseRows,
     mergedPurchaseRows,
     selectedStoreWithdrawals,
+    shouldComputeSettlementReports,
   ]);
 
   const employeeNameById = useMemo(
@@ -1270,8 +1331,12 @@ export function useAppController() {
   );
 
   const settlementArchiveRows = useMemo(
-    () =>
-      mergedSettlementRows.map((settlement) => {
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return mergedSettlementRows.map((settlement) => {
         const dayOrders = settlementRecordsByDate.orders.get(settlement.businessDate) ?? [];
         const dayExpenses = settlementRecordsByDate.expenses.get(settlement.businessDate) ?? [];
         const dayPurchases = settlementRecordsByDate.purchases.get(settlement.businessDate) ?? [];
@@ -1311,14 +1376,20 @@ export function useAppController() {
           ),
           withdrawalsCount: dayWithdrawals.length,
         };
-      }),
+      });
+    },
     [
       mergedSettlementRows,
       settlementRecordsByDate,
+      shouldComputeSettlementReports,
     ],
   );
 
   const mergedInventoryAdjustments = useMemo(() => {
+    if (!shouldComputePurchaseReports) {
+      return [];
+    }
+
     const rows = new Map<
       string,
       ApiInventoryAdjustment | LocalInventoryAdjustment
@@ -1337,7 +1408,12 @@ export function useAppController() {
     return Array.from(rows.values()).sort((a, b) =>
       b.adjustedAt.localeCompare(a.adjustedAt),
     );
-  }, [inventoryAdjustments, remoteInventoryAdjustments, selectedStoreId]);
+  }, [
+    inventoryAdjustments,
+    remoteInventoryAdjustments,
+    selectedStoreId,
+    shouldComputePurchaseReports,
+  ]);
 
   const latestInventoryAdjustmentByProduct = useMemo(() => {
     const latest = new Map<
@@ -1355,6 +1431,10 @@ export function useAppController() {
   }, [mergedInventoryAdjustments]);
 
   const mergedInventoryDestructions = useMemo(() => {
+    if (!shouldComputePurchaseReports) {
+      return [];
+    }
+
     const rows = new Map<
       string,
       ApiInventoryDestruction | LocalInventoryDestruction
@@ -1376,6 +1456,7 @@ export function useAppController() {
     inventoryDestructions,
     remoteInventoryDestructions,
     selectedStoreId,
+    shouldComputePurchaseReports,
   ]);
 
   const isInCurrentSettlementCycle = useCallback(
@@ -1393,43 +1474,83 @@ export function useAppController() {
   );
 
   const ordersInCurrentCycle = useMemo(
-    () =>
-      allMergedOrderRows.filter((item) =>
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return allMergedOrderRows.filter((item) =>
         isInCurrentSettlementCycle(
           toBusinessDateFromTimestamp(item.orderedAt),
           item.orderedAt,
         ),
-      ),
-    [allMergedOrderRows, isInCurrentSettlementCycle],
+      );
+    },
+    [
+      allMergedOrderRows,
+      isInCurrentSettlementCycle,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const expensesInCurrentCycle = useMemo(
-    () =>
-      mergedExpenseRows.filter((item) =>
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return mergedExpenseRows.filter((item) =>
         isInCurrentSettlementCycle(item.expenseDate, item.occurredAt),
-      ),
-    [isInCurrentSettlementCycle, mergedExpenseRows],
+      );
+    },
+    [
+      isInCurrentSettlementCycle,
+      mergedExpenseRows,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const purchasesInCurrentCycle = useMemo(
-    () =>
-      mergedPurchaseRows.filter((item) =>
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return mergedPurchaseRows.filter((item) =>
         isInCurrentSettlementCycle(item.purchaseDate, item.occurredAt),
-      ),
-    [isInCurrentSettlementCycle, mergedPurchaseRows],
+      );
+    },
+    [
+      isInCurrentSettlementCycle,
+      mergedPurchaseRows,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const withdrawalsInCurrentCycle = useMemo(
-    () =>
-      selectedStoreWithdrawals.filter((item) =>
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return selectedStoreWithdrawals.filter((item) =>
         isInCurrentSettlementCycle(item.withdrawalDate, item.createdAt),
-      ),
-    [isInCurrentSettlementCycle, selectedStoreWithdrawals],
+      );
+    },
+    [
+      isInCurrentSettlementCycle,
+      selectedStoreWithdrawals,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const filteredExpenseRows = useMemo(
-    () =>
-      mergedExpenseRows.filter((item) => {
+    () => {
+      if (heavyReportScreen !== "expenses") {
+        return [];
+      }
+
+      return mergedExpenseRows.filter((item) => {
         if (
           expenseFilterCategory !== "ALL" &&
           item.category !== expenseFilterCategory
@@ -1455,19 +1576,25 @@ export function useAppController() {
         }
 
         return true;
-      }),
+      });
+    },
     [
       expenseFilterCategory,
       expenseFilterFrom,
       expenseFilterText,
       expenseFilterTo,
+      heavyReportScreen,
       mergedExpenseRows,
     ],
   );
 
   const filteredPurchaseRows = useMemo(
-    () =>
-      mergedPurchaseRows.filter((item) => {
+    () => {
+      if (heavyReportScreen !== "purchases") {
+        return [];
+      }
+
+      return mergedPurchaseRows.filter((item) => {
         if (purchaseFilterFrom && item.purchaseDate < purchaseFilterFrom) {
           return false;
         }
@@ -1486,8 +1613,10 @@ export function useAppController() {
         }
 
         return true;
-      }),
+      });
+    },
     [
+      heavyReportScreen,
       mergedPurchaseRows,
       purchaseFilterFrom,
       purchaseFilterProduct,
@@ -1496,6 +1625,10 @@ export function useAppController() {
   );
 
   const purchaseHistorySummaryRows = useMemo<PurchaseHistorySummaryRow[]>(() => {
+    if (heavyReportScreen !== "purchases") {
+      return [];
+    }
+
     const orderIndexByProduct = new Map(
       posProducts.map((product, index) => [
         normalizeProductKey(product.name),
@@ -1574,9 +1707,13 @@ export function useAppController() {
           purchaseDatesCount: purchaseDates.size,
         };
       });
-  }, [filteredPurchaseRows, posProducts]);
+  }, [filteredPurchaseRows, heavyReportScreen, posProducts]);
 
   const purchaseInvoiceRows = useMemo<TodayPurchaseInvoiceRow[]>(() => {
+    if (heavyReportScreen !== "purchases") {
+      return [];
+    }
+
     const orderIndexByProduct = new Map(
       posProducts.map((product, index) => [
         normalizeProductKey(product.name),
@@ -1646,11 +1783,20 @@ export function useAppController() {
             quantity > 0 ? Number((totalCost / quantity).toFixed(2)) : 0,
         };
       });
-  }, [activePurchaseInvoiceDate, mergedPurchaseRows, posProducts]);
+  }, [
+    activePurchaseInvoiceDate,
+    heavyReportScreen,
+    mergedPurchaseRows,
+    posProducts,
+  ]);
 
   const purchaseInvoicePaymentRows = useMemo<TodayPurchasePaymentRow[]>(
-    () =>
-      mergedPurchaseRows
+    () => {
+      if (heavyReportScreen !== "purchases") {
+        return [];
+      }
+
+      return mergedPurchaseRows
         .filter(
           (item) =>
             item.purchaseDate === activePurchaseInvoiceDate &&
@@ -1661,8 +1807,9 @@ export function useAppController() {
           amount: item.paymentAmount,
           note: item.note,
           synced: item.synced,
-        })),
-    [activePurchaseInvoiceDate, mergedPurchaseRows],
+        }));
+    },
+    [activePurchaseInvoiceDate, heavyReportScreen, mergedPurchaseRows],
   );
 
   const purchaseInvoiceProductRows = useMemo(
@@ -1947,6 +2094,10 @@ export function useAppController() {
   const productSupplyBaseRows = useMemo<
     Array<Omit<ProductSupplyRow, "receivedToday">>
   >(() => {
+    if (!shouldComputePurchaseReports) {
+      return [];
+    }
+
     const purchasedByProduct = new Map<string, number>();
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
@@ -2109,6 +2260,7 @@ export function useAppController() {
     posProducts,
     productByClientProductId,
     productByNormalizedName,
+    shouldComputePurchaseReports,
     todayDate,
   ]);
 
@@ -2124,8 +2276,12 @@ export function useAppController() {
   );
 
   const settlementInventoryDestructionRows = useMemo(
-    () =>
-      mergedInventoryDestructions
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return mergedInventoryDestructions
         .filter((item) =>
           isInCurrentSettlementCycle(
             toIsoDateOnlyInTimeZone(new Date(item.destroyedAt)),
@@ -2142,11 +2298,13 @@ export function useAppController() {
             note: item.note,
             destroyedAt: item.destroyedAt,
           };
-        }),
+        });
+    },
     [
       isInCurrentSettlementCycle,
       mergedInventoryDestructions,
       productByClientProductId,
+      shouldComputeSettlementReports,
     ],
   );
 
@@ -2197,8 +2355,12 @@ export function useAppController() {
   );
 
   const employeeWeeklySnapshots = useMemo<EmployeeWeeklySnapshot[]>(
-    () =>
-      selectedStoreEmployees.map((employee) => {
+    () => {
+      if (!shouldComputeEmployeeReports) {
+        return [];
+      }
+
+      return selectedStoreEmployees.map((employee) => {
         const weekAbsenceDays = new Set(
           selectedStoreAbsences
             .filter(
@@ -2239,11 +2401,13 @@ export function useAppController() {
           withdrawalsAmount,
           balance,
         };
-      }),
+      });
+    },
     [
       selectedStoreAbsences,
       selectedStoreEmployees,
       selectedStoreWithdrawals,
+      shouldComputeEmployeeReports,
       weekEndDate,
       weekStartDate,
     ],
@@ -2306,18 +2470,37 @@ export function useAppController() {
   );
 
   const productSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(
-    () => buildProductSalesSummaryRowsForOrders(ordersInCurrentCycle),
-    [buildProductSalesSummaryRowsForOrders, ordersInCurrentCycle],
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return buildProductSalesSummaryRowsForOrders(ordersInCurrentCycle);
+    },
+    [
+      buildProductSalesSummaryRowsForOrders,
+      ordersInCurrentCycle,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const pieceStockAuditRows = useMemo<PieceStockAuditRow[]>(
-    () =>
-      buildPieceStockAuditRows(
+    () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
+      return buildPieceStockAuditRows(
         productSupplyRows,
         settlementActualInputs,
         parseNumberInput,
-      ),
-    [productSupplyRows, settlementActualInputs],
+      );
+    },
+    [
+      productSupplyRows,
+      settlementActualInputs,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const financialStockAuditRows = useMemo(
@@ -2374,6 +2557,10 @@ export function useAppController() {
 
   const settlementProductSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(
     () => {
+      if (!shouldComputeSettlementReports) {
+        return [];
+      }
+
       const byProduct = new Map<string, ProductSalesSummaryRow>();
 
       productSalesSummaryRows.forEach((row) => {
@@ -2420,7 +2607,12 @@ export function useAppController() {
         }))
         .sort(compareProductDisplayRows);
     },
-    [compareProductDisplayRows, financialStockAuditRows, productSalesSummaryRows],
+    [
+      compareProductDisplayRows,
+      financialStockAuditRows,
+      productSalesSummaryRows,
+      shouldComputeSettlementReports,
+    ],
   );
 
   const settlementExpectedRevenueAmount = useMemo(
@@ -2565,6 +2757,52 @@ export function useAppController() {
     deferredArrayPersistenceRef.current.clear();
   }, []);
 
+  const persistSyncQueueNow = useCallback((next: SyncJob[]) => {
+    syncQueuePersistenceRef.current = syncQueuePersistenceRef.current
+      .catch(() => undefined)
+      .then(() => saveArray(STORAGE_KEYS.syncQueue, next));
+  }, []);
+
+  const persistSyncQueue = useCallback((next: SyncJob[]) => {
+    const previous = pendingSyncQueuePersistenceRef.current;
+    if (previous) {
+      clearTimeout(previous.timeout);
+    }
+
+    const version = syncQueuePersistenceVersionRef.current + 1;
+    syncQueuePersistenceVersionRef.current = version;
+    const timeout = setTimeout(() => {
+      const pending = pendingSyncQueuePersistenceRef.current;
+      if (!pending || pending.timeout !== timeout) {
+        return;
+      }
+
+      pendingSyncQueuePersistenceRef.current = null;
+      InteractionManager.runAfterInteractions(() => {
+        if (syncQueuePersistenceVersionRef.current === version) {
+          persistSyncQueueNow(pending.value);
+        }
+      });
+    }, 350);
+
+    pendingSyncQueuePersistenceRef.current = { timeout, value: next, version };
+  }, [persistSyncQueueNow]);
+
+  const flushSyncQueuePersistence = useCallback(() => {
+    const pending = pendingSyncQueuePersistenceRef.current;
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    pendingSyncQueuePersistenceRef.current = null;
+    syncQueuePersistenceVersionRef.current = Math.max(
+      syncQueuePersistenceVersionRef.current,
+      pending.version,
+    );
+    persistSyncQueueNow(pending.value);
+  }, [persistSyncQueueNow]);
+
   const persistOrdersNow = useCallback((next: LocalOrder[]) => {
     ordersPersistenceRef.current = ordersPersistenceRef.current
       .catch(() => undefined)
@@ -2611,11 +2849,47 @@ export function useAppController() {
     persistOrdersNow(pending.value);
   }, [persistOrdersNow]);
 
+  const applyOrderSyncMarks = useCallback((referenceIds: ReadonlySet<string>) => {
+    if (referenceIds.size === 0) {
+      return;
+    }
+
+    setOrders((previous) => {
+      let changed = false;
+      const next = previous.map((order) => {
+        if (!referenceIds.has(order.clientOrderId) || order.synced) {
+          return order;
+        }
+
+        changed = true;
+        return { ...order, synced: true };
+      });
+
+      if (changed) {
+        persistOrders(next);
+      }
+
+      return changed ? next : previous;
+    });
+  }, [persistOrders]);
+
+  const flushPendingOrderSyncMarks = useCallback(() => {
+    if (pendingOrderSyncMarkIdsRef.current.size === 0) {
+      return;
+    }
+
+    const referenceIds = new Set(pendingOrderSyncMarkIdsRef.current);
+    pendingOrderSyncMarkIdsRef.current.clear();
+    applyOrderSyncMarks(referenceIds);
+  }, [applyOrderSyncMarks]);
+
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       if (state !== "active") {
         flushDeferredArrayPersistence();
         flushOrdersPersistence();
+        flushPendingOrderSyncMarks();
+        flushSyncQueuePersistence();
       }
     });
 
@@ -2623,24 +2897,28 @@ export function useAppController() {
       subscription.remove();
       flushDeferredArrayPersistence();
       flushOrdersPersistence();
+      flushPendingOrderSyncMarks();
+      flushSyncQueuePersistence();
     };
-  }, [flushDeferredArrayPersistence, flushOrdersPersistence]);
+  }, [
+    flushDeferredArrayPersistence,
+    flushOrdersPersistence,
+    flushPendingOrderSyncMarks,
+    flushSyncQueuePersistence,
+  ]);
 
   const releaseOrderBuildLock = useCallback(() => {
     isBuildingOrderRef.current = false;
   }, []);
 
   const markOrderSynced = useCallback((referenceId: string) => {
-    setOrders((previous) => {
-      const next = previous.map((order) =>
-        order.clientOrderId === referenceId
-          ? { ...order, synced: true }
-          : order,
-      );
-      persistOrders(next);
-      return next;
-    });
-  }, [persistOrders]);
+    if (activeScreenRef.current === "pos") {
+      pendingOrderSyncMarkIdsRef.current.add(referenceId);
+      return;
+    }
+
+    applyOrderSyncMarks(new Set([referenceId]));
+  }, [applyOrderSyncMarks]);
 
   const markSettlementSynced = useCallback((referenceId: string) => {
     setDailySettlements((previous) => {
@@ -2820,12 +3098,6 @@ export function useAppController() {
     });
   }, []);
 
-  const persistSyncQueue = useCallback((next: SyncJob[]) => {
-    syncQueuePersistenceRef.current = syncQueuePersistenceRef.current
-      .catch(() => undefined)
-      .then(() => saveArray(STORAGE_KEYS.syncQueue, next));
-  }, []);
-
   const enqueueJob = useCallback((job: SyncJob) => {
     setQueue((previous) => {
       const next = mergeSyncJobs(
@@ -2881,7 +3153,10 @@ export function useAppController() {
     }
 
     try {
-      const data = await fetchOrders(authToken, { storeId: selectedStoreId });
+      const data = await fetchOrders(authToken, {
+        storeId: selectedStoreId,
+        limit: ORDER_REFRESH_LIMIT,
+      });
       setRemoteOrders(data);
       return true;
     } catch (error: unknown) {
@@ -2954,7 +3229,10 @@ export function useAppController() {
       const [purchaseData, orderData, adjustmentData, destructionData] =
         await Promise.all([
         fetchPurchases(authToken, { storeId: selectedStoreId }),
-        fetchOrders(authToken, { storeId: selectedStoreId }),
+        fetchOrders(authToken, {
+          storeId: selectedStoreId,
+          limit: ORDER_REFRESH_LIMIT,
+        }),
         fetchInventoryAdjustments(authToken, { storeId: selectedStoreId }),
         fetchInventoryDestructions(authToken, { storeId: selectedStoreId }),
       ]);
@@ -3553,15 +3831,20 @@ export function useAppController() {
       const permanentlyFailedCount = queue.filter(
         (job) => job.permanentFailure,
       ).length;
-      setStatusMessage(
+      if (activeScreenRef.current !== "pos") {
+        setStatusMessage(
         `يوجد ${permanentlyFailedCount} عملية متوقفة بسبب خطأ دائم وتحتاج إلى تعديل البيانات قبل إعادة المحاولة.`,
       );
+      }
       return;
     }
 
     isSyncingRef.current = true;
-    setIsSyncing(true);
+    if (activeScreenRef.current !== "pos") {
+      setIsSyncing(true);
     setStatusMessage("يتم حالياً مزامنة العمليات المحلية...");
+    }
+
     const inventoryChangesOnly = jobsToSync.every((job) =>
       ["INVENTORY_ADJUSTMENT", "INVENTORY_DESTRUCTION"].includes(
         job.entity ?? job.type ?? "",
@@ -3807,15 +4090,20 @@ export function useAppController() {
       return next;
     });
     isSyncingRef.current = false;
-    setIsSyncing(false);
+    setIsSyncing((current) => (current ? false : current));
 
     const snapshotRemainingCount =
       jobsToSync.length - completedJobIds.size;
     if (snapshotRemainingCount === 0) {
+      if (activeScreenRef.current !== "pos") {
       setStatusMessage(
         `تمت مزامنة ${completedJobIds.size} عملية مؤجلة بنجاح.`,
       );
+      }
       if (inventoryChangesOnly) {
+        return;
+      }
+      if (activeScreenRef.current === "pos") {
         return;
       }
       await Promise.all([
@@ -3829,11 +4117,13 @@ export function useAppController() {
       return;
     }
 
+    if (activeScreenRef.current !== "pos") {
     setStatusMessage(
       stoppedForConnection
         ? `توقف الاتصال بعد مزامنة ${completedJobIds.size} عملية، وستُستكمل البقية تلقائياً.`
         : `تمت مزامنة ${completedJobIds.size} عملية، وبقي ${snapshotRemainingCount} عملية معلقة.`,
     );
+    }
   }, [
     isAdmin,
     isOnline,
@@ -4316,6 +4606,12 @@ export function useAppController() {
     setIsMobileNavOpen(false);
     setIsMobileNavVisible(false);
   }, [activeScreen]);
+
+  useEffect(() => {
+    if (activeScreen !== "pos") {
+      flushPendingOrderSyncMarks();
+    }
+  }, [activeScreen, flushPendingOrderSyncMarks]);
 
   useEffect(() => {
     if (isDesktop) {
