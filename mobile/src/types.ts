@@ -255,6 +255,20 @@ export interface ApiInventoryDestruction
   updatedAt: string;
 }
 
+export interface ApiInventoryStockRow {
+  storeId: string;
+  productId: string;
+  productClientId: string;
+  name: string;
+  unitType: ProductTemplate['unitType'];
+  sellPrice: number;
+  costPrice: number;
+  remainingQty: number;
+  previousRemainingQty: number;
+  loggedToday: number;
+  calculatedAt: string;
+}
+
 export interface Employee {
   id: string;
   storeId: string;

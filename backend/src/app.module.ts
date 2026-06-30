@@ -12,6 +12,7 @@ import { ExpensesModule } from './expenses/expenses.module';
 import { EmployeesModule } from './employees/employees.module';
 import { InventoryAdjustmentsModule } from './inventory-adjustments/inventory-adjustments.module';
 import { InventoryDestructionsModule } from './inventory-destructions/inventory-destructions.module';
+import { InventoryStockModule } from './inventory-stock/inventory-stock.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
@@ -34,6 +35,7 @@ import { createTypeOrmOptions } from './database/typeorm.config';
     EmployeesModule,
     InventoryAdjustmentsModule,
     InventoryDestructionsModule,
+    InventoryStockModule,
     UploadsModule,
     AdminModule,
   ],

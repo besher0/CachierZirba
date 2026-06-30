@@ -3,6 +3,7 @@ import {
   ApiExpense,
   ApiInventoryAdjustment,
   ApiInventoryDestruction,
+  ApiInventoryStockRow,
   ApiEmployee,
   ApiEmployeeAbsence,
   ApiEmployeeWithdrawal,
@@ -522,6 +523,16 @@ export function fetchInventoryDestructions(
 ): Promise<ApiInventoryDestruction[]> {
   return request<ApiInventoryDestruction[]>(
     `/inventory-destructions${buildListQuery(query)}`,
+    { token },
+  );
+}
+
+export function fetchInventoryStock(
+  token: string,
+  query: ListQuery = {},
+): Promise<ApiInventoryStockRow[]> {
+  return request<ApiInventoryStockRow[]>(
+    `/inventory-stock${buildListQuery(query)}`,
     { token },
   );
 }

@@ -54,6 +54,7 @@ import {
   fetchExpenses,
   fetchInventoryAdjustments,
   fetchInventoryDestructions,
+  fetchInventoryStock,
   fetchMe,
   fetchOrders,
   fetchProducts,
@@ -81,6 +82,7 @@ import {
   ApiExpense,
   ApiInventoryAdjustment,
   ApiInventoryDestruction,
+  ApiInventoryStockRow,
   ApiOrder,
   ApiProduct,
   ApiPurchase,
@@ -506,6 +508,9 @@ export function useAppController() {
   >([]);
   const [remoteInventoryDestructions, setRemoteInventoryDestructions] = useState<
     ApiInventoryDestruction[]
+  >([]);
+  const [remoteInventoryStockRows, setRemoteInventoryStockRows] = useState<
+    ApiInventoryStockRow[]
   >([]);
   const [selectedOrderInvoice, setSelectedOrderInvoice] =
     useState<OrderHistoryRow | null>(null);
@@ -2098,6 +2103,43 @@ export function useAppController() {
       return [];
     }
 
+    const stockRowsByProductId = new Map(
+      remoteInventoryStockRows
+        .filter((row) => row.storeId === selectedStoreId)
+        .map((row) => [row.productClientId, row]),
+    );
+
+    if (stockRowsByProductId.size > 0) {
+      return posProducts.map((product) => {
+        const stockRow = stockRowsByProductId.get(product.clientProductId);
+        return {
+          productId: product.id,
+          name: product.name,
+          unitType: product.unitType,
+          sellPrice: product.price,
+          costPrice: product.costPrice,
+          remainingQty: Number((stockRow?.remainingQty ?? 0).toFixed(3)),
+          previousRemainingQty: Number(
+            (stockRow?.previousRemainingQty ?? 0).toFixed(3),
+          ),
+          loggedToday: Number((stockRow?.loggedToday ?? 0).toFixed(3)),
+        };
+      });
+    }
+
+    if (isOnline) {
+      return posProducts.map((product) => ({
+        productId: product.id,
+        name: product.name,
+        unitType: product.unitType,
+        sellPrice: product.price,
+        costPrice: product.costPrice,
+        remainingQty: 0,
+        previousRemainingQty: 0,
+        loggedToday: 0,
+      }));
+    }
+
     const purchasedByProduct = new Map<string, number>();
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
@@ -2260,6 +2302,9 @@ export function useAppController() {
     posProducts,
     productByClientProductId,
     productByNormalizedName,
+    isOnline,
+    remoteInventoryStockRows,
+    selectedStoreId,
     shouldComputePurchaseReports,
     todayDate,
   ]);
@@ -2705,6 +2750,7 @@ export function useAppController() {
     setRemotePurchases([]);
     setRemoteInventoryAdjustments([]);
     setRemoteInventoryDestructions([]);
+    setRemoteInventoryStockRows([]);
     setActiveScreen("pos");
     setStatusMessage(message);
   }, []);
@@ -3165,6 +3211,31 @@ export function useAppController() {
     }
   }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
 
+  const refreshSettlementOrdersData = useCallback(async () => {
+    if (!authToken || !selectedStoreId || !isOnline) {
+      return false;
+    }
+
+    try {
+      const data = await fetchOrders(authToken, {
+        storeId: selectedStoreId,
+        from: settlementCycleStartIso ?? todayDate,
+      });
+      setRemoteOrders(data);
+      return true;
+    } catch (error: unknown) {
+      handleApiFailure(error, "طھط¹ط°ط± طھط­ط¯ظٹط« ط·ظ„ط¨ط§طھ ط§ظ„طھط³ظˆظٹط© ظ…ظ† ط§ظ„ط³ظٹط±ظپط±.");
+      return false;
+    }
+  }, [
+    authToken,
+    handleApiFailure,
+    isOnline,
+    selectedStoreId,
+    settlementCycleStartIso,
+    todayDate,
+  ]);
+
   const refreshDailySettlementsData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
       return false;
@@ -3226,18 +3297,15 @@ export function useAppController() {
     }
 
     try {
-      const [purchaseData, orderData, adjustmentData, destructionData] =
+      const [purchaseData, stockData, adjustmentData, destructionData] =
         await Promise.all([
         fetchPurchases(authToken, { storeId: selectedStoreId }),
-        fetchOrders(authToken, {
-          storeId: selectedStoreId,
-          limit: ORDER_REFRESH_LIMIT,
-        }),
+        fetchInventoryStock(authToken, { storeId: selectedStoreId }),
         fetchInventoryAdjustments(authToken, { storeId: selectedStoreId }),
         fetchInventoryDestructions(authToken, { storeId: selectedStoreId }),
       ]);
       replaceRemotePurchases(purchaseData);
-      setRemoteOrders(orderData);
+      setRemoteInventoryStockRows(stockData);
       setRemoteInventoryAdjustments(adjustmentData);
       setRemoteInventoryDestructions(destructionData);
       return true;
@@ -3417,6 +3485,7 @@ export function useAppController() {
     }
 
     const refreshPromise = Promise.all([
+      refreshSettlementOrdersData(),
       refreshInventoryData(),
       refreshDailySettlementsData(),
       refreshEmployeesData(),
@@ -3442,6 +3511,7 @@ export function useAppController() {
     refreshEmployeesData,
     refreshExpensesData,
     refreshInventoryData,
+    refreshSettlementOrdersData,
     refreshProductsData,
     selectedStoreId,
   ]);
@@ -3582,6 +3652,7 @@ export function useAppController() {
             return;
           case "settlement":
             await Promise.all([
+              refreshForStore("settlement-orders", refreshSettlementOrdersData),
               refreshForStore("inventory", refreshInventoryData),
               refreshForStore("settlements", refreshDailySettlementsData),
               refreshForStore("employees", refreshEmployeesData),
@@ -3630,6 +3701,7 @@ export function useAppController() {
     refreshInventoryData,
     refreshOrdersData,
     refreshProductsData,
+    refreshSettlementOrdersData,
     refreshResource,
     refreshStoresData,
     selectedStoreId,
