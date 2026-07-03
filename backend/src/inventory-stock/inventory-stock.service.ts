@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
 import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -26,6 +27,8 @@ export class InventoryStockService {
     private readonly adjustmentRepository: Repository<InventoryAdjustment>,
     @InjectRepository(InventoryDestruction)
     private readonly destructionRepository: Repository<InventoryDestruction>,
+    @InjectRepository(DailySettlement)
+    private readonly dailySettlementRepository: Repository<DailySettlement>,
     private readonly storesService: StoresService,
   ) {}
 
@@ -40,28 +43,43 @@ export class InventoryStockService {
 
     await this.storesService.findById(storeId);
 
-    const [products, purchases, orders, adjustments, destructions] =
-      await Promise.all([
-        this.productRepository.find({
-          order: { name: 'ASC', createdAt: 'ASC' },
-        }),
-        this.purchaseRepository.find({
-          where: { storeId },
-          order: { purchaseDate: 'DESC', createdAt: 'DESC' },
-        }),
-        this.orderRepository.find({
-          where: { storeId },
-          order: { orderedAt: 'DESC', createdAt: 'DESC' },
-        }),
-        this.adjustmentRepository.find({
-          where: { storeId },
-          order: { adjustedAt: 'DESC', createdAt: 'DESC' },
-        }),
-        this.destructionRepository.find({
-          where: { storeId },
-          order: { destroyedAt: 'DESC', createdAt: 'DESC' },
-        }),
-      ]);
+    const [
+      products,
+      purchases,
+      orders,
+      adjustments,
+      destructions,
+      settlements,
+    ] = await Promise.all([
+      this.productRepository.find({
+        order: { name: 'ASC', createdAt: 'ASC' },
+      }),
+      this.purchaseRepository.find({
+        where: { storeId },
+        order: { purchaseDate: 'DESC', createdAt: 'DESC' },
+      }),
+      this.orderRepository.find({
+        where: { storeId },
+        order: { orderedAt: 'DESC', createdAt: 'DESC' },
+      }),
+      this.adjustmentRepository.find({
+        where: { storeId },
+        order: { adjustedAt: 'DESC', createdAt: 'DESC' },
+      }),
+      this.destructionRepository.find({
+        where: { storeId },
+        order: { destroyedAt: 'DESC', createdAt: 'DESC' },
+      }),
+      this.dailySettlementRepository.find({
+        where: { storeId },
+        order: {
+          businessDate: 'DESC',
+          syncedAt: 'DESC',
+          createdAt: 'DESC',
+        },
+        take: 1,
+      }),
+    ]);
 
     const todayDate = this.toDateOnlyInDamascus(new Date());
     const productsByName = new Map(
@@ -71,10 +89,29 @@ export class InventoryStockService {
       ]),
     );
     const latestAdjustmentByProduct = new Map<string, InventoryAdjustment>();
+    const latestSettlement = settlements[0] ?? null;
+    const latestSettlementAt = latestSettlement
+      ? (latestSettlement.syncedAt ?? latestSettlement.createdAt)
+      : null;
+    const latestSettlementAdjustmentByProduct = new Map<
+      string,
+      InventoryAdjustment
+    >();
 
     adjustments.forEach((adjustment) => {
       if (!latestAdjustmentByProduct.has(adjustment.productClientId)) {
         latestAdjustmentByProduct.set(adjustment.productClientId, adjustment);
+      }
+
+      if (
+        latestSettlementAt &&
+        adjustment.adjustedAt <= latestSettlementAt &&
+        !latestSettlementAdjustmentByProduct.has(adjustment.productClientId)
+      ) {
+        latestSettlementAdjustmentByProduct.set(
+          adjustment.productClientId,
+          adjustment,
+        );
       }
     });
 
@@ -82,6 +119,10 @@ export class InventoryStockService {
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
     const destroyedByProduct = new Map<string, number>();
+    const settlementPurchasedByProduct = new Map<string, number>();
+    const settlementSoldByProduct = new Map<string, number>();
+    const settlementRefundedByProduct = new Map<string, number>();
+    const settlementDestroyedByProduct = new Map<string, number>();
     const todayReceivedByProduct = new Map<string, number>();
 
     purchases.forEach((purchase) => {
@@ -104,11 +145,29 @@ export class InventoryStockService {
       }
 
       const adjustment = latestAdjustmentByProduct.get(product.clientProductId);
-      if (adjustment && purchase.createdAt <= adjustment.adjustedAt) {
-        return;
+      if (!adjustment || purchase.createdAt > adjustment.adjustedAt) {
+        this.add(
+          purchasedByProduct,
+          product.clientProductId,
+          purchase.quantity,
+        );
       }
 
-      this.add(purchasedByProduct, product.clientProductId, purchase.quantity);
+      const settlementAdjustment = latestSettlementAdjustmentByProduct.get(
+        product.clientProductId,
+      );
+      if (
+        latestSettlementAt &&
+        purchase.createdAt <= latestSettlementAt &&
+        (!settlementAdjustment ||
+          purchase.createdAt > settlementAdjustment.adjustedAt)
+      ) {
+        this.add(
+          settlementPurchasedByProduct,
+          product.clientProductId,
+          purchase.quantity,
+        );
+      }
     });
 
     orders.forEach((order) => {
@@ -122,16 +181,40 @@ export class InventoryStockService {
         const adjustment = latestAdjustmentByProduct.get(
           product.clientProductId,
         );
-        if (adjustment && order.orderedAt <= adjustment.adjustedAt) {
-          return;
-        }
-
-        if (order.status === OrderStatus.REFUNDED) {
+        const shouldApplyCurrent =
+          !adjustment || order.orderedAt > adjustment.adjustedAt;
+        if (shouldApplyCurrent && order.status === OrderStatus.REFUNDED) {
           this.add(refundedByProduct, product.clientProductId, item.quantity);
-          return;
         }
 
-        this.add(soldByProduct, product.clientProductId, item.quantity);
+        if (shouldApplyCurrent && order.status !== OrderStatus.REFUNDED) {
+          this.add(soldByProduct, product.clientProductId, item.quantity);
+        }
+
+        const settlementAdjustment = latestSettlementAdjustmentByProduct.get(
+          product.clientProductId,
+        );
+        const shouldApplyToSettlement =
+          latestSettlementAt &&
+          order.orderedAt <= latestSettlementAt &&
+          (!settlementAdjustment ||
+            order.orderedAt > settlementAdjustment.adjustedAt);
+
+        if (shouldApplyToSettlement && order.status === OrderStatus.REFUNDED) {
+          this.add(
+            settlementRefundedByProduct,
+            product.clientProductId,
+            item.quantity,
+          );
+        }
+
+        if (shouldApplyToSettlement && order.status !== OrderStatus.REFUNDED) {
+          this.add(
+            settlementSoldByProduct,
+            product.clientProductId,
+            item.quantity,
+          );
+        }
       });
     });
 
@@ -139,15 +222,29 @@ export class InventoryStockService {
       const adjustment = latestAdjustmentByProduct.get(
         destruction.productClientId,
       );
-      if (adjustment && destruction.destroyedAt <= adjustment.adjustedAt) {
-        return;
+      if (!adjustment || destruction.destroyedAt > adjustment.adjustedAt) {
+        this.add(
+          destroyedByProduct,
+          destruction.productClientId,
+          destruction.quantity,
+        );
       }
 
-      this.add(
-        destroyedByProduct,
+      const settlementAdjustment = latestSettlementAdjustmentByProduct.get(
         destruction.productClientId,
-        destruction.quantity,
       );
+      if (
+        latestSettlementAt &&
+        destruction.destroyedAt <= latestSettlementAt &&
+        (!settlementAdjustment ||
+          destruction.destroyedAt > settlementAdjustment.adjustedAt)
+      ) {
+        this.add(
+          settlementDestroyedByProduct,
+          destruction.productClientId,
+          destruction.quantity,
+        );
+      }
     });
 
     const calculatedAt = new Date().toISOString();
@@ -158,10 +255,23 @@ export class InventoryStockService {
       const sold = soldByProduct.get(productId) ?? 0;
       const refunded = refundedByProduct.get(productId) ?? 0;
       const destroyed = destroyedByProduct.get(productId) ?? 0;
-      // Inventory adjustments are the product-level settlement closing snapshot.
-      // Products without a previous settlement fall back to zero.
-      const latestSettlementClosingQty =
+      const inventoryBaseline =
         latestAdjustmentByProduct.get(productId)?.actualQuantity ?? 0;
+      const settlementBaseline =
+        latestSettlementAdjustmentByProduct.get(productId)?.actualQuantity ?? 0;
+      // The previous remaining quantity is the stock closed at the latest
+      // store settlement. Stores with no previous settlement fall back to zero.
+      const settlementClosingQty = latestSettlementAt
+        ? Number(
+            (
+              settlementBaseline +
+              (settlementPurchasedByProduct.get(productId) ?? 0) -
+              (settlementSoldByProduct.get(productId) ?? 0) +
+              (settlementRefundedByProduct.get(productId) ?? 0) -
+              (settlementDestroyedByProduct.get(productId) ?? 0)
+            ).toFixed(3),
+          )
+        : 0;
 
       return {
         storeId,
@@ -172,15 +282,11 @@ export class InventoryStockService {
         sellPrice: product.price,
         costPrice: product.costPrice,
         remainingQty: Number(
-          (
-            latestSettlementClosingQty +
-            purchased -
-            sold +
-            refunded -
-            destroyed
-          ).toFixed(3),
+          (inventoryBaseline + purchased - sold + refunded - destroyed).toFixed(
+            3,
+          ),
         ),
-        previousRemainingQty: Number(latestSettlementClosingQty.toFixed(3)),
+        previousRemainingQty: settlementClosingQty,
         loggedToday: Number(
           (todayReceivedByProduct.get(productId) ?? 0).toFixed(3),
         ),

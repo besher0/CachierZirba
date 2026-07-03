@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
 import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -17,6 +18,7 @@ import { InventoryStockService } from './inventory-stock.service';
       Order,
       InventoryAdjustment,
       InventoryDestruction,
+      DailySettlement,
     ]),
     StoresModule,
   ],

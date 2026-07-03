@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
 import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -29,6 +30,7 @@ describe('InventoryStockService', () => {
   let orderRepository: FindRepository<Order>;
   let adjustmentRepository: FindRepository<InventoryAdjustment>;
   let destructionRepository: FindRepository<InventoryDestruction>;
+  let dailySettlementRepository: FindRepository<DailySettlement>;
 
   const storeId = '11111111-1111-4111-8111-111111111111';
   const authUser: AuthUser = {
@@ -45,6 +47,7 @@ describe('InventoryStockService', () => {
     orderRepository = createFindRepository<Order>();
     adjustmentRepository = createFindRepository<InventoryAdjustment>();
     destructionRepository = createFindRepository<InventoryDestruction>();
+    dailySettlementRepository = createFindRepository<DailySettlement>();
 
     const module = await Test.createTestingModule({
       providers: [
@@ -68,6 +71,10 @@ describe('InventoryStockService', () => {
         {
           provide: getRepositoryToken(InventoryDestruction),
           useValue: destructionRepository,
+        },
+        {
+          provide: getRepositoryToken(DailySettlement),
+          useValue: dailySettlementRepository,
         },
         {
           provide: StoresService,
@@ -98,16 +105,25 @@ describe('InventoryStockService', () => {
     orderRepository.find.mockResolvedValue([]);
     adjustmentRepository.find.mockResolvedValue([]);
     destructionRepository.find.mockResolvedValue([]);
+    dailySettlementRepository.find.mockResolvedValue([]);
   });
 
   it('uses the latest settlement closing quantity as previous remaining', async () => {
     mockSingleProduct();
+    dailySettlementRepository.find.mockResolvedValue([
+      {
+        storeId,
+        businessDate: '2020-01-04',
+        syncedAt: new Date('2020-01-04T20:00:00.000Z'),
+        createdAt: new Date('2020-01-04T20:00:00.000Z'),
+      } as DailySettlement,
+    ]);
     adjustmentRepository.find.mockResolvedValue([
       {
         productClientId: 'product-1',
         actualQuantity: 8,
-        adjustedAt: new Date('2020-01-04T00:00:00.000Z'),
-        createdAt: new Date('2020-01-04T00:00:00.000Z'),
+        adjustedAt: new Date('2020-01-05T00:00:00.000Z'),
+        createdAt: new Date('2020-01-05T00:00:00.000Z'),
       } as InventoryAdjustment,
       {
         productClientId: 'product-1',
@@ -123,7 +139,39 @@ describe('InventoryStockService', () => {
       expect.objectContaining({
         productClientId: 'product-1',
         remainingQty: 8,
-        previousRemainingQty: 8,
+        previousRemainingQty: 20,
+      }),
+    ]);
+  });
+
+  it('includes movements up to the latest settlement in previous remaining', async () => {
+    mockSingleProduct();
+    dailySettlementRepository.find.mockResolvedValue([
+      {
+        storeId,
+        businessDate: '2020-01-04',
+        syncedAt: new Date('2020-01-04T20:00:00.000Z'),
+        createdAt: new Date('2020-01-04T20:00:00.000Z'),
+      } as DailySettlement,
+    ]);
+    purchaseRepository.find.mockResolvedValue([
+      {
+        storeId,
+        productName: 'Cake',
+        quantity: 7,
+        purchaseKind: 'SUPPLY',
+        purchaseDate: '2020-01-03',
+        createdAt: new Date('2020-01-03T12:00:00.000Z'),
+      } as Purchase,
+    ]);
+
+    const rows = await service.findAll({ storeId }, authUser);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        productClientId: 'product-1',
+        remainingQty: 7,
+        previousRemainingQty: 7,
       }),
     ]);
   });
@@ -154,6 +202,14 @@ describe('InventoryStockService', () => {
 
   it('does not change previous remaining from movements after the last settlement', async () => {
     mockSingleProduct();
+    dailySettlementRepository.find.mockResolvedValue([
+      {
+        storeId,
+        businessDate: '2020-01-02',
+        syncedAt: new Date('2020-01-02T00:00:00.000Z'),
+        createdAt: new Date('2020-01-02T00:00:00.000Z'),
+      } as DailySettlement,
+    ]);
     adjustmentRepository.find.mockResolvedValue([
       {
         productClientId: 'product-1',
