@@ -14,8 +14,11 @@ export function AdminDashboardScreen() {
     Pressable,
     ScrollView,
     Text,
+    TextInput,
     View,
     activeScreen,
+    adminCashboxWithdrawalAmountInput,
+    adminCashboxWithdrawalNoteInput,
     adminDashboardAllStoresKey,
     adminDashboardStoreId,
     adminDatePickerTarget,
@@ -144,10 +147,12 @@ export function AdminDashboardScreen() {
     section,
     sectionHeaderInline,
     sectionTitle,
+    selectedAdminCashboxRemainingAmount,
     selectedExpenseDetails,
     selectedOrderInvoice,
     selectedSettlementDetail,
     selectedStore,
+    setAdminCashboxWithdrawalNoteInput,
     setAdminDashboardStoreId,
     setActiveScreen,
     setSelectedExpenseDetails,
@@ -173,6 +178,7 @@ export function AdminDashboardScreen() {
     styles,
     subtitle,
     subtotal,
+    submitAdminCashboxWithdrawal,
     summary,
     summaryRow,
     summaryText,
@@ -182,6 +188,7 @@ export function AdminDashboardScreen() {
     toPaymentMethodLabel,
     toShortDate,
     total,
+    updateAdminCashboxWithdrawalAmountInput,
     totalCost,
     transform,
     translateX,
@@ -328,7 +335,57 @@ export function AdminDashboardScreen() {
                               )}
                             </Text>
                           </View>
+                          <View style={styles.metricCard}>
+                            <Text style={styles.metricLabel}>سحوبات الصندوق</Text>
+                            <Text style={styles.metricValue}>
+                              {formatMoney(
+                                effectiveDashboardTotals.cashBoxWithdrawalsAmount ?? 0,
+                              )}
+                            </Text>
+                          </View>
+                          <View style={styles.metricCardHighlight}>
+                            <Text style={styles.metricLabelHighlight}>
+                              المتبقي الفعلي الحالي
+                            </Text>
+                            <Text style={styles.metricValueHighlight}>
+                              {formatMoney(
+                                effectiveDashboardTotals.actualCashBoxRemainingAmount ?? 0,
+                              )}
+                            </Text>
+                          </View>
                         </View>
+
+                        <Text style={styles.storeTableTitle}>سحب من الصندوق</Text>
+                        <Text style={styles.orderRowMeta}>
+                          {adminDashboardStoreId === adminDashboardAllStoresKey
+                            ? `السحب سيتم من صندوق كل الفروع. المتبقي الحالي: ${formatMoney(selectedAdminCashboxRemainingAmount)}`
+                            : `المتبقي الحالي للفرع المحدد: ${formatMoney(selectedAdminCashboxRemainingAmount)}`}
+                        </Text>
+                        <View style={styles.inputRow}>
+                          <TextInput
+                            style={styles.input}
+                            value={adminCashboxWithdrawalAmountInput}
+                            onChangeText={updateAdminCashboxWithdrawalAmountInput}
+                            keyboardType="decimal-pad"
+                            placeholder="مبلغ السحب"
+                            placeholderTextColor="#d7b3c4"
+                          />
+                        </View>
+                        <TextInput
+                          style={styles.inputFull}
+                          value={adminCashboxWithdrawalNoteInput}
+                          onChangeText={setAdminCashboxWithdrawalNoteInput}
+                          placeholder="ملاحظة السحب اختيارية"
+                          placeholderTextColor="#d7b3c4"
+                        />
+                        <Pressable
+                          style={styles.secondaryButton}
+                          onPress={() => void submitAdminCashboxWithdrawal()}
+                        >
+                          <Text style={styles.secondaryButtonText}>
+                            تسجيل السحب
+                          </Text>
+                        </Pressable>
 
                         <Text style={styles.storeTableTitle}>
                           {adminDashboardStoreId === adminDashboardAllStoresKey
@@ -356,6 +413,14 @@ export function AdminDashboardScreen() {
                                 </Text>
                                 <Text style={styles.orderRowMeta}>
                                   صندوق: {formatMoney(summary.cashBoxAmount)}
+                                </Text>
+                              </View>
+                              <View style={styles.orderRowMain}>
+                                <Text style={styles.orderRowMeta}>
+                                  سحوبات: {formatMoney(summary.cashBoxWithdrawalsAmount ?? 0)}
+                                </Text>
+                                <Text style={styles.orderRowMeta}>
+                                  متبقي فعلي: {formatMoney(summary.actualCashBoxRemainingAmount ?? 0)}
                                 </Text>
                               </View>
                             </View>

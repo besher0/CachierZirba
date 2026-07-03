@@ -1,5 +1,6 @@
 import { API_BASE_URL, API_BASE_URL_CANDIDATES } from '../config';
 import {
+  ApiCashboxWithdrawal,
   ApiExpense,
   ApiInventoryAdjustment,
   ApiInventoryDestruction,
@@ -20,6 +21,7 @@ import {
   CreateEmployeePayload,
   CreateEmployeeWithdrawalPayload,
   CreateDailySettlementPayload,
+  CreateCashboxWithdrawalPayload,
   CreateOrderPayload,
   CreateProductPayload,
   CreatePurchasePayload,
@@ -289,8 +291,11 @@ export function postOrder(token: string, payload: CreateOrderPayload) {
   });
 }
 
-export function postDailySettlement(token: string, payload: CreateDailySettlementPayload) {
-  return request('/daily-settlements', {
+export function postDailySettlement(
+  token: string,
+  payload: CreateDailySettlementPayload,
+): Promise<ApiDailySettlement> {
+  return request<ApiDailySettlement>('/daily-settlements', {
     method: 'POST',
     body: JSON.stringify(payload),
     token,
@@ -313,6 +318,18 @@ export function fetchDailySettlements(
 
 export function fetchDashboard(token: string, query: DateRangeQuery = {}): Promise<DashboardResponse> {
   return request<DashboardResponse>(`/admin/dashboard${buildDateRangeQuery(query)}`, { token });
+}
+
+export function postCashboxWithdrawal(
+  token: string,
+  payload: CreateCashboxWithdrawalPayload,
+): Promise<ApiCashboxWithdrawal> {
+  return request<ApiCashboxWithdrawal>('/admin/cashbox-withdrawals', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token,
+    ...WRITE_REQUEST_OPTIONS,
+  });
 }
 
 export function postExpense(token: string, payload: CreateExpensePayload): Promise<ApiExpense> {

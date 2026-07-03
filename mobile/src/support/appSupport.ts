@@ -897,6 +897,7 @@ export function mergeSyncJobs(
     entity !== "PURCHASE" &&
     entity !== "PRODUCT" &&
     entity !== "INVENTORY_ADJUSTMENT" &&
+    entity !== "DAILY_SETTLEMENT" &&
     entity !== "EMPLOYEE" &&
     entity !== "EMPLOYEE_ABSENCE" &&
     entity !== "EMPLOYEE_WITHDRAWAL"

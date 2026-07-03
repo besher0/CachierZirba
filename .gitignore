@@ -6,7 +6,10 @@ mobile/node_modules/
 # Build outputs
 backend/dist/
 mobile/.expo/
+mobile/dist/
 mobile/web-build/
+desktop/dist/
+release/
 
 # Local env
 .env

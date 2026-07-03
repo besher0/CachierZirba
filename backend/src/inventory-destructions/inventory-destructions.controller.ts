@@ -23,7 +23,7 @@ export class InventoryDestructionsController {
     return this.inventoryDestructionsService.findAll(query, authUser);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.CASHIER)
   @Post()
   create(
     @Body() dto: CreateInventoryDestructionDto,

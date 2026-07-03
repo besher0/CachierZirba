@@ -59,10 +59,43 @@ describe('InventoryDestructionsService', () => {
     service = module.get(InventoryDestructionsService);
   });
 
-  it('rejects inventory destruction writes from cashier accounts', async () => {
-    await expect(service.create(payload, cashierUser)).rejects.toBeInstanceOf(
+  it('allows a cashier to create destruction for the assigned store', async () => {
+    const created = {
+      ...payload,
+      destroyedAt: new Date(payload.destroyedAt),
+      syncedAt: new Date(payload.syncedAt),
+    } as InventoryDestruction;
+    const saved = { ...created, id: 'server-id' } as InventoryDestruction;
+    repository.findOne
+      ?.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(saved);
+    repository.create?.mockReturnValue(created);
+    repository.save?.mockResolvedValue(saved);
+
+    await expect(service.create(payload, cashierUser)).resolves.toBe(saved);
+    expect(storesService.findById).toHaveBeenCalledWith(payload.storeId);
+    expect(repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: cashierUser.storeId,
+        productClientId: payload.productClientId,
+        quantity: 2.5,
+      }),
+    );
+  });
+
+  it('rejects cashier destruction for another store', async () => {
+    await expect(
+      service.create(
+        {
+          ...payload,
+          storeId: '22222222-2222-4222-8222-222222222222',
+        },
+        cashierUser,
+      ),
+    ).rejects.toBeInstanceOf(
       ForbiddenException,
     );
+    expect(storesService.findById).not.toHaveBeenCalled();
     expect(repository.save).not.toHaveBeenCalled();
   });
 

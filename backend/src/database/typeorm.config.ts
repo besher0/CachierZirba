@@ -1,5 +1,6 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { DataSourceOptions } from 'typeorm';
+import { CashboxWithdrawal } from '../admin/entities/cashbox-withdrawal.entity';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { CreateEmployeeTables1783000000000 } from './migrations/1783000000000-CreateEmployeeTables';
 import { CreateInventoryAdjustments1784000000000 } from './migrations/1784000000000-CreateInventoryAdjustments';
@@ -18,6 +19,7 @@ import { Purchase } from '../purchases/entities/purchase.entity';
 import { Store } from '../stores/entities/store.entity';
 import { User } from '../users/entities/user.entity';
 import { CreateInventoryDestructions1788000000000 } from './migrations/1788000000000-CreateInventoryDestructions';
+import { CreateCashboxWithdrawals1789000000000 } from './migrations/1789000000000-CreateCashboxWithdrawals';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -37,6 +39,7 @@ const entities = [
   EmployeeWithdrawal,
   InventoryAdjustment,
   InventoryDestruction,
+  CashboxWithdrawal,
 ];
 
 export function createTypeOrmOptions(
@@ -68,6 +71,7 @@ export function createTypeOrmOptions(
         AddCarryAndSupplyInvoiceFields1786000000000,
         AddQueryIndexes1787000000000,
         CreateInventoryDestructions1788000000000,
+        CreateCashboxWithdrawals1789000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

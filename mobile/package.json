@@ -7,7 +7,8 @@
     "start:device": "set EXPO_NO_DEPENDENCY_VALIDATION=1&& adb reverse tcp:3000 tcp:3000 && expo start --lan",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web --port 19006"
+    "web": "expo start --web --port 19006",
+    "export:web": "expo export --platform web --output-dir dist"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",

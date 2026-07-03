@@ -12,13 +12,23 @@ import { Purchase } from '../purchases/entities/purchase.entity';
 import { StoresService } from '../stores/stores.service';
 import { InventoryStockService } from './inventory-stock.service';
 
+type FindRepository<T> = {
+  find: jest.MockedFunction<Repository<T>['find']>;
+};
+
+function createFindRepository<T>(): FindRepository<T> {
+  return {
+    find: jest.fn() as jest.MockedFunction<Repository<T>['find']>,
+  };
+}
+
 describe('InventoryStockService', () => {
   let service: InventoryStockService;
-  let productRepository: jest.Mocked<Partial<Repository<Product>>>;
-  let purchaseRepository: jest.Mocked<Partial<Repository<Purchase>>>;
-  let orderRepository: jest.Mocked<Partial<Repository<Order>>>;
-  let adjustmentRepository: jest.Mocked<Partial<Repository<InventoryAdjustment>>>;
-  let destructionRepository: jest.Mocked<Partial<Repository<InventoryDestruction>>>;
+  let productRepository: FindRepository<Product>;
+  let purchaseRepository: FindRepository<Purchase>;
+  let orderRepository: FindRepository<Order>;
+  let adjustmentRepository: FindRepository<InventoryAdjustment>;
+  let destructionRepository: FindRepository<InventoryDestruction>;
 
   const storeId = '11111111-1111-4111-8111-111111111111';
   const authUser: AuthUser = {
@@ -30,11 +40,11 @@ describe('InventoryStockService', () => {
   };
 
   beforeEach(async () => {
-    productRepository = { find: jest.fn() };
-    purchaseRepository = { find: jest.fn() };
-    orderRepository = { find: jest.fn() };
-    adjustmentRepository = { find: jest.fn() };
-    destructionRepository = { find: jest.fn() };
+    productRepository = createFindRepository<Product>();
+    purchaseRepository = createFindRepository<Purchase>();
+    orderRepository = createFindRepository<Order>();
+    adjustmentRepository = createFindRepository<InventoryAdjustment>();
+    destructionRepository = createFindRepository<InventoryDestruction>();
 
     const module = await Test.createTestingModule({
       providers: [
@@ -69,8 +79,8 @@ describe('InventoryStockService', () => {
     service = module.get(InventoryStockService);
   });
 
-  it('calculates stock from the latest adjustment and all later movements', async () => {
-    productRepository.find?.mockResolvedValue([
+  function mockSingleProduct(): void {
+    productRepository.find.mockResolvedValue([
       {
         id: 'server-product-id',
         clientProductId: 'product-1',
@@ -81,7 +91,70 @@ describe('InventoryStockService', () => {
         createdAt: new Date('2020-01-01T00:00:00.000Z'),
       } as Product,
     ]);
-    adjustmentRepository.find?.mockResolvedValue([
+  }
+
+  beforeEach(() => {
+    purchaseRepository.find.mockResolvedValue([]);
+    orderRepository.find.mockResolvedValue([]);
+    adjustmentRepository.find.mockResolvedValue([]);
+    destructionRepository.find.mockResolvedValue([]);
+  });
+
+  it('uses the latest settlement closing quantity as previous remaining', async () => {
+    mockSingleProduct();
+    adjustmentRepository.find.mockResolvedValue([
+      {
+        productClientId: 'product-1',
+        actualQuantity: 8,
+        adjustedAt: new Date('2020-01-04T00:00:00.000Z'),
+        createdAt: new Date('2020-01-04T00:00:00.000Z'),
+      } as InventoryAdjustment,
+      {
+        productClientId: 'product-1',
+        actualQuantity: 20,
+        adjustedAt: new Date('2020-01-02T00:00:00.000Z'),
+        createdAt: new Date('2020-01-02T00:00:00.000Z'),
+      } as InventoryAdjustment,
+    ]);
+
+    const rows = await service.findAll({ storeId }, authUser);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        productClientId: 'product-1',
+        remainingQty: 8,
+        previousRemainingQty: 8,
+      }),
+    ]);
+  });
+
+  it('falls back to zero when a product has no previous settlement', async () => {
+    mockSingleProduct();
+    purchaseRepository.find.mockResolvedValue([
+      {
+        storeId,
+        productName: 'Cake',
+        quantity: 7,
+        purchaseKind: 'SUPPLY',
+        purchaseDate: '2020-01-03',
+        createdAt: new Date('2020-01-03T12:00:00.000Z'),
+      } as Purchase,
+    ]);
+
+    const rows = await service.findAll({ storeId }, authUser);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        productClientId: 'product-1',
+        remainingQty: 7,
+        previousRemainingQty: 0,
+      }),
+    ]);
+  });
+
+  it('does not change previous remaining from movements after the last settlement', async () => {
+    mockSingleProduct();
+    adjustmentRepository.find.mockResolvedValue([
       {
         productClientId: 'product-1',
         actualQuantity: 10,
@@ -89,7 +162,7 @@ describe('InventoryStockService', () => {
         createdAt: new Date('2020-01-02T00:00:00.000Z'),
       } as InventoryAdjustment,
     ]);
-    purchaseRepository.find?.mockResolvedValue([
+    purchaseRepository.find.mockResolvedValue([
       {
         storeId,
         productName: 'Cake',
@@ -107,23 +180,27 @@ describe('InventoryStockService', () => {
         createdAt: new Date('2020-01-03T12:00:00.000Z'),
       } as Purchase,
     ]);
-    orderRepository.find?.mockResolvedValue([
+    orderRepository.find.mockResolvedValue([
       {
         storeId,
         status: OrderStatus.COMPLETED,
         orderedAt: new Date('2020-01-04T12:00:00.000Z'),
         createdAt: new Date('2020-01-04T12:00:00.000Z'),
-        items: [{ productName: 'Cake', quantity: 3, unitPrice: 20, lineTotal: 60 }],
+        items: [
+          { productName: 'Cake', quantity: 3, unitPrice: 20, lineTotal: 60 },
+        ],
       } as Order,
       {
         storeId,
         status: OrderStatus.REFUNDED,
         orderedAt: new Date('2020-01-05T12:00:00.000Z'),
         createdAt: new Date('2020-01-05T12:00:00.000Z'),
-        items: [{ productName: 'Cake', quantity: 1, unitPrice: 20, lineTotal: 20 }],
+        items: [
+          { productName: 'Cake', quantity: 1, unitPrice: 20, lineTotal: 20 },
+        ],
       } as Order,
     ]);
-    destructionRepository.find?.mockResolvedValue([
+    destructionRepository.find.mockResolvedValue([
       {
         storeId,
         productClientId: 'product-1',
@@ -142,7 +219,7 @@ describe('InventoryStockService', () => {
         productClientId: 'product-1',
         name: 'Cake',
         remainingQty: 11,
-        previousRemainingQty: 11,
+        previousRemainingQty: 10,
         loggedToday: 0,
       }),
     ]);

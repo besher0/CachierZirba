@@ -6,9 +6,18 @@ import { Store } from '../stores/entities/store.entity';
 import { StoresModule } from '../stores/stores.module';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { CashboxWithdrawal } from './entities/cashbox-withdrawal.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Store, Order, DailySettlement]), StoresModule],
+  imports: [
+    TypeOrmModule.forFeature([
+      Store,
+      Order,
+      DailySettlement,
+      CashboxWithdrawal,
+    ]),
+    StoresModule,
+  ],
   controllers: [AdminController],
   providers: [AdminService],
 })

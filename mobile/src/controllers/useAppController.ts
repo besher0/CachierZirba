@@ -65,6 +65,7 @@ import {
   patchEmployee,
   patchExpense,
   patchPurchase,
+  postCashboxWithdrawal,
   postDailySettlement,
   postEmployee,
   postEmployeeAbsence,
@@ -89,6 +90,7 @@ import {
   AppScreenKey,
   AuthSession,
   CartItem,
+  CreateCashboxWithdrawalPayload,
   CreateDailySettlementPayload,
   CreateEmployeeAbsencePayload,
   CreateEmployeePayload,
@@ -286,6 +288,33 @@ function buildOrderCreateSyncJob(order: LocalOrder): SyncJob {
     retries: 0,
     createdAt: order.createdLocallyAt || order.orderedAt,
     entity: "ORDER",
+    action: "CREATE",
+    payload,
+  };
+}
+
+function buildDailySettlementCreateSyncJob(
+  settlement: LocalDailySettlement,
+): SyncJob {
+  const payload: CreateDailySettlementPayload = {
+    clientClosureId: settlement.clientClosureId,
+    storeId: settlement.storeId,
+    businessDate: settlement.businessDate,
+    cashBoxAmount: settlement.cashBoxAmount,
+    sharesAmount: settlement.sharesAmount,
+    actualRemainingAmount: settlement.actualRemainingAmount,
+    expectedRevenue: settlement.expectedRevenue,
+    carryInAmount: settlement.carryInAmount,
+    note: settlement.note,
+    syncedAt: settlement.syncedAt,
+  };
+
+  return {
+    id: makeId("job"),
+    referenceId: settlement.clientClosureId,
+    retries: 0,
+    createdAt: settlement.createdLocallyAt || settlement.syncedAt,
+    entity: "DAILY_SETTLEMENT",
     action: "CREATE",
     payload,
   };
@@ -609,6 +638,12 @@ export function useAppController() {
   const [settlementActualInputs, setSettlementActualInputs] = useState<
     Record<string, string>
   >({});
+  const [selectedInventoryDestructionProductId, setSelectedInventoryDestructionProductId] =
+    useState("");
+  const [inventoryDestructionQuantityInput, setInventoryDestructionQuantityInput] =
+    useState("");
+  const [inventoryDestructionNoteInput, setInventoryDestructionNoteInput] =
+    useState("");
   const [inventoryDestructionInputs, setInventoryDestructionInputs] = useState<
     Record<string, string>
   >({});
@@ -619,6 +654,12 @@ export function useAppController() {
   const [adminDashboardStoreId, setAdminDashboardStoreId] = useState(
     ADMIN_DASHBOARD_ALL_STORES,
   );
+  const [
+    adminCashboxWithdrawalAmountInput,
+    setAdminCashboxWithdrawalAmountInput,
+  ] = useState("");
+  const [adminCashboxWithdrawalNoteInput, setAdminCashboxWithdrawalNoteInput] =
+    useState("");
   const [adminDatePickerTarget, setAdminDatePickerTarget] = useState<
     "from" | "to" | null
   >(null);
@@ -942,18 +983,31 @@ export function useAppController() {
   }, [pendingAmountValue]);
 
   const selectedStoreOrders = useMemo(
-    () => reportOrders.filter((order) => order.storeId === selectedStoreId),
-    [reportOrders, selectedStoreId],
+    () =>
+      reportOrders.filter(
+        (order) =>
+          order.storeId === selectedStoreId &&
+          (!isOnline || order.synced !== true),
+      ),
+    [isOnline, reportOrders, selectedStoreId],
   );
 
   const selectedStoreSettlements = useMemo(
-    () => dailySettlements.filter((item) => item.storeId === selectedStoreId),
+    () =>
+      dailySettlements.filter(
+        (item) => item.storeId === selectedStoreId && item.synced !== true,
+      ),
     [dailySettlements, selectedStoreId],
   );
 
   const selectedStoreExpenses = useMemo(
-    () => expenses.filter((item) => item.storeId === selectedStoreId),
-    [expenses, selectedStoreId],
+    () =>
+      expenses.filter(
+        (item) =>
+          item.storeId === selectedStoreId &&
+          (!isOnline || item.synced !== true),
+      ),
+    [expenses, isOnline, selectedStoreId],
   );
 
   const selectedStorePurchases = useMemo(
@@ -986,6 +1040,14 @@ export function useAppController() {
   const selectedStoreRemoteSettlements = useMemo(
     () => remoteSettlements.filter((item) => item.storeId === selectedStoreId),
     [remoteSettlements, selectedStoreId],
+  );
+
+  const selectedStoreRemoteSettlementDates = useMemo(
+    () =>
+      new Set(
+        selectedStoreRemoteSettlements.map((item) => item.businessDate),
+      ),
+    [selectedStoreRemoteSettlements],
   );
 
   const [todayDate, setTodayDate] = useState(() =>
@@ -1067,6 +1129,10 @@ export function useAppController() {
     const candidates: string[] = [];
 
     selectedStoreSettlements.forEach((item) => {
+      if (selectedStoreRemoteSettlementDates.has(item.businessDate)) {
+        return;
+      }
+
       const candidate = normalizeIsoTimestamp(
         item.syncedAt ?? item.createdLocallyAt,
       );
@@ -1087,7 +1153,11 @@ export function useAppController() {
     }
 
     return candidates.sort((a, b) => b.localeCompare(a))[0];
-  }, [selectedStoreRemoteSettlements, selectedStoreSettlements]);
+  }, [
+    selectedStoreRemoteSettlementDates,
+    selectedStoreRemoteSettlements,
+    selectedStoreSettlements,
+  ]);
 
   const carryInAmount = useMemo(
     () =>
@@ -1158,9 +1228,11 @@ export function useAppController() {
         rows.set(item.businessDate, mapApiSettlementToRow(item)),
       );
 
-    selectedStoreSettlements.forEach((item) =>
-      rows.set(item.businessDate, mapLocalSettlementToRow(item)),
-    );
+    selectedStoreSettlements.forEach((item) => {
+      if (!rows.has(item.businessDate)) {
+        rows.set(item.businessDate, mapLocalSettlementToRow(item));
+      }
+    });
 
     return Array.from(rows.values()).sort((a, b) =>
       b.businessDate.localeCompare(a.businessDate),
@@ -2710,6 +2782,14 @@ export function useAppController() {
         (sum, item) => sum + item.cashBoxAmount,
         0,
       ),
+      cashBoxWithdrawalsAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + (item.cashBoxWithdrawalsAmount ?? 0),
+        0,
+      ),
+      actualCashBoxRemainingAmount: visibleDashboardSummaries.reduce(
+        (sum, item) => sum + (item.actualCashBoxRemainingAmount ?? 0),
+        0,
+      ),
       expectedCarryForwardAmount: visibleDashboardSummaries.reduce(
         (sum, item) => sum + item.expectedCarryForwardAmount,
         0,
@@ -2737,6 +2817,17 @@ export function useAppController() {
         : reducedDashboardTotals,
     [adminDashboardStoreId, dashboardTotals, reducedDashboardTotals],
   );
+
+  const selectedAdminCashboxRemainingAmount = useMemo(() => {
+    if (adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES) {
+      return effectiveDashboardTotals.actualCashBoxRemainingAmount ?? 0;
+    }
+
+    return (
+      dashboardSummaries.find((item) => item.storeId === adminDashboardStoreId)
+        ?.actualCashBoxRemainingAmount ?? 0
+    );
+  }, [adminDashboardStoreId, dashboardSummaries, effectiveDashboardTotals]);
 
   const logout = useCallback((message: string) => {
     setSession(null);
@@ -2968,13 +3059,52 @@ export function useAppController() {
 
   const markSettlementSynced = useCallback((referenceId: string) => {
     setDailySettlements((previous) => {
-      const next = previous.map((item) =>
-        item.clientClosureId === referenceId ? { ...item, synced: true } : item,
+      const next = previous.filter(
+        (item) => item.clientClosureId !== referenceId,
       );
-      void saveArray(STORAGE_KEYS.dailySettlements, next);
+      if (next.length !== previous.length) {
+        void saveArray(STORAGE_KEYS.dailySettlements, next);
+      }
       return next;
     });
   }, []);
+
+  const removeSettlementAdjustmentOrders = useCallback(
+    (createdAt: string) => {
+      setOrders((previous) => {
+        const next = previous.filter(
+          (order) =>
+            !(
+              order.createdLocallyAt === createdAt &&
+              order.clientOrderId.startsWith("audit_")
+            ),
+        );
+
+        if (next.length !== previous.length) {
+          persistOrders(next);
+        }
+
+        return next;
+      });
+      setQueue((previous) => {
+        const next = previous.filter((job) => {
+          const entity = job.entity ?? job.type;
+          return !(
+            entity === "ORDER" &&
+            job.createdAt === createdAt &&
+            job.referenceId.startsWith("audit_")
+          );
+        });
+
+        if (next.length !== previous.length) {
+          persistSyncQueue(next);
+        }
+
+        return next;
+      });
+    },
+    [persistOrders, persistSyncQueue],
+  );
 
   const markExpenseSynced = useCallback((referenceId: string) => {
     setExpenses((previous) => {
@@ -3034,6 +3164,27 @@ export function useAppController() {
       });
     });
   }, []);
+
+  const upsertRemoteSettlement = useCallback(
+    (settlement: ApiDailySettlement) => {
+      setRemoteSettlements((previous) => {
+        const rows = new Map(
+          previous.map((item) => [
+            `${item.storeId}:${item.businessDate}`,
+            item,
+          ]),
+        );
+        rows.set(
+          `${settlement.storeId}:${settlement.businessDate}`,
+          settlement,
+        );
+        return Array.from(rows.values()).sort((a, b) =>
+          b.businessDate.localeCompare(a.businessDate),
+        );
+      });
+    },
+    [],
+  );
 
   const removeRemotePurchase = useCallback((clientPurchaseId: string) => {
     setRemotePurchases((previous) =>
@@ -3219,7 +3370,6 @@ export function useAppController() {
     try {
       const data = await fetchOrders(authToken, {
         storeId: selectedStoreId,
-        from: settlementCycleStartIso ?? todayDate,
       });
       setRemoteOrders(data);
       return true;
@@ -3232,8 +3382,6 @@ export function useAppController() {
     handleApiFailure,
     isOnline,
     selectedStoreId,
-    settlementCycleStartIso,
-    todayDate,
   ]);
 
   const refreshDailySettlementsData = useCallback(async () => {
@@ -3245,13 +3393,103 @@ export function useAppController() {
       const data = await fetchDailySettlements(authToken, {
         storeId: selectedStoreId,
       });
+      const remoteSettlementDates = new Set(
+        data.map((item) => item.businessDate),
+      );
+      const remoteSettlementClientIds = new Set(
+        data.map((item) => item.clientClosureId),
+      );
+      const staleLocalSettlementTimes = new Set(
+        dailySettlements
+          .filter(
+            (item) =>
+              item.storeId === selectedStoreId &&
+              (item.synced === true ||
+                remoteSettlementDates.has(item.businessDate)),
+          )
+          .map((item) => item.createdLocallyAt || item.syncedAt),
+      );
+
       setRemoteSettlements(data);
+      setDailySettlements((previous) => {
+        const next = previous.filter(
+          (item) =>
+            item.storeId !== selectedStoreId ||
+            (item.synced !== true &&
+              !remoteSettlementDates.has(item.businessDate)),
+        );
+
+        if (next.length !== previous.length) {
+          void saveArray(STORAGE_KEYS.dailySettlements, next);
+        }
+
+        return next;
+      });
+      if (staleLocalSettlementTimes.size > 0) {
+        setOrders((previous) => {
+          const next = previous.filter(
+            (order) =>
+              !(
+                staleLocalSettlementTimes.has(order.createdLocallyAt) &&
+                order.clientOrderId.startsWith("audit_")
+              ),
+          );
+
+          if (next.length !== previous.length) {
+            persistOrders(next);
+          }
+
+          return next;
+        });
+      }
+      setQueue((previous) => {
+        const next = previous.filter((job) => {
+          const entity = job.entity ?? job.type;
+          if (
+            entity === "ORDER" &&
+            staleLocalSettlementTimes.has(job.createdAt) &&
+            job.referenceId.startsWith("audit_")
+          ) {
+            return false;
+          }
+
+          if (entity !== "DAILY_SETTLEMENT") {
+            return true;
+          }
+
+          const payload =
+            job.payload as Partial<CreateDailySettlementPayload>;
+          if (remoteSettlementClientIds.has(job.referenceId)) {
+            return false;
+          }
+
+          return !(
+            payload.storeId === selectedStoreId &&
+            payload.businessDate !== undefined &&
+            remoteSettlementDates.has(payload.businessDate)
+          );
+        });
+
+        if (next.length !== previous.length) {
+          persistSyncQueue(next);
+        }
+
+        return next;
+      });
       return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث تسويات اليوم من السيرفر.");
       return false;
     }
-  }, [authToken, handleApiFailure, isOnline, selectedStoreId]);
+  }, [
+    authToken,
+    dailySettlements,
+    handleApiFailure,
+    isOnline,
+    persistOrders,
+    persistSyncQueue,
+    selectedStoreId,
+  ]);
 
   const refreshExpensesData = useCallback(async () => {
     if (!authToken || !selectedStoreId || !isOnline) {
@@ -3549,6 +3787,84 @@ export function useAppController() {
     handleApiFailure,
     isAdmin,
     isOnline,
+  ]);
+
+  const updateAdminCashboxWithdrawalAmountInput = (value: string) => {
+    const normalized = normalizeNumericInputText(value);
+    if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
+      return;
+    }
+    setAdminCashboxWithdrawalAmountInput(normalized);
+  };
+
+  const submitAdminCashboxWithdrawal = useCallback(async () => {
+    if (!isAdmin || !authToken) {
+      setStatusMessage("هذه العملية متاحة للإدارة فقط.");
+      return;
+    }
+
+    if (!isOnline) {
+      setStatusMessage("يجب توفر اتصال بالسيرفر لتسجيل سحب من الصندوق.");
+      return;
+    }
+
+    const amount = Number(
+      parseNumberInput(adminCashboxWithdrawalAmountInput).toFixed(2),
+    );
+    if (amount <= 0) {
+      setStatusMessage("أدخل مبلغ سحب صحيح.");
+      return;
+    }
+
+    if (amount > selectedAdminCashboxRemainingAmount) {
+      setStatusMessage(
+        `مبلغ السحب أكبر من المتبقي الفعلي: ${formatMoney(selectedAdminCashboxRemainingAmount)}.`,
+      );
+      return;
+    }
+
+    const payload: CreateCashboxWithdrawalPayload = {
+      storeId:
+        adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES
+          ? undefined
+          : adminDashboardStoreId,
+      amount,
+      note: adminCashboxWithdrawalNoteInput.trim() || undefined,
+      withdrawnAt: new Date().toISOString(),
+    };
+
+    try {
+      await postCashboxWithdrawal(authToken, payload);
+      setAdminCashboxWithdrawalAmountInput("");
+      setAdminCashboxWithdrawalNoteInput("");
+      await refreshDashboardData();
+      const storeName =
+        adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES
+          ? "كل الفروع"
+          : stores.find((store) => store.id === adminDashboardStoreId)?.name ??
+            "الفرع";
+      setStatusMessage(
+        `تم تسجيل سحب ${formatMoney(amount)} من صندوق ${storeName}.`,
+      );
+    } catch (error: unknown) {
+      if (error instanceof ApiError && error.status === 400) {
+        setStatusMessage("تعذر تسجيل السحب: المبلغ أكبر من رصيد الصندوق المتاح.");
+        return;
+      }
+
+      handleApiFailure(error, "تعذر تسجيل سحب الصندوق حالياً.");
+    }
+  }, [
+    adminCashboxWithdrawalAmountInput,
+    adminCashboxWithdrawalNoteInput,
+    adminDashboardStoreId,
+    authToken,
+    handleApiFailure,
+    isAdmin,
+    isOnline,
+    refreshDashboardData,
+    selectedAdminCashboxRemainingAmount,
+    stores,
   ]);
 
   const markResourceFresh = useCallback((resourceKey: string) => {
@@ -3898,7 +4214,30 @@ export function useAppController() {
       return;
     }
 
-    const jobsToSync = queue.filter((job) => !job.permanentFailure);
+    const jobsToSync = queue
+      .filter((job) => !job.permanentFailure)
+      .map((job, index) => ({ job, index }))
+      .sort((a, b) => {
+        if (a.job.createdAt === b.job.createdAt) {
+          const aEntity = a.job.entity ?? a.job.type;
+          const bEntity = b.job.entity ?? b.job.type;
+          const aIsAuditOrder =
+            aEntity === "ORDER" && a.job.referenceId.startsWith("audit_");
+          const bIsAuditOrder =
+            bEntity === "ORDER" && b.job.referenceId.startsWith("audit_");
+
+          if (aEntity === "DAILY_SETTLEMENT" && bIsAuditOrder) {
+            return -1;
+          }
+
+          if (aIsAuditOrder && bEntity === "DAILY_SETTLEMENT") {
+            return 1;
+          }
+        }
+
+        return a.index - b.index;
+      })
+      .map((entry) => entry.job);
     if (jobsToSync.length === 0) {
       const permanentlyFailedCount = queue.filter(
         (job) => job.permanentFailure,
@@ -3924,11 +4263,22 @@ export function useAppController() {
     );
     const completedJobIds = new Set<string>();
     const retryJobs = new Map<string, SyncJob>();
+    const blockedSettlementAdjustmentTimes = new Set<string>();
     let stoppedForConnection = false;
     let stoppedForAuthentication = false;
 
     for (let index = 0; index < jobsToSync.length; index += 1) {
       const job = jobsToSync[index];
+      const precheckEntity = job.entity ?? job.type;
+      if (
+        precheckEntity === "ORDER" &&
+        blockedSettlementAdjustmentTimes.has(job.createdAt) &&
+        job.referenceId.startsWith("audit_")
+      ) {
+        completedJobIds.add(job.id);
+        continue;
+      }
+
       inFlightSyncJobIdsRef.current.add(job.id);
 
       try {
@@ -3949,12 +4299,13 @@ export function useAppController() {
             0,
           );
 
-          await postDailySettlement(authToken, {
+          const settlement = await postDailySettlement(authToken, {
             ...(settlementPayload as CreateDailySettlementPayload),
             actualRemainingAmount:
               settlementPayload.actualRemainingAmount ??
               Number(expectedRemainingFallback.toFixed(2)),
           });
+          upsertRemoteSettlement(settlement);
           markSettlementSynced(job.referenceId);
         } else if (entity === "EXPENSE" && action === "CREATE") {
           let payload = job.payload as CreateExpensePayload;
@@ -4062,10 +4413,6 @@ export function useAppController() {
           entity === "INVENTORY_DESTRUCTION" &&
           action === "CREATE"
         ) {
-          if (!isAdmin) {
-            retryJobs.set(job.id, job);
-            continue;
-          }
           const destructionPayload =
             job.payload as CreateInventoryDestructionPayload;
           const destruction = await postInventoryDestruction(
@@ -4127,6 +4474,20 @@ export function useAppController() {
 
         const entity = job.entity ?? job.type;
         const action = job.action ?? "CREATE";
+        if (
+          entity === "DAILY_SETTLEMENT" &&
+          error instanceof ApiError &&
+          error.status === 409
+        ) {
+          completedJobIds.add(job.id);
+          blockedSettlementAdjustmentTimes.add(job.createdAt);
+          markSettlementSynced(job.referenceId);
+          removeSettlementAdjustmentOrders(job.createdAt);
+          void refreshDailySettlementsData();
+          void refreshStoresData();
+          continue;
+        }
+
         if (
           error instanceof ApiError &&
           error.status === 404 &&
@@ -4214,10 +4575,14 @@ export function useAppController() {
     markSettlementSynced,
     persistSyncQueue,
     queue,
+    removeSettlementAdjustmentOrders,
     authToken,
     logout,
     refreshDashboardData,
+    refreshDailySettlementsData,
     refreshSettlementData,
+    refreshStoresData,
+    upsertRemoteSettlement,
   ]);
 
   const loginUser = useCallback(async () => {
@@ -4346,11 +4711,18 @@ export function useAppController() {
           .map(correctCachedPurchaseDate)
           .filter((item) => item.synced !== true);
         const correctedQueue = cachedQueue.map(correctPurchaseSyncJobDate);
-        const recoveredQueue = cachedOrders
+        const recoveredOrderQueue = cachedOrders
           .filter((order) => order.synced !== true)
           .reduce<SyncJob[]>(
             (next, order) => mergeSyncJobs(next, buildOrderCreateSyncJob(order)),
             correctedQueue,
+          );
+        const recoveredQueue = cachedSettlements
+          .filter((settlement) => settlement.synced !== true)
+          .reduce<SyncJob[]>(
+            (next, settlement) =>
+              mergeSyncJobs(next, buildDailySettlementCreateSyncJob(settlement)),
+            recoveredOrderQueue,
           );
         if (
           correctedPurchases.length !== cachedPurchases.length ||
@@ -4602,28 +4974,29 @@ export function useAppController() {
           });
         });
 
-      inventoryDestructions
-        .filter((item) => item.synced !== true)
-        .forEach((item) => {
-          enqueueJob({
-            id: makeId("job"),
-            referenceId: item.clientDestructionId,
-            retries: 0,
-            createdAt: item.destroyedAt,
-            entity: "INVENTORY_DESTRUCTION",
-            action: "CREATE",
-            payload: {
-              clientDestructionId: item.clientDestructionId,
-              storeId: item.storeId,
-              productClientId: item.productClientId,
-              quantity: item.quantity,
-              note: item.note,
-              destroyedAt: item.destroyedAt,
-              syncedAt: item.syncedAt,
-            },
-          });
-        });
     }
+
+    inventoryDestructions
+      .filter((item) => item.synced !== true && canSyncStore(item.storeId))
+      .forEach((item) => {
+        enqueueJob({
+          id: makeId("job"),
+          referenceId: item.clientDestructionId,
+          retries: 0,
+          createdAt: item.destroyedAt,
+          entity: "INVENTORY_DESTRUCTION",
+          action: "CREATE",
+          payload: {
+            clientDestructionId: item.clientDestructionId,
+            storeId: item.storeId,
+            productClientId: item.productClientId,
+            quantity: item.quantity,
+            note: item.note,
+            destroyedAt: item.destroyedAt,
+            syncedAt: item.syncedAt,
+          },
+        });
+      });
   }, [
     assignedStoreId,
     employeeAbsences,
@@ -4713,6 +5086,9 @@ export function useAppController() {
   useEffect(() => {
     setTodaySupplyInputs({});
     setSettlementActualInputs({});
+    setSelectedInventoryDestructionProductId("");
+    setInventoryDestructionQuantityInput("");
+    setInventoryDestructionNoteInput("");
     setInventoryDestructionInputs({});
     setInventoryDestructionNoteInputs({});
     setCashBoxInput("");
@@ -5512,6 +5888,9 @@ export function useAppController() {
       [effectiveStoreId]: carryForwardAmount,
     }));
     setSettlementActualInputs({});
+    setSelectedInventoryDestructionProductId("");
+    setInventoryDestructionQuantityInput("");
+    setInventoryDestructionNoteInput("");
     setInventoryDestructionInputs({});
     setInventoryDestructionNoteInputs({});
 
@@ -5526,17 +5905,21 @@ export function useAppController() {
     };
 
     const postedAdjustmentJobIds = new Set<string>();
+    let postedSettlement = false;
 
     if (isOnline && authToken) {
       try {
+        const settlement = await postDailySettlement(authToken, payload);
+        postedSettlement = true;
+        upsertRemoteSettlement(settlement);
+        markSettlementSynced(clientClosureId);
+
         for (const job of adjustmentJobs) {
           await postOrder(authToken, job.payload as CreateOrderPayload);
           postedAdjustmentJobIds.add(job.id);
           markOrderSynced(job.referenceId);
         }
 
-        await postDailySettlement(authToken, payload);
-        markSettlementSynced(clientClosureId);
         setStatusMessage(
           adjustmentRecords.length > 0
             ? `تم تسجيل التسوية، وتوليد ${adjustmentRecords.length} حركة ضبط جرد. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`
@@ -5547,10 +5930,23 @@ export function useAppController() {
         void refreshDailySettlementsData();
         return;
       } catch (error: unknown) {
+        if (error instanceof ApiError && error.status === 409) {
+          markSettlementSynced(clientClosureId);
+          removeSettlementAdjustmentOrders(createdAt);
+          void refreshDailySettlementsData();
+          void refreshStoresData();
+          setStatusMessage(
+            "طھظ… ط¥ظ„ط؛ط§ط، ط§ظ„طھط³ظˆظٹط© ط§ظ„ظ…ط­ظ„ظٹط© ظ„ط£ظ† ط§ظ„ط³ظٹط±ظپط± ظٹط­طھظˆظٹ طھط³ظˆظٹط© ظ…ط³ط¬ظ„ط© ظ„ظ‡ط°ط§ ط§ظ„ظٹظˆظ….",
+          );
+          return;
+        }
+
         adjustmentJobs
           .filter((job) => !postedAdjustmentJobIds.has(job.id))
           .forEach((job) => enqueueJob(job));
-        enqueueJob(syncJob);
+        if (!postedSettlement) {
+          enqueueJob(syncJob);
+        }
 
         if (error instanceof ApiError && error.status === 401) {
           logout('انتهت الجلسة وتم حفظ التسوية محلياً لحين تسجيل الدخول.');
@@ -5562,8 +5958,8 @@ export function useAppController() {
       }
     }
 
-    adjustmentJobs.forEach((job) => enqueueJob(job));
     enqueueJob(syncJob);
+    adjustmentJobs.forEach((job) => enqueueJob(job));
     setStatusMessage(
       adjustmentRecords.length > 0
         ? `لا يوجد إنترنت: تم تخزين التسوية وتوليد ${adjustmentRecords.length} حركة ضبط محلياً. رصيد المدوّر الجديد: ${formatMoney(carryForwardAmount)}.`
@@ -6922,18 +7318,33 @@ export function useAppController() {
     }));
   };
 
-  const recordInventoryDestruction = async (productId: string) => {
-    if (!isAdmin || !session) {
+  const updateInventoryDestructionQuantityInput = (value: string) => {
+    const normalized = normalizeNumericInputText(value);
+    if (normalized && !/^\d*\.?\d*$/.test(normalized)) {
       return;
     }
 
-    const rawValue = inventoryDestructionInputs[productId]?.trim() ?? "";
+    setInventoryDestructionQuantityInput(normalized);
+  };
+
+  const recordInventoryDestruction = async () => {
+    if (!canManageInventory || !session) {
+      return;
+    }
+
+    const productId = selectedInventoryDestructionProductId;
+    if (!productId) {
+      setStatusMessage("ط§ط®طھط± ط§ظ„ظ…ظ†طھط¬ ط§ظ„ظ…ط±ط§ط¯ ط¥طھظ„ط§ظپظ‡ ط£ظˆظ„ط§ظ‹.");
+      return;
+    }
+
+    const rawValue = inventoryDestructionQuantityInput.trim();
     if (!rawValue || !/^\d+(?:\.\d+)?$/.test(rawValue)) {
       setStatusMessage("أدخل كمية إتلاف صحيحة أولاً.");
       return;
     }
 
-    const effectiveStoreId = selectedStoreId;
+    const effectiveStoreId = isCashier ? assignedStoreId ?? "" : selectedStoreId;
     const product = products.find(
       (item) => item.clientProductId === productId || item.id === productId,
     );
@@ -6957,7 +7368,7 @@ export function useAppController() {
       return;
     }
 
-    const note = inventoryDestructionNoteInputs[productId]?.trim();
+    const note = inventoryDestructionNoteInput.trim();
     const now = new Date().toISOString();
     const clientDestructionId = makeId("destroy");
     const payload: CreateInventoryDestructionPayload = {
@@ -6984,16 +7395,9 @@ export function useAppController() {
       payload,
     };
 
-    setInventoryDestructionInputs((previous) => {
-      const next = { ...previous };
-      delete next[productId];
-      return next;
-    });
-    setInventoryDestructionNoteInputs((previous) => {
-      const next = { ...previous };
-      delete next[productId];
-      return next;
-    });
+    setSelectedInventoryDestructionProductId("");
+    setInventoryDestructionQuantityInput("");
+    setInventoryDestructionNoteInput("");
     setInventoryDestructions((previous) => {
       const next = [localDestruction, ...previous];
       void saveArray(STORAGE_KEYS.inventoryDestructions, next);
@@ -7448,6 +7852,8 @@ export function useAppController() {
     addMiscAmountToCart,
     addProductToCart,
     addTawasiSupplyFromPad,
+    adminCashboxWithdrawalAmountInput,
+    adminCashboxWithdrawalNoteInput,
     adminDatePickerTarget,
     adminDatePickerValue,
     adminDashboardAllStoresKey: ADMIN_DASHBOARD_ALL_STORES,
@@ -7603,7 +8009,9 @@ export function useAppController() {
     roundPadValue,
     saveExpense,
     saveProductDefinition,
+    selectedAdminCashboxRemainingAmount,
     selectedExpenseDetails,
+    selectedInventoryDestructionProductId,
     selectedOrderInvoice,
     selectedSettlementDetail,
     selectedStore,
@@ -7616,6 +8024,7 @@ export function useAppController() {
     setActivePosProductKey,
     setActiveScreen,
     setActualRemainingInput,
+    setAdminCashboxWithdrawalNoteInput,
     setAdminDashboardStoreId,
     setDiscountInput,
     setEmployeeNameInput,
@@ -7642,9 +8051,11 @@ export function useAppController() {
     setPurchaseFilterTo,
     setPurchaseInvoiceDateInput,
     setSelectedExpenseDetails,
+    setSelectedInventoryDestructionProductId,
     setSelectedOrderInvoice,
     setSelectedSettlementDetail,
     setSelectedStoreId,
+    setInventoryDestructionNoteInput,
     setSettlementNoteInput,
     setStatusMessage,
     setTawasiCapitalInput,
@@ -7658,6 +8069,8 @@ export function useAppController() {
     setWithdrawalEmployeeIdInput,
     setWithdrawalNoteInput,
     settlementActualInputs,
+    inventoryDestructionQuantityInput,
+    inventoryDestructionNoteInput,
     inventoryDestructionInputs,
     inventoryDestructionNoteInputs,
     settlementCarryForwardAmount,
@@ -7676,6 +8089,7 @@ export function useAppController() {
     statusMessage,
     stores,
     styles,
+    submitAdminCashboxWithdrawal,
     submitDailySettlement,
     submitOrder,
     subtotal,
@@ -7707,9 +8121,11 @@ export function useAppController() {
     todaySupplyInputs,
     toggleMobileNav,
     total,
+    updateAdminCashboxWithdrawalAmountInput,
     updateCashBoxInput,
     updateInventoryDestructionInput,
     updateInventoryDestructionNoteInput,
+    updateInventoryDestructionQuantityInput,
     updateSettlementActualInput,
     updateSharesInput,
     updatePurchaseInvoiceNoteInput,

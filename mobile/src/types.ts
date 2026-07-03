@@ -125,6 +125,21 @@ export interface ApiDailySettlement extends CreateDailySettlementPayload {
   updatedAt: string;
 }
 
+export interface CreateCashboxWithdrawalPayload {
+  storeId?: string | null;
+  amount: number;
+  note?: string;
+  withdrawnAt?: string;
+}
+
+export interface ApiCashboxWithdrawal extends CreateCashboxWithdrawalPayload {
+  id: string;
+  createdByUserId?: string | null;
+  createdByDisplayName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CreateExpensePayload {
   clientExpenseId: string;
   storeId: string;
@@ -542,6 +557,8 @@ export interface DashboardStoreSummary {
   refundAmount: number;
   sharesAmount: number;
   cashBoxAmount: number;
+  cashBoxWithdrawalsAmount: number;
+  actualCashBoxRemainingAmount: number;
   expectedCarryForwardAmount: number;
   actualRemainingAmount: number;
   settlementDifferenceAmount: number;
@@ -555,6 +572,8 @@ export interface DashboardResponse {
     refundAmount: number;
     sharesAmount: number;
     cashBoxAmount: number;
+    cashBoxWithdrawalsAmount: number;
+    actualCashBoxRemainingAmount: number;
     expectedCarryForwardAmount: number;
     actualRemainingAmount: number;
     settlementDifferenceAmount: number;

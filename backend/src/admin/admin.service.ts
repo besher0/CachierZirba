@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { DateRangeQueryDto } from '../common/dto/date-range-query.dto';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -8,6 +9,8 @@ import { OrderStatus } from '../orders/enums/order-status.enum';
 import { ListOrdersQueryDto } from '../orders/dto/list-orders-query.dto';
 import { Store } from '../stores/entities/store.entity';
 import { StoresService } from '../stores/stores.service';
+import { CreateCashboxWithdrawalDto } from './dto/create-cashbox-withdrawal.dto';
+import { CashboxWithdrawal } from './entities/cashbox-withdrawal.entity';
 
 interface OrderAggRow {
   storeId: string;
@@ -25,6 +28,11 @@ interface SettlementAggRow {
   actualRemainingAmount: string;
 }
 
+interface CashboxWithdrawalAggRow {
+  storeId: string | null;
+  cashBoxWithdrawalsAmount: string;
+}
+
 export interface StoreDashboardSummary {
   storeId: string;
   storeName: string;
@@ -33,6 +41,8 @@ export interface StoreDashboardSummary {
   refundAmount: number;
   sharesAmount: number;
   cashBoxAmount: number;
+  cashBoxWithdrawalsAmount: number;
+  actualCashBoxRemainingAmount: number;
   expectedCarryForwardAmount: number;
   actualRemainingAmount: number;
   settlementDifferenceAmount: number;
@@ -46,6 +56,8 @@ export interface AdminDashboardResponse {
     refundAmount: number;
     sharesAmount: number;
     cashBoxAmount: number;
+    cashBoxWithdrawalsAmount: number;
+    actualCashBoxRemainingAmount: number;
     expectedCarryForwardAmount: number;
     actualRemainingAmount: number;
     settlementDifferenceAmount: number;
@@ -62,6 +74,8 @@ export interface StoreSummaryResponse {
     refundAmount: number;
     sharesAmount: number;
     cashBoxAmount: number;
+    cashBoxWithdrawalsAmount: number;
+    actualCashBoxRemainingAmount: number;
     expectedCarryForwardAmount: number;
     actualRemainingAmount: number;
     settlementDifferenceAmount: number;
@@ -78,6 +92,8 @@ export class AdminService {
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(DailySettlement)
     private readonly dailySettlementRepository: Repository<DailySettlement>,
+    @InjectRepository(CashboxWithdrawal)
+    private readonly cashboxWithdrawalRepository: Repository<CashboxWithdrawal>,
     private readonly storesService: StoresService,
   ) {}
 
@@ -88,6 +104,15 @@ export class AdminService {
     const settlementAggRows = await this
       .buildSettlementAggQuery(query)
       .getRawMany<SettlementAggRow>();
+    const withdrawalAggRows = await this
+      .buildCashboxWithdrawalAggQuery(query)
+      .getRawMany<CashboxWithdrawalAggRow>();
+    const allTimeCashBoxRows = await this
+      .buildSettlementAggQuery({})
+      .getRawMany<SettlementAggRow>();
+    const allTimeWithdrawalRows = await this
+      .buildCashboxWithdrawalAggQuery({})
+      .getRawMany<CashboxWithdrawalAggRow>();
 
     const orderMap = new Map<string, OrderAggRow>(
       orderAggRows.map((row) => [row.storeId, row]),
@@ -95,16 +120,39 @@ export class AdminService {
     const settlementMap = new Map<string, SettlementAggRow>(
       settlementAggRows.map((row) => [row.storeId, row]),
     );
+    const withdrawalMap = new Map<string | null, CashboxWithdrawalAggRow>(
+      withdrawalAggRows.map((row) => [row.storeId, row]),
+    );
+    const allTimeCashBoxMap = new Map<string, SettlementAggRow>(
+      allTimeCashBoxRows.map((row) => [row.storeId, row]),
+    );
+    const allTimeWithdrawalMap = new Map<string | null, CashboxWithdrawalAggRow>(
+      allTimeWithdrawalRows.map((row) => [row.storeId, row]),
+    );
+    const unassignedCashBoxWithdrawalsAmount =
+      this.getUnassignedWithdrawalTotal(withdrawalAggRows);
+    const unassignedActualCashBoxWithdrawalsAmount =
+      this.getUnassignedWithdrawalTotal(allTimeWithdrawalRows);
 
     const storeSummaries = stores.map((store) => {
       const orderAgg = orderMap.get(store.id);
       const settlementAgg = settlementMap.get(store.id);
+      const withdrawalAgg = withdrawalMap.get(store.id);
+      const allTimeCashBoxAgg = allTimeCashBoxMap.get(store.id);
+      const allTimeWithdrawalAgg = allTimeWithdrawalMap.get(store.id);
 
       const ordersCount = this.parseNumber(orderAgg?.ordersCount);
       const completedRevenue = this.parseNumber(orderAgg?.completedRevenue);
       const refundAmount = this.parseNumber(orderAgg?.refundAmount);
       const sharesAmount = this.parseNumber(settlementAgg?.sharesAmount);
       const cashBoxAmount = this.parseNumber(settlementAgg?.cashBoxAmount);
+      const cashBoxWithdrawalsAmount = this.parseNumber(
+        withdrawalAgg?.cashBoxWithdrawalsAmount,
+      );
+      const actualCashBoxRemainingAmount = this.toMoney(
+        this.parseNumber(allTimeCashBoxAgg?.cashBoxAmount) -
+          this.parseNumber(allTimeWithdrawalAgg?.cashBoxWithdrawalsAmount),
+      );
       const expectedCarryForwardAmount = this.parseNumber(
         settlementAgg?.expectedCarryForwardAmount,
       );
@@ -123,6 +171,8 @@ export class AdminService {
         refundAmount,
         sharesAmount,
         cashBoxAmount,
+        cashBoxWithdrawalsAmount,
+        actualCashBoxRemainingAmount,
         expectedCarryForwardAmount,
         actualRemainingAmount,
         settlementDifferenceAmount,
@@ -140,6 +190,18 @@ export class AdminService {
         refundAmount: storeSummaries.reduce((sum, item) => sum + item.refundAmount, 0),
         sharesAmount: storeSummaries.reduce((sum, item) => sum + item.sharesAmount, 0),
         cashBoxAmount: storeSummaries.reduce((sum, item) => sum + item.cashBoxAmount, 0),
+        cashBoxWithdrawalsAmount: this.toMoney(
+          storeSummaries.reduce(
+            (sum, item) => sum + item.cashBoxWithdrawalsAmount,
+            0,
+          ) + unassignedCashBoxWithdrawalsAmount,
+        ),
+        actualCashBoxRemainingAmount: this.toMoney(
+          storeSummaries.reduce(
+            (sum, item) => sum + item.actualCashBoxRemainingAmount,
+            0,
+          ) - unassignedActualCashBoxWithdrawalsAmount,
+        ),
         expectedCarryForwardAmount: storeSummaries.reduce(
           (sum, item) => sum + item.expectedCarryForwardAmount,
           0,
@@ -165,6 +227,12 @@ export class AdminService {
     const store = await this.storesService.findById(storeId);
     const orders = await this.listStoreOrders(storeId, query);
     const settlements = await this.listStoreDailySettlements(storeId, query);
+    const cashBoxWithdrawalsAmount = await this.getStoreWithdrawalTotal(
+      storeId,
+      query,
+    );
+    const actualCashBoxRemainingAmount =
+      await this.getStoreActualCashBoxRemainingAmount(storeId);
 
     const ordersCount = orders.length;
     const completedRevenue = orders
@@ -204,6 +272,8 @@ export class AdminService {
         refundAmount,
         sharesAmount,
         cashBoxAmount,
+        cashBoxWithdrawalsAmount,
+        actualCashBoxRemainingAmount,
         expectedCarryForwardAmount,
         actualRemainingAmount,
         settlementDifferenceAmount,
@@ -271,6 +341,42 @@ export class AdminService {
     return qb.getMany();
   }
 
+  async createCashboxWithdrawal(
+    dto: CreateCashboxWithdrawalDto,
+    authUser: AuthUser,
+  ): Promise<CashboxWithdrawal> {
+    const targetStoreId = dto.storeId?.trim() || null;
+    if (targetStoreId) {
+      await this.storesService.findById(targetStoreId);
+    }
+
+    const amount = this.toMoney(dto.amount);
+    const availableAmount = targetStoreId
+      ? await this.getStoreActualCashBoxRemainingAmount(targetStoreId)
+      : await this.getTotalActualCashBoxRemainingAmount();
+
+    if (amount > availableAmount) {
+      throw new BadRequestException(
+        'Withdrawal amount exceeds the available cashbox balance.',
+      );
+    }
+
+    const withdrawal = this.cashboxWithdrawalRepository.create({
+      storeId: targetStoreId,
+      amount,
+      note: dto.note?.trim() || null,
+      withdrawnAt: dto.withdrawnAt ? new Date(dto.withdrawnAt) : new Date(),
+      createdByUserId: authUser.id,
+      createdByDisplayName: authUser.displayName,
+    });
+
+    const saved = await this.cashboxWithdrawalRepository.save(withdrawal);
+    return this.cashboxWithdrawalRepository.findOneOrFail({
+      where: { id: saved.id },
+      relations: { store: true },
+    });
+  }
+
   private buildOrderAggQuery(query: DateRangeQueryDto) {
     const qb = this.orderRepository
       .createQueryBuilder('o')
@@ -330,6 +436,84 @@ export class AdminService {
     return qb;
   }
 
+  private buildCashboxWithdrawalAggQuery(query: DateRangeQueryDto) {
+    const qb = this.cashboxWithdrawalRepository
+      .createQueryBuilder('w')
+      .select('w.storeId', 'storeId')
+      .addSelect('SUM(w.amount)', 'cashBoxWithdrawalsAmount')
+      .groupBy('w.storeId');
+
+    const fromValue = this.toOrderFromBoundary(query.from);
+    if (fromValue) {
+      qb.andWhere('w.withdrawnAt >= :from', { from: fromValue });
+    }
+
+    const toValue = this.toOrderToBoundary(query.to);
+    if (toValue) {
+      qb.andWhere('w.withdrawnAt <= :to', { to: toValue });
+    }
+
+    return qb;
+  }
+
+  private async getStoreWithdrawalTotal(
+    storeId: string,
+    query: DateRangeQueryDto,
+  ): Promise<number> {
+    const row = await this.buildCashboxWithdrawalAggQuery(query)
+      .andWhere('w.storeId = :storeId', { storeId })
+      .getRawOne<CashboxWithdrawalAggRow>();
+    return this.parseNumber(row?.cashBoxWithdrawalsAmount);
+  }
+
+  private async getStoreActualCashBoxRemainingAmount(
+    storeId: string,
+  ): Promise<number> {
+    const cashBoxRow = await this.buildSettlementAggQuery({})
+      .andWhere('s.storeId = :storeId', { storeId })
+      .getRawOne<SettlementAggRow>();
+    const withdrawalRow = await this.buildCashboxWithdrawalAggQuery({})
+      .andWhere('w.storeId = :storeId', { storeId })
+      .getRawOne<CashboxWithdrawalAggRow>();
+
+    return this.toMoney(
+      this.parseNumber(cashBoxRow?.cashBoxAmount) -
+        this.parseNumber(withdrawalRow?.cashBoxWithdrawalsAmount),
+    );
+  }
+
+  private async getTotalActualCashBoxRemainingAmount(): Promise<number> {
+    const cashBoxRows = await this
+      .buildSettlementAggQuery({})
+      .getRawMany<SettlementAggRow>();
+    const withdrawalRows = await this
+      .buildCashboxWithdrawalAggQuery({})
+      .getRawMany<CashboxWithdrawalAggRow>();
+
+    return this.toMoney(
+      cashBoxRows.reduce(
+        (sum, row) => sum + this.parseNumber(row.cashBoxAmount),
+        0,
+      ) -
+        withdrawalRows.reduce(
+          (sum, row) =>
+            sum + this.parseNumber(row.cashBoxWithdrawalsAmount),
+          0,
+        ),
+    );
+  }
+
+  private getUnassignedWithdrawalTotal(
+    rows: CashboxWithdrawalAggRow[],
+  ): number {
+    return rows
+      .filter((row) => !row.storeId)
+      .reduce(
+        (sum, row) => sum + this.parseNumber(row.cashBoxWithdrawalsAmount),
+        0,
+      );
+  }
+
   private parseNumber(value: string | number | undefined): number {
     if (value === undefined) {
       return 0;
@@ -337,6 +521,10 @@ export class AdminService {
 
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private toMoney(value: number): number {
+    return Number(value.toFixed(2));
   }
 
   private normalizeDateInput(value: string | undefined): string | undefined {

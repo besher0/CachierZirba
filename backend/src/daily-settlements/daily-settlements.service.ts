@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
@@ -42,22 +42,9 @@ export class DailySettlementsService {
     });
 
     if (sameDayRecord) {
-      sameDayRecord.clientClosureId = dto.clientClosureId;
-      sameDayRecord.cashBoxAmount = dto.cashBoxAmount;
-      sameDayRecord.sharesAmount = dto.sharesAmount;
-      sameDayRecord.actualRemainingAmount = dto.actualRemainingAmount;
-      sameDayRecord.expectedRevenue =
-        dto.expectedRevenue ?? sameDayRecord.expectedRevenue;
-      sameDayRecord.carryInAmount =
-        dto.carryInAmount ?? sameDayRecord.carryInAmount;
-      sameDayRecord.note = dto.note ?? null;
-      sameDayRecord.syncedAt = dto.syncedAt
-        ? new Date(dto.syncedAt)
-        : new Date();
-
-      const saved = await this.dailySettlementRepository.save(sameDayRecord);
-      await this.updateStoreCashCarry(saved);
-      return saved;
+      throw new ConflictException(
+        'Daily settlement already exists for this store and business date.',
+      );
     }
 
     try {
@@ -83,6 +70,20 @@ export class DailySettlementsService {
 
         if (byClientClosure) {
           return byClientClosure;
+        }
+
+        const byStoreDate = await this.dailySettlementRepository.findOne({
+          where: {
+            storeId: scopedStoreId,
+            businessDate: dto.businessDate,
+          },
+          relations: { store: true },
+        });
+
+        if (byStoreDate) {
+          throw new ConflictException(
+            'Daily settlement already exists for this store and business date.',
+          );
         }
       }
 

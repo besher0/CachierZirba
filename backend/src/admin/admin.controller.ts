@@ -1,6 +1,8 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../auth/enums/user-role.enum';
+import type { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { DateRangeQueryDto } from '../common/dto/date-range-query.dto';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { ListOrdersQueryDto } from '../orders/dto/list-orders-query.dto';
@@ -10,6 +12,8 @@ import {
   AdminService,
   StoreSummaryResponse,
 } from './admin.service';
+import { CreateCashboxWithdrawalDto } from './dto/create-cashbox-withdrawal.dto';
+import { CashboxWithdrawal } from './entities/cashbox-withdrawal.entity';
 
 @Roles(UserRole.ADMIN)
 @Controller('admin')
@@ -19,6 +23,14 @@ export class AdminController {
   @Get('dashboard')
   getDashboard(@Query() query: DateRangeQueryDto): Promise<AdminDashboardResponse> {
     return this.adminService.getDashboard(query);
+  }
+
+  @Post('cashbox-withdrawals')
+  createCashboxWithdrawal(
+    @Body() dto: CreateCashboxWithdrawalDto,
+    @CurrentUser() authUser: AuthUser,
+  ): Promise<CashboxWithdrawal> {
+    return this.adminService.createCashboxWithdrawal(dto, authUser);
   }
 
   @Get('stores/:storeId/summary')

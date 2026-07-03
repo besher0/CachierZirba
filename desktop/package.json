@@ -1,0 +1,52 @@
+{
+  "name": "zirba-desktop",
+  "version": "1.0.1",
+  "description": "ZERBE PATISSERIE Windows desktop app",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "build:web": "npm --prefix ../mobile run export:web",
+    "pack": "npm run build:web && electron-builder --win --dir",
+    "dist": "npm run build:web && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^38.2.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.besher1.zerbepatisserie.desktop",
+    "productName": "ZERBE PATISSERIE",
+    "directories": {
+      "output": "../release/windows"
+    },
+    "files": [
+      "main.js",
+      "icon.ico",
+      {
+        "from": "../mobile/dist",
+        "to": "mobile-dist",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ZERBE PATISSERIE"
+    }
+  }
+}

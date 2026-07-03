@@ -25,23 +25,22 @@ export class InventoryDestructionsService {
     dto: CreateInventoryDestructionDto,
     authUser: AuthUser,
   ): Promise<InventoryDestruction> {
-    if (authUser.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Only admin accounts can record inventory destruction.');
-    }
+    const scopedStoreId = this.resolveStoreForWrite(dto.storeId, authUser);
 
-    await this.storesService.findById(dto.storeId);
+    await this.storesService.findById(scopedStoreId);
     const existing = await this.destructionRepository.findOne({
       where: { clientDestructionId: dto.clientDestructionId },
       relations: { store: true },
     });
     if (existing) {
+      this.assertWritableStore(existing.storeId, authUser);
       return existing;
     }
 
     try {
       const record = this.destructionRepository.create({
         clientDestructionId: dto.clientDestructionId,
-        storeId: dto.storeId,
+        storeId: scopedStoreId,
         productClientId: dto.productClientId,
         quantity: dto.quantity,
         note: dto.note?.trim() || null,
@@ -52,7 +51,11 @@ export class InventoryDestructionsService {
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
-        return this.findByClientDestructionId(dto.clientDestructionId);
+        const existing = await this.findByClientDestructionId(
+          dto.clientDestructionId,
+        );
+        this.assertWritableStore(existing.storeId, authUser);
+        return existing;
       }
       throw error;
     }
@@ -100,6 +103,32 @@ export class InventoryDestructionsService {
       );
     }
     return record;
+  }
+
+  private resolveStoreForWrite(
+    requestedStoreId: string,
+    authUser: AuthUser,
+  ): string {
+    if (authUser.role === UserRole.CASHIER) {
+      if (!authUser.storeId) {
+        throw new ForbiddenException('Cashier account has no assigned store.');
+      }
+      if (requestedStoreId !== authUser.storeId) {
+        throw new ForbiddenException(
+          'Cashier can only record inventory destruction for assigned store.',
+        );
+      }
+      return authUser.storeId;
+    }
+    return requestedStoreId;
+  }
+
+  private assertWritableStore(storeId: string, authUser: AuthUser): void {
+    if (authUser.role === UserRole.CASHIER && authUser.storeId !== storeId) {
+      throw new ForbiddenException(
+        'Cashier can only record inventory destruction for assigned store.',
+      );
+    }
   }
 
   private resolveStoreForRead(

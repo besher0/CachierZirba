@@ -12,11 +12,12 @@ export function SettlementScreen() {
     actualRemainingInput,
     auditNetSalesAmount,
     cashBoxInput,
+    canManageInventory,
     commitInventoryAdjustment,
     formatMoney,
     formatQuantity,
-    inventoryDestructionInputs,
-    inventoryDestructionNoteInputs,
+    inventoryDestructionNoteInput,
+    inventoryDestructionQuantityInput,
     isAdmin,
     isRefreshingActiveScreen,
     openSettlementDetails,
@@ -25,6 +26,7 @@ export function SettlementScreen() {
     recordInventoryDestruction,
     refreshActiveScreenData,
     selectedStore,
+    selectedInventoryDestructionProductId,
     settlementActualInputs,
     settlementArchiveRows,
     settlementCarryForwardAmount,
@@ -48,15 +50,16 @@ export function SettlementScreen() {
     todayExpensesTotal,
     todayPurchasesTotal,
     updateCashBoxInput,
-    updateInventoryDestructionInput,
-    updateInventoryDestructionNoteInput,
+    setInventoryDestructionNoteInput,
+    setSelectedInventoryDestructionProductId,
+    updateInventoryDestructionQuantityInput,
     updateSettlementActualInput,
     updateSharesInput,
   } = useAppScreenContext() as any;
 
   const sections = [
     { key: "sales", data: settlementProductSalesSummaryRows },
-    { key: "destructionInput", data: isAdmin ? productSupplyRows : [] },
+    { key: "destructionInput", data: canManageInventory ? [{ id: "destruction-form" }] : [] },
     { key: "destructionHistory", data: settlementInventoryDestructionRows },
     { key: "audit", data: pieceStockAuditRows },
     { key: "archive", data: settlementArchiveRows },
@@ -78,6 +81,10 @@ export function SettlementScreen() {
         return "";
     }
   };
+
+  const selectedDestructionProduct = productSupplyRows.find(
+    (item) => item.productId === selectedInventoryDestructionProductId,
+  );
 
   return (
     <SectionList
@@ -260,6 +267,74 @@ export function SettlementScreen() {
         }
 
         if (section.key === "destructionInput") {
+          return (
+            <View style={styles.orderRow}>
+              <Text style={styles.orderRowId}>اختر المنتج</Text>
+              <View style={styles.rowActionButtons}>
+                {productSupplyRows.map((product) => {
+                  const selected =
+                    product.productId === selectedInventoryDestructionProductId;
+                  return (
+                    <Pressable
+                      key={product.productId}
+                      style={[
+                        styles.smallRefreshButton,
+                        selected && styles.addProductButton,
+                      ]}
+                      onPress={() =>
+                        setSelectedInventoryDestructionProductId(product.productId)
+                      }
+                    >
+                      <Text
+                        style={
+                          selected
+                            ? styles.addProductButtonText
+                            : styles.smallRefreshText
+                        }
+                      >
+                        {product.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {selectedDestructionProduct ? (
+                <Text style={styles.orderRowMeta}>
+                  المتاح: {formatQuantity(selectedDestructionProduct.remainingQty)} {selectedDestructionProduct.unitType === "KG" ? "كيلو" : "قطعة"}
+                </Text>
+              ) : (
+                <Text style={styles.orderRowMeta}>اختر منتجًا لإدخال كمية الإتلاف.</Text>
+              )}
+              <TextInput
+                style={styles.inputFull}
+                value={inventoryDestructionQuantityInput}
+                onChangeText={updateInventoryDestructionQuantityInput}
+                keyboardType="decimal-pad"
+                placeholder="كمية الإتلاف"
+                placeholderTextColor="#d7b3c4"
+              />
+              <TextInput
+                style={styles.inputFull}
+                value={inventoryDestructionNoteInput}
+                onChangeText={setInventoryDestructionNoteInput}
+                placeholder="سبب الإتلاف اختياري"
+                placeholderTextColor="#d7b3c4"
+              />
+              <Pressable
+                style={[
+                  styles.secondaryButton,
+                  !selectedInventoryDestructionProductId && styles.buttonDisabled,
+                ]}
+                disabled={!selectedInventoryDestructionProductId}
+                onPress={() => void recordInventoryDestruction()}
+              >
+                <Text style={styles.secondaryButtonText}>إتلاف الكمية</Text>
+              </Pressable>
+            </View>
+          );
+        }
+
+        if (false && section.key === "destructionInput") {
           return (
             <View style={styles.orderRow}>
               <Text style={styles.orderRowId}>{item.name}</Text>

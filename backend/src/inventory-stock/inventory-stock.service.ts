@@ -42,7 +42,9 @@ export class InventoryStockService {
 
     const [products, purchases, orders, adjustments, destructions] =
       await Promise.all([
-        this.productRepository.find({ order: { name: 'ASC', createdAt: 'ASC' } }),
+        this.productRepository.find({
+          order: { name: 'ASC', createdAt: 'ASC' },
+        }),
         this.purchaseRepository.find({
           where: { storeId },
           order: { purchaseDate: 'DESC', createdAt: 'DESC' },
@@ -63,7 +65,10 @@ export class InventoryStockService {
 
     const todayDate = this.toDateOnlyInDamascus(new Date());
     const productsByName = new Map(
-      products.map((product) => [this.normalizeProductKey(product.name), product]),
+      products.map((product) => [
+        this.normalizeProductKey(product.name),
+        product,
+      ]),
     );
     const latestAdjustmentByProduct = new Map<string, InventoryAdjustment>();
 
@@ -77,10 +82,6 @@ export class InventoryStockService {
     const soldByProduct = new Map<string, number>();
     const refundedByProduct = new Map<string, number>();
     const destroyedByProduct = new Map<string, number>();
-    const previousPurchasedByProduct = new Map<string, number>();
-    const previousSoldByProduct = new Map<string, number>();
-    const previousRefundedByProduct = new Map<string, number>();
-    const previousDestroyedByProduct = new Map<string, number>();
     const todayReceivedByProduct = new Map<string, number>();
 
     purchases.forEach((purchase) => {
@@ -95,7 +96,11 @@ export class InventoryStockService {
       }
 
       if (purchase.purchaseDate === todayDate) {
-        this.add(todayReceivedByProduct, product.clientProductId, purchase.quantity);
+        this.add(
+          todayReceivedByProduct,
+          product.clientProductId,
+          purchase.quantity,
+        );
       }
 
       const adjustment = latestAdjustmentByProduct.get(product.clientProductId);
@@ -104,18 +109,9 @@ export class InventoryStockService {
       }
 
       this.add(purchasedByProduct, product.clientProductId, purchase.quantity);
-      if (purchase.purchaseDate < todayDate) {
-        this.add(
-          previousPurchasedByProduct,
-          product.clientProductId,
-          purchase.quantity,
-        );
-      }
     });
 
     orders.forEach((order) => {
-      const orderDate = this.toDateOnlyInDamascus(order.orderedAt);
-
       order.items.forEach((item) => {
         const key = this.normalizeProductKey(item.productName);
         const product = productsByName.get(key);
@@ -123,44 +119,35 @@ export class InventoryStockService {
           return;
         }
 
-        const adjustment = latestAdjustmentByProduct.get(product.clientProductId);
+        const adjustment = latestAdjustmentByProduct.get(
+          product.clientProductId,
+        );
         if (adjustment && order.orderedAt <= adjustment.adjustedAt) {
           return;
         }
 
         if (order.status === OrderStatus.REFUNDED) {
           this.add(refundedByProduct, product.clientProductId, item.quantity);
-          if (orderDate < todayDate) {
-            this.add(
-              previousRefundedByProduct,
-              product.clientProductId,
-              item.quantity,
-            );
-          }
           return;
         }
 
         this.add(soldByProduct, product.clientProductId, item.quantity);
-        if (orderDate < todayDate) {
-          this.add(previousSoldByProduct, product.clientProductId, item.quantity);
-        }
       });
     });
 
     destructions.forEach((destruction) => {
-      const adjustment = latestAdjustmentByProduct.get(destruction.productClientId);
+      const adjustment = latestAdjustmentByProduct.get(
+        destruction.productClientId,
+      );
       if (adjustment && destruction.destroyedAt <= adjustment.adjustedAt) {
         return;
       }
 
-      this.add(destroyedByProduct, destruction.productClientId, destruction.quantity);
-      if (this.toDateOnlyInDamascus(destruction.destroyedAt) < todayDate) {
-        this.add(
-          previousDestroyedByProduct,
-          destruction.productClientId,
-          destruction.quantity,
-        );
-      }
+      this.add(
+        destroyedByProduct,
+        destruction.productClientId,
+        destruction.quantity,
+      );
     });
 
     const calculatedAt = new Date().toISOString();
@@ -171,11 +158,9 @@ export class InventoryStockService {
       const sold = soldByProduct.get(productId) ?? 0;
       const refunded = refundedByProduct.get(productId) ?? 0;
       const destroyed = destroyedByProduct.get(productId) ?? 0;
-      const previousPurchased = previousPurchasedByProduct.get(productId) ?? 0;
-      const previousSold = previousSoldByProduct.get(productId) ?? 0;
-      const previousRefunded = previousRefundedByProduct.get(productId) ?? 0;
-      const previousDestroyed = previousDestroyedByProduct.get(productId) ?? 0;
-      const inventoryBaseline =
+      // Inventory adjustments are the product-level settlement closing snapshot.
+      // Products without a previous settlement fall back to zero.
+      const latestSettlementClosingQty =
         latestAdjustmentByProduct.get(productId)?.actualQuantity ?? 0;
 
       return {
@@ -187,18 +172,18 @@ export class InventoryStockService {
         sellPrice: product.price,
         costPrice: product.costPrice,
         remainingQty: Number(
-          (inventoryBaseline + purchased - sold + refunded - destroyed).toFixed(3),
-        ),
-        previousRemainingQty: Number(
           (
-            inventoryBaseline +
-            previousPurchased -
-            previousSold +
-            previousRefunded -
-            previousDestroyed
+            latestSettlementClosingQty +
+            purchased -
+            sold +
+            refunded -
+            destroyed
           ).toFixed(3),
         ),
-        loggedToday: Number((todayReceivedByProduct.get(productId) ?? 0).toFixed(3)),
+        previousRemainingQty: Number(latestSettlementClosingQty.toFixed(3)),
+        loggedToday: Number(
+          (todayReceivedByProduct.get(productId) ?? 0).toFixed(3),
+        ),
         calculatedAt,
       };
     });
