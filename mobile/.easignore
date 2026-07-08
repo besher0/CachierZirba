@@ -1,0 +1,31 @@
+# Dependencies and generated output
+node_modules/
+.expo/
+.eas-inspect*/
+dist/
+web-build/
+
+# Native folders and build caches generated locally by Expo/Gradle
+android/
+ios/
+android/.gradle/
+android/.kotlin/
+android/app/.cxx/
+android/app/build/
+android/build/
+ios/build/
+
+# Local files not required by EAS Build
+.git/
+.vscode/
+*.db
+*.sqlite
+*.sqlite3
+login.json
+.env
+.env.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

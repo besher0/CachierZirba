@@ -4,17 +4,24 @@ backend/node_modules/
 backend/dist/
 mobile/node_modules/
 mobile/.expo/
+mobile/.eas-inspect*/
 mobile/dist/
 mobile/.eas-inspect/
 mobile/web-build/
 
-# Native build caches
+# Native folders and build caches generated locally by Expo/Gradle
+mobile/android/
+mobile/ios/
 mobile/android/.gradle/
+mobile/android/.kotlin/
+mobile/android/app/.cxx/
 mobile/android/app/build/
 mobile/android/build/
 
 # Files not required by the mobile build
 backend/
+desktop/
+release/
 .git/
 .vscode/
 *.db

@@ -12,6 +12,7 @@ import {
   CloudinarySignatureResponse,
   ApiOrder,
   ApiProduct,
+  ApiProductSalesSummaryRow,
   ApiPurchase,
   AuthSession,
   CreateExpensePayload,
@@ -318,6 +319,27 @@ export function fetchDailySettlements(
 
 export function fetchDashboard(token: string, query: DateRangeQuery = {}): Promise<DashboardResponse> {
   return request<DashboardResponse>(`/admin/dashboard${buildDateRangeQuery(query)}`, { token });
+}
+
+export function fetchCashboxWithdrawals(
+  token: string,
+  query: DateRangeQuery = {},
+): Promise<ApiCashboxWithdrawal[]> {
+  return request<ApiCashboxWithdrawal[]>(
+    `/admin/cashbox-withdrawals${buildDateRangeQuery(query)}`,
+    { token },
+  );
+}
+
+export function fetchStoreProductSales(
+  token: string,
+  storeId: string,
+  query: DateRangeQuery = {},
+): Promise<ApiProductSalesSummaryRow[]> {
+  return request<ApiProductSalesSummaryRow[]>(
+    `/admin/stores/${encodeURIComponent(storeId)}/product-sales${buildDateRangeQuery(query)}`,
+    { token },
+  );
 }
 
 export function postCashboxWithdrawal(

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import React from "react";
 import { SectionList } from "react-native";
 
 import { useAppScreenContext } from "./AppScreenContext";
@@ -37,6 +38,7 @@ export function PurchasesScreen() {
     onPurchaseDatePickerChange,
     productEditingId,
     productSupplyRows,
+    purchaseDatePickerInputValue,
     purchaseDatePickerTarget,
     purchaseDatePickerValue,
     purchaseFilterFrom,
@@ -44,6 +46,7 @@ export function PurchasesScreen() {
     purchaseFilterTo,
     purchaseHistorySummaryRows,
     purchaseInvoiceDateInput,
+    purchaseProductSalesSummaryRows,
     receiveTodaySupplies,
     refreshActiveScreenData,
     registerSupplyPayment,
@@ -70,11 +73,13 @@ export function PurchasesScreen() {
     tawasiNoteInput,
     tawasiSellPriceInput,
     todaySupplyInputs,
+    updatePurchaseDatePickerInputValue,
     updateTodaySupplyInput,
   } = useAppScreenContext() as any;
 
   const sections = [
     { key: "supply", data: productSupplyRows },
+    { key: "sales", data: purchaseProductSalesSummaryRows },
     { key: "history", data: purchaseHistorySummaryRows },
   ];
 
@@ -120,16 +125,10 @@ export function PurchasesScreen() {
               </View>
             ) : null}
           </>
-        ) : (
+        ) : section.key === "sales" ? (
           <View style={styles.section}>
             <View style={styles.sectionHeaderInline}>
-              <Text style={styles.sectionTitle}>سجل المشتريات</Text>
-              <Pressable
-                style={styles.smallRefreshButton}
-                onPress={() => void exportPurchasesData()}
-              >
-                <Text style={styles.smallRefreshText}>تصدير CSV</Text>
-              </Pressable>
+              <Text style={styles.sectionTitle}>كمية المبيع حسب المنتج</Text>
             </View>
             <View style={styles.inputRow}>
               <Pressable
@@ -173,11 +172,26 @@ export function PurchasesScreen() {
               style={styles.inputFull}
               value={purchaseFilterProduct}
               onChangeText={setPurchaseFilterProduct}
-              placeholder="فلترة باسم المنتج"
+              placeholder="فلترة باسم المنتج للمشتريات والمبيع"
               placeholderTextColor="#d7b3c4"
             />
             {section.data.length === 0 ? (
-              <Text style={styles.emptyText}>لا توجد كميات مشتريات.</Text>
+              <Text style={styles.emptyText}>لا توجد مبيعات ضمن الفترة المحددة.</Text>
+            ) : null}
+          </View>
+        ) : (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderInline}>
+              <Text style={styles.sectionTitle}>عمليات الشراء حسب المنتج</Text>
+              <Pressable
+                style={styles.smallRefreshButton}
+                onPress={() => void exportPurchasesData()}
+              >
+                <Text style={styles.smallRefreshText}>تصدير CSV</Text>
+              </Pressable>
+            </View>
+            {section.data.length === 0 ? (
+              <Text style={styles.emptyText}>لا توجد كميات مشتراة ضمن الفترة المحددة.</Text>
             ) : null}
           </View>
         )
@@ -269,18 +283,45 @@ export function PurchasesScreen() {
               </View>
             ) : null}
           </View>
+        ) : section.key === "sales" ? (
+          <View style={styles.orderRow}>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowId}>{item.name}</Text>
+              <Text style={styles.orderRowItems}>
+                {item.unitType === "KG" ? "كيلو" : "قطعة"}
+              </Text>
+            </View>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowMeta}>
+                مباع: {formatQuantity(item.soldQty)}
+              </Text>
+              <Text style={styles.orderRowMeta}>
+                مرتجع: {formatQuantity(item.refundedQty)}
+              </Text>
+            </View>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowMeta}>
+                صافي الكمية: {formatQuantity(item.netQty)}
+              </Text>
+              <Text style={styles.orderRowTotal}>
+                {formatMoney(item.netAmount)}
+              </Text>
+            </View>
+          </View>
         ) : (
           <View style={styles.orderRow}>
             <View style={styles.orderRowMain}>
               <Text style={styles.orderRowId}>{item.productName}</Text>
               <Text style={styles.orderRowItems}>
-                الكمية: {formatQuantity(item.quantity)}
+                مجموع الكمية: {formatQuantity(item.quantity)}
               </Text>
             </View>
             <View style={styles.orderRowMain}>
-              <Text style={styles.orderRowTotal}>{formatMoney(item.totalCost)}</Text>
-              <Text style={item.synced ? styles.syncedText : styles.pendingText}>
-                {item.synced ? "متزامن" : `${item.pendingCount} معلق`}
+              <Text style={styles.orderRowMeta}>
+                متوسط رأس المال: {formatMoney(item.unitCost)}
+              </Text>
+              <Text style={styles.orderRowTotal}>
+                {formatMoney(item.totalCost)}
               </Text>
             </View>
             <Text style={styles.orderRowMeta}>
@@ -289,12 +330,9 @@ export function PurchasesScreen() {
                 : `${item.firstPurchaseDate} - ${item.lastPurchaseDate}`}
               {item.purchaseDatesCount > 1 ? ` | ${item.purchaseDatesCount} أيام` : ""}
             </Text>
-            <Text style={styles.orderRowMeta}>
-              متوسط رأس المال: {formatMoney(item.unitCost)}
-            </Text>
             {item.purchaseKind === "TAWASI" ? (
               <Text style={styles.orderRowMeta}>
-                سعر المبيع: {formatMoney(item.sellPrice)}
+                تواصي | سعر المبيع: {formatMoney(item.sellPrice)}
               </Text>
             ) : null}
           </View>
@@ -527,7 +565,31 @@ export function PurchasesScreen() {
                 ? "اختر تاريخ البداية"
                 : "اختر تاريخ النهاية"}
             </Text>
-            {purchaseDatePickerTarget ? (
+            {purchaseDatePickerTarget && Platform.OS === "web" ? (
+              React.createElement("input", {
+                type: "date",
+                value: purchaseDatePickerInputValue,
+                min: "2000-01-01",
+                max: "2100-12-31",
+                onChange: (event) =>
+                  updatePurchaseDatePickerInputValue(event.target.value),
+                style: {
+                  width: "100%",
+                  minHeight: 46,
+                  boxSizing: "border-box",
+                  borderWidth: 1,
+                  borderStyle: "solid",
+                  borderColor: "#efcad4",
+                  borderRadius: 12,
+                  backgroundColor: "#fff6fa",
+                  color: "#701a3a",
+                  fontSize: 16,
+                  fontWeight: 700,
+                  padding: "10px 12px",
+                  direction: "ltr",
+                },
+              })
+            ) : purchaseDatePickerTarget ? (
               <DateTimePicker
                 mode="date"
                 display="spinner"

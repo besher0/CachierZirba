@@ -10,6 +10,7 @@ import { Order } from '../orders/entities/order.entity';
 import {
   AdminDashboardResponse,
   AdminService,
+  ProductSalesSummaryResponse,
   StoreSummaryResponse,
 } from './admin.service';
 import { CreateCashboxWithdrawalDto } from './dto/create-cashbox-withdrawal.dto';
@@ -33,6 +34,13 @@ export class AdminController {
     return this.adminService.createCashboxWithdrawal(dto, authUser);
   }
 
+  @Get('cashbox-withdrawals')
+  listCashboxWithdrawals(
+    @Query() query: DateRangeQueryDto,
+  ): Promise<CashboxWithdrawal[]> {
+    return this.adminService.listCashboxWithdrawals(query);
+  }
+
   @Get('stores/:storeId/summary')
   getStoreSummary(
     @Param('storeId') storeId: string,
@@ -47,6 +55,14 @@ export class AdminController {
     @Query() query: ListOrdersQueryDto,
   ): Promise<Order[]> {
     return this.adminService.listStoreOrders(storeId, query);
+  }
+
+  @Get('stores/:storeId/product-sales')
+  getStoreProductSales(
+    @Param('storeId') storeId: string,
+    @Query() query: DateRangeQueryDto,
+  ): Promise<ProductSalesSummaryResponse[]> {
+    return this.adminService.listStoreProductSales(storeId, query);
   }
 
   @Get('stores/:storeId/daily-settlements')

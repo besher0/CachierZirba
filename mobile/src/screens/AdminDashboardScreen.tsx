@@ -19,6 +19,7 @@ export function AdminDashboardScreen() {
     activeScreen,
     adminCashboxWithdrawalAmountInput,
     adminCashboxWithdrawalNoteInput,
+    adminCashboxWithdrawals,
     adminDashboardAllStoresKey,
     adminDashboardStoreId,
     adminDatePickerTarget,
@@ -357,9 +358,7 @@ export function AdminDashboardScreen() {
 
                         <Text style={styles.storeTableTitle}>سحب من الصندوق</Text>
                         <Text style={styles.orderRowMeta}>
-                          {adminDashboardStoreId === adminDashboardAllStoresKey
-                            ? `السحب سيتم من صندوق كل الفروع. المتبقي الحالي: ${formatMoney(selectedAdminCashboxRemainingAmount)}`
-                            : `المتبقي الحالي للفرع المحدد: ${formatMoney(selectedAdminCashboxRemainingAmount)}`}
+                          السحب سيتم من الصندوق العام لكل الفروع. المتبقي الحالي: {formatMoney(selectedAdminCashboxRemainingAmount)}
                         </Text>
                         <View style={styles.inputRow}>
                           <TextInput
@@ -386,6 +385,37 @@ export function AdminDashboardScreen() {
                             تسجيل السحب
                           </Text>
                         </Pressable>
+
+                        <Text style={styles.storeTableTitle}>سحوبات الصندوق</Text>
+                        {adminCashboxWithdrawals.length === 0 ? (
+                          <Text style={styles.emptyText}>
+                            لا توجد سحوبات صندوق ضمن الفترة المحددة.
+                          </Text>
+                        ) : (
+                          adminCashboxWithdrawals.map((withdrawal) => (
+                            <View
+                              key={withdrawal.id}
+                              style={styles.dashboardRow}
+                            >
+                              <View style={styles.orderRowMain}>
+                                <Text style={styles.dashboardStoreName}>
+                                  {formatMoney(withdrawal.amount)}
+                                </Text>
+                                <Text style={styles.orderRowMeta}>
+                                  {toShortDate(withdrawal.withdrawnAt)}
+                                </Text>
+                              </View>
+                              <Text style={styles.orderRowMeta}>
+                                سجله: {withdrawal.createdByDisplayName || "-"}
+                              </Text>
+                              {withdrawal.note ? (
+                                <Text style={styles.orderRowMeta}>
+                                  {withdrawal.note}
+                                </Text>
+                              ) : null}
+                            </View>
+                          ))
+                        )}
 
                         <Text style={styles.storeTableTitle}>
                           {adminDashboardStoreId === adminDashboardAllStoresKey
@@ -417,7 +447,7 @@ export function AdminDashboardScreen() {
                               </View>
                               <View style={styles.orderRowMain}>
                                 <Text style={styles.orderRowMeta}>
-                                  سحوبات: {formatMoney(summary.cashBoxWithdrawalsAmount ?? 0)}
+                                  سحوبات: غير منسوبة للفرع
                                 </Text>
                                 <Text style={styles.orderRowMeta}>
                                   متبقي فعلي: {formatMoney(summary.actualCashBoxRemainingAmount ?? 0)}

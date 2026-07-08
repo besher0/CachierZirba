@@ -21,6 +21,8 @@ export function AppOverlays() {
     actualRemainingAmount,
     adminDatePickerTarget,
     adminDatePickerValue,
+    adminProductSalesDatePickerTarget,
+    adminProductSalesDatePickerValue,
     amount,
     android,
     animationType,
@@ -33,9 +35,11 @@ export function AppOverlays() {
     clientOrderId,
     clientPurchaseId,
     closeAdminDatePicker,
+    closeAdminProductSalesDatePicker,
     closeMobileNav,
     closeTodayPurchasesInvoice,
     confirmAdminDatePicker,
+    confirmAdminProductSalesDatePicker,
     cover,
     date,
     datePickerConfirmButton,
@@ -101,6 +105,7 @@ export function AppOverlays() {
     note,
     numberOfLines,
     onAdminDatePickerChange,
+    onAdminProductSalesDatePickerChange,
     onChange,
     onPress,
     onRequestClose,
@@ -342,6 +347,61 @@ export function AppOverlays() {
                         <Pressable
                           style={styles.datePickerConfirmButton}
                           onPress={confirmAdminDatePicker}
+                        >
+                          <Text style={styles.datePickerConfirmText}>
+                            اعتماد التاريخ
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                </Modal>
+
+                {adminProductSalesDatePickerTarget && Platform.OS === "android" ? (
+                  <DateTimePicker
+                    mode="date"
+                    value={adminProductSalesDatePickerValue}
+                    onChange={onAdminProductSalesDatePickerChange}
+                    maximumDate={new Date("2100-12-31T00:00:00")}
+                    minimumDate={new Date("2000-01-01T00:00:00")}
+                  />
+                ) : null}
+                <Modal
+                  visible={
+                    adminProductSalesDatePickerTarget !== null &&
+                    Platform.OS !== "android"
+                  }
+                  transparent
+                  animationType="fade"
+                  onRequestClose={closeAdminProductSalesDatePicker}
+                >
+                  <View style={styles.invoiceOverlay}>
+                    <View style={styles.datePickerModalCard}>
+                      <Text style={styles.sectionTitle}>
+                        {adminProductSalesDatePickerTarget === "from"
+                          ? "اختر تاريخ بداية الجرد"
+                          : "اختر تاريخ نهاية الجرد"}
+                      </Text>
+                      {adminProductSalesDatePickerTarget ? (
+                        <DateTimePicker
+                          mode="date"
+                          display="spinner"
+                          value={adminProductSalesDatePickerValue}
+                          onChange={onAdminProductSalesDatePickerChange}
+                          maximumDate={new Date("2100-12-31T00:00:00")}
+                          minimumDate={new Date("2000-01-01T00:00:00")}
+                        />
+                      ) : null}
+                      <View style={styles.rowActionButtons}>
+                        <Pressable
+                          style={styles.smallRefreshButton}
+                          onPress={closeAdminProductSalesDatePicker}
+                        >
+                          <Text style={styles.smallRefreshText}>إلغاء</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.datePickerConfirmButton}
+                          onPress={confirmAdminProductSalesDatePicker}
                         >
                           <Text style={styles.datePickerConfirmText}>
                             اعتماد التاريخ

@@ -46,6 +46,7 @@ import {
   deleteExpense,
   deletePurchase,
   fetchCloudinarySignature,
+  fetchCashboxWithdrawals,
   fetchDashboard,
   fetchDailySettlements,
   fetchEmployeeAbsences,
@@ -59,6 +60,7 @@ import {
   fetchOrders,
   fetchProducts,
   fetchPurchases,
+  fetchStoreProductSales,
   fetchStores,
   login,
   patchProduct,
@@ -79,6 +81,7 @@ import {
   deleteProduct,
 } from "../services/api";
 import {
+  ApiCashboxWithdrawal,
   ApiDailySettlement,
   ApiExpense,
   ApiInventoryAdjustment,
@@ -86,6 +89,7 @@ import {
   ApiInventoryStockRow,
   ApiOrder,
   ApiProduct,
+  ApiProductSalesSummaryRow,
   ApiPurchase,
   AppScreenKey,
   AuthSession,
@@ -526,6 +530,12 @@ export function useAppController() {
   const [dashboardSummaries, setDashboardSummaries] = useState<
     DashboardStoreSummary[]
   >([]);
+  const [adminCashboxWithdrawals, setAdminCashboxWithdrawals] = useState<
+    ApiCashboxWithdrawal[]
+  >([]);
+  const [adminProductSalesRows, setAdminProductSalesRows] = useState<
+    ApiProductSalesSummaryRow[]
+  >([]);
   const [remoteOrders, setRemoteOrders] = useState<ApiOrder[]>([]);
   const [remoteSettlements, setRemoteSettlements] = useState<
     ApiDailySettlement[]
@@ -664,6 +674,22 @@ export function useAppController() {
     "from" | "to" | null
   >(null);
   const [adminDatePickerValue, setAdminDatePickerValue] = useState(new Date());
+  const [adminProductSalesFromInput, setAdminProductSalesFromInput] =
+    useState("");
+  const [adminProductSalesToInput, setAdminProductSalesToInput] =
+    useState("");
+  const [
+    selectedAdminProductSalesProductId,
+    setSelectedAdminProductSalesProductId,
+  ] = useState("");
+  const [
+    adminProductSalesDatePickerTarget,
+    setAdminProductSalesDatePickerTarget,
+  ] = useState<"from" | "to" | null>(null);
+  const [
+    adminProductSalesDatePickerValue,
+    setAdminProductSalesDatePickerValue,
+  ] = useState(new Date());
   const [purchaseDatePickerTarget, setPurchaseDatePickerTarget] = useState<
     "from" | "to" | null
   >(null);
@@ -2066,6 +2092,46 @@ export function useAppController() {
     [compareProductDisplayRows, productByNormalizedName],
   );
 
+  const purchaseProductSalesSummaryRows = useMemo<ProductSalesSummaryRow[]>(
+    () => {
+      if (heavyReportScreen !== "purchases") {
+        return [];
+      }
+
+      const filteredOrders = allMergedOrderRows.filter((order) => {
+        const orderDate = toBusinessDateFromTimestamp(order.orderedAt);
+
+        if (purchaseFilterFrom && orderDate < purchaseFilterFrom) {
+          return false;
+        }
+
+        if (purchaseFilterTo && orderDate > purchaseFilterTo) {
+          return false;
+        }
+
+        return true;
+      });
+
+      const rows = buildProductSalesSummaryRowsForOrders(filteredOrders);
+      if (!purchaseFilterProduct) {
+        return rows;
+      }
+
+      const normalizedProductFilter = purchaseFilterProduct.toLowerCase();
+      return rows.filter((row) =>
+        row.name.toLowerCase().includes(normalizedProductFilter),
+      );
+    },
+    [
+      allMergedOrderRows,
+      buildProductSalesSummaryRowsForOrders,
+      heavyReportScreen,
+      purchaseFilterFrom,
+      purchaseFilterProduct,
+      purchaseFilterTo,
+    ],
+  );
+
   const openExpenseDetails = useCallback((item: ExpenseRow) => {
     setSelectedExpenseDetails(item);
   }, []);
@@ -2811,23 +2877,67 @@ export function useAppController() {
   );
 
   const effectiveDashboardTotals = useMemo(
-    () =>
-      adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES && dashboardTotals
-        ? dashboardTotals
-        : reducedDashboardTotals,
+    () => {
+      if (adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES && dashboardTotals) {
+        return dashboardTotals;
+      }
+
+      return {
+        ...reducedDashboardTotals,
+        cashBoxWithdrawalsAmount: dashboardTotals?.cashBoxWithdrawalsAmount ?? 0,
+        actualCashBoxRemainingAmount:
+          dashboardTotals?.actualCashBoxRemainingAmount ??
+          reducedDashboardTotals.actualCashBoxRemainingAmount,
+      };
+    },
     [adminDashboardStoreId, dashboardTotals, reducedDashboardTotals],
   );
 
   const selectedAdminCashboxRemainingAmount = useMemo(() => {
-    if (adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES) {
-      return effectiveDashboardTotals.actualCashBoxRemainingAmount ?? 0;
+    return (
+      dashboardTotals?.actualCashBoxRemainingAmount ??
+      effectiveDashboardTotals.actualCashBoxRemainingAmount ??
+      0
+    );
+  }, [dashboardTotals, effectiveDashboardTotals]);
+
+  const selectedAdminProductSalesProduct = useMemo(
+    () =>
+      productSupplyRows.find(
+        (item) => item.productId === selectedAdminProductSalesProductId,
+      ) ?? null,
+    [productSupplyRows, selectedAdminProductSalesProductId],
+  );
+
+  const selectedAdminProductSalesRow = useMemo(() => {
+    if (!selectedAdminProductSalesProduct) {
+      return null;
     }
 
+    const selectedKey = normalizeProductKey(selectedAdminProductSalesProduct.name);
     return (
-      dashboardSummaries.find((item) => item.storeId === adminDashboardStoreId)
-        ?.actualCashBoxRemainingAmount ?? 0
+      adminProductSalesRows.find(
+        (item) => normalizeProductKey(item.productName) === selectedKey,
+      ) ?? null
     );
-  }, [adminDashboardStoreId, dashboardSummaries, effectiveDashboardTotals]);
+  }, [adminProductSalesRows, selectedAdminProductSalesProduct]);
+
+  useEffect(() => {
+    if (!isAdmin || productSupplyRows.length === 0) {
+      return;
+    }
+
+    if (
+      selectedAdminProductSalesProductId &&
+      productSupplyRows.some(
+        (item) => item.productId === selectedAdminProductSalesProductId,
+      )
+    ) {
+      return;
+    }
+
+    setSelectedAdminProductSalesProductId(productSupplyRows[0].productId);
+  }, [isAdmin, productSupplyRows, selectedAdminProductSalesProductId]);
 
   const logout = useCallback((message: string) => {
     setSession(null);
@@ -2835,6 +2945,8 @@ export function useAppController() {
     void saveObject(STORAGE_KEYS.refreshTimestamps, {});
     setDashboardTotals(null);
     setDashboardSummaries([]);
+    setAdminCashboxWithdrawals([]);
+    setAdminProductSalesRows([]);
     setRemoteOrders([]);
     setRemoteSettlements([]);
     setRemoteExpenses([]);
@@ -3768,13 +3880,23 @@ export function useAppController() {
       return;
     }
 
+    const dateQuery = {
+      from: adminFromDateInput || undefined,
+      to: adminToDateInput || undefined,
+    };
+
     try {
-      const dashboard = await fetchDashboard(authToken, {
-        from: adminFromDateInput || undefined,
-        to: adminToDateInput || undefined,
-      });
+      const dashboard = await fetchDashboard(authToken, dateQuery);
       setDashboardTotals(dashboard.totals);
       setDashboardSummaries(dashboard.stores);
+
+      try {
+        const withdrawals = await fetchCashboxWithdrawals(authToken, dateQuery);
+        setAdminCashboxWithdrawals(withdrawals);
+      } catch {
+        setAdminCashboxWithdrawals([]);
+      }
+
       return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث لوحة الإدارة حالياً.");
@@ -3787,6 +3909,43 @@ export function useAppController() {
     handleApiFailure,
     isAdmin,
     isOnline,
+  ]);
+
+  const refreshAdminProductSalesData = useCallback(async () => {
+    if (!isOnline || !isAdmin || !authToken || !selectedStoreId) {
+      setAdminProductSalesRows([]);
+      return false;
+    }
+
+    if (
+      adminProductSalesFromInput &&
+      adminProductSalesToInput &&
+      adminProductSalesFromInput > adminProductSalesToInput
+    ) {
+      setStatusMessage("تاريخ بداية جرد المنتج يجب أن يكون قبل أو يساوي تاريخ النهاية.");
+      return false;
+    }
+
+    try {
+      const rows = await fetchStoreProductSales(authToken, selectedStoreId, {
+        from: adminProductSalesFromInput || undefined,
+        to: adminProductSalesToInput || undefined,
+      });
+      setAdminProductSalesRows(rows);
+      setStatusMessage("تم تحديث جرد مبيعات المنتج.");
+      return true;
+    } catch (error: unknown) {
+      handleApiFailure(error, "تعذر تحديث جرد مبيعات المنتج حالياً.");
+      return false;
+    }
+  }, [
+    adminProductSalesFromInput,
+    adminProductSalesToInput,
+    authToken,
+    handleApiFailure,
+    isAdmin,
+    isOnline,
+    selectedStoreId,
   ]);
 
   const updateAdminCashboxWithdrawalAmountInput = (value: string) => {
@@ -3824,10 +3983,7 @@ export function useAppController() {
     }
 
     const payload: CreateCashboxWithdrawalPayload = {
-      storeId:
-        adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES
-          ? undefined
-          : adminDashboardStoreId,
+      storeId: undefined,
       amount,
       note: adminCashboxWithdrawalNoteInput.trim() || undefined,
       withdrawnAt: new Date().toISOString(),
@@ -3838,13 +3994,8 @@ export function useAppController() {
       setAdminCashboxWithdrawalAmountInput("");
       setAdminCashboxWithdrawalNoteInput("");
       await refreshDashboardData();
-      const storeName =
-        adminDashboardStoreId === ADMIN_DASHBOARD_ALL_STORES
-          ? "كل الفروع"
-          : stores.find((store) => store.id === adminDashboardStoreId)?.name ??
-            "الفرع";
       setStatusMessage(
-        `تم تسجيل سحب ${formatMoney(amount)} من صندوق ${storeName}.`,
+        `تم تسجيل سحب ${formatMoney(amount)} من الصندوق العام.`,
       );
     } catch (error: unknown) {
       if (error instanceof ApiError && error.status === 400) {
@@ -3857,14 +4008,12 @@ export function useAppController() {
   }, [
     adminCashboxWithdrawalAmountInput,
     adminCashboxWithdrawalNoteInput,
-    adminDashboardStoreId,
     authToken,
     handleApiFailure,
     isAdmin,
     isOnline,
     refreshDashboardData,
     selectedAdminCashboxRemainingAmount,
-    stores,
   ]);
 
   const markResourceFresh = useCallback((resourceKey: string) => {
@@ -3974,6 +4123,13 @@ export function useAppController() {
               refreshForStore("employees", refreshEmployeesData),
               refreshForStore("expenses", refreshExpensesData),
               refreshGlobal("products", refreshProductsData),
+              isAdmin
+                ? refreshResource(
+                    `product-sales:${selectedStoreId}:${adminProductSalesFromInput}:${adminProductSalesToInput}`,
+                    refreshAdminProductSalesData,
+                    force,
+                  )
+                : Promise.resolve(false),
             ]);
             return;
           case "admin":
@@ -4009,8 +4165,12 @@ export function useAppController() {
   }, [
     activeScreen,
     adminFromDateInput,
+    adminProductSalesFromInput,
+    adminProductSalesToInput,
     adminToDateInput,
+    isAdmin,
     isOnline,
+    refreshAdminProductSalesData,
     refreshDashboardData,
     refreshEmployeesData,
     refreshExpensesData,
@@ -4091,6 +4251,84 @@ export function useAppController() {
     [adminDatePickerTarget, applyAdminDateSelection, closeAdminDatePicker],
   );
 
+  const applyAdminProductSalesDateSelection = useCallback(
+    (target: "from" | "to", selectedDate: Date) => {
+      const isoDate = toIsoDateOnly(selectedDate);
+      if (target === "from") {
+        setAdminProductSalesFromInput(isoDate);
+        return;
+      }
+      setAdminProductSalesToInput(isoDate);
+    },
+    [],
+  );
+
+  const openAdminProductSalesDatePicker = useCallback(
+    (target: "from" | "to") => {
+      const source =
+        target === "from"
+          ? adminProductSalesFromInput
+          : adminProductSalesToInput;
+      const isIsoDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(source);
+      setAdminProductSalesDatePickerValue(
+        isIsoDateOnly ? dateFromIsoOnly(source) : new Date(),
+      );
+      setAdminProductSalesDatePickerTarget(target);
+    },
+    [adminProductSalesFromInput, adminProductSalesToInput],
+  );
+
+  const clearAdminProductSalesDateFilters = useCallback(() => {
+    setAdminProductSalesFromInput("");
+    setAdminProductSalesToInput("");
+    setAdminProductSalesRows([]);
+    setStatusMessage("تم مسح فلتر تاريخ جرد المنتج.");
+  }, []);
+
+  const closeAdminProductSalesDatePicker = useCallback(() => {
+    setAdminProductSalesDatePickerTarget(null);
+  }, []);
+
+  const confirmAdminProductSalesDatePicker = useCallback(() => {
+    if (!adminProductSalesDatePickerTarget) {
+      return;
+    }
+
+    applyAdminProductSalesDateSelection(
+      adminProductSalesDatePickerTarget,
+      adminProductSalesDatePickerValue,
+    );
+    closeAdminProductSalesDatePicker();
+  }, [
+    adminProductSalesDatePickerTarget,
+    adminProductSalesDatePickerValue,
+    applyAdminProductSalesDateSelection,
+    closeAdminProductSalesDatePicker,
+  ]);
+
+  const onAdminProductSalesDatePickerChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS === "android") {
+        const target = adminProductSalesDatePickerTarget;
+        closeAdminProductSalesDatePicker();
+
+        if (event.type === "set" && selectedDate && target) {
+          applyAdminProductSalesDateSelection(target, selectedDate);
+        }
+        return;
+      }
+
+      if (selectedDate) {
+        setAdminProductSalesDatePickerValue(selectedDate);
+      }
+    },
+    [
+      adminProductSalesDatePickerTarget,
+      applyAdminProductSalesDateSelection,
+      closeAdminProductSalesDatePicker,
+    ],
+  );
+
   const applyPurchaseDateSelection = useCallback(
     (target: "from" | "to", selectedDate: Date) => {
       const isoDate = toIsoDateOnly(selectedDate);
@@ -4164,6 +4402,19 @@ export function useAppController() {
       purchaseDatePickerTarget,
     ],
   );
+
+  const purchaseDatePickerInputValue = useMemo(
+    () => toIsoDateOnly(purchaseDatePickerValue),
+    [purchaseDatePickerValue],
+  );
+
+  const updatePurchaseDatePickerInputValue = useCallback((value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return;
+    }
+
+    setPurchaseDatePickerValue(dateFromIsoOnly(value));
+  }, []);
 
   const validateSession = useCallback(async () => {
     if (!authToken || !isOnline) {
@@ -7854,11 +8105,17 @@ export function useAppController() {
     addTawasiSupplyFromPad,
     adminCashboxWithdrawalAmountInput,
     adminCashboxWithdrawalNoteInput,
+    adminCashboxWithdrawals,
     adminDatePickerTarget,
     adminDatePickerValue,
     adminDashboardAllStoresKey: ADMIN_DASHBOARD_ALL_STORES,
     adminDashboardStoreId,
     adminFromDateInput,
+    adminProductSalesDatePickerTarget,
+    adminProductSalesDatePickerValue,
+    adminProductSalesFromInput,
+    adminProductSalesRows,
+    adminProductSalesToInput,
     adminToDateInput,
     applyDiscountFromPad,
     assignedStoreId,
@@ -7875,15 +8132,18 @@ export function useAppController() {
     cart,
     cashBoxInput,
     clearAdminDateFilters,
+    clearAdminProductSalesDateFilters,
     clearExpenseImage,
     clearPad,
     clearPurchaseDateFilters,
     commitInventoryAdjustment,
     closeAdminDatePicker,
+    closeAdminProductSalesDatePicker,
     closePurchaseDatePicker,
     closeMobileNav,
     closeTodayPurchasesInvoice,
     confirmAdminDatePicker,
+    confirmAdminProductSalesDatePicker,
     confirmPurchaseDatePicker,
     dashboardSummaries: visibleDashboardSummaries,
     decreaseProductInCart,
@@ -7950,8 +8210,10 @@ export function useAppController() {
     newProductSellPriceInput,
     newProductUnitType,
     onAdminDatePickerChange,
+    onAdminProductSalesDatePickerChange,
     onPurchaseDatePickerChange,
     openAdminDatePicker,
+    openAdminProductSalesDatePicker,
     openExpenseDetails,
     openProductCreateForm,
     openPurchaseDatePicker,
@@ -7972,11 +8234,13 @@ export function useAppController() {
     posProducts,
     productEditingId,
     productSalesSummaryRows,
+    purchaseProductSalesSummaryRows,
     productSupplyRows,
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
     purchaseDatePickerTarget,
+    purchaseDatePickerInputValue,
     purchaseDatePickerValue,
     purchaseHistorySummaryRows,
     purchaseInvoiceDateInput,
@@ -7990,6 +8254,7 @@ export function useAppController() {
     recentWithdrawalRows,
     refreshDailySettlementsData,
     refreshDashboardData,
+    refreshAdminProductSalesData,
     refreshEmployeesData,
     refreshExpensesData,
     refreshInventoryData,
@@ -8010,6 +8275,9 @@ export function useAppController() {
     saveExpense,
     saveProductDefinition,
     selectedAdminCashboxRemainingAmount,
+    selectedAdminProductSalesProduct,
+    selectedAdminProductSalesProductId,
+    selectedAdminProductSalesRow,
     selectedExpenseDetails,
     selectedInventoryDestructionProductId,
     selectedOrderInvoice,
@@ -8026,6 +8294,7 @@ export function useAppController() {
     setActualRemainingInput,
     setAdminCashboxWithdrawalNoteInput,
     setAdminDashboardStoreId,
+    setSelectedAdminProductSalesProductId,
     setDiscountInput,
     setEmployeeNameInput,
     setEmployeeWeeklySalaryInput,
@@ -8127,6 +8396,7 @@ export function useAppController() {
     updateInventoryDestructionNoteInput,
     updateInventoryDestructionQuantityInput,
     updateSettlementActualInput,
+    updatePurchaseDatePickerInputValue,
     updateSharesInput,
     updatePurchaseInvoiceNoteInput,
     updateTodaySupplyInput,

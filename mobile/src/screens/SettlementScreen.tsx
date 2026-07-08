@@ -10,9 +10,12 @@ export function SettlementScreen() {
     TextInput,
     View,
     actualRemainingInput,
+    adminProductSalesFromInput,
+    adminProductSalesToInput,
     auditNetSalesAmount,
     cashBoxInput,
     canManageInventory,
+    clearAdminProductSalesDateFilters,
     commitInventoryAdjustment,
     formatMoney,
     formatQuantity,
@@ -24,7 +27,11 @@ export function SettlementScreen() {
     pieceStockAuditRows,
     productSupplyRows,
     recordInventoryDestruction,
+    refreshAdminProductSalesData,
     refreshActiveScreenData,
+    selectedAdminProductSalesProduct,
+    selectedAdminProductSalesProductId,
+    selectedAdminProductSalesRow,
     selectedStore,
     selectedInventoryDestructionProductId,
     settlementActualInputs,
@@ -42,6 +49,7 @@ export function SettlementScreen() {
     settlementSalesTotalWithAudit,
     sharesInput,
     setActualRemainingInput,
+    setSelectedAdminProductSalesProductId,
     setSettlementNoteInput,
     styles,
     submitDailySettlement,
@@ -55,10 +63,12 @@ export function SettlementScreen() {
     updateInventoryDestructionQuantityInput,
     updateSettlementActualInput,
     updateSharesInput,
+    openAdminProductSalesDatePicker,
   } = useAppScreenContext() as any;
 
   const sections = [
     { key: "sales", data: settlementProductSalesSummaryRows },
+    { key: "adminProductSales", data: isAdmin ? [{ id: "admin-product-sales" }] : [] },
     { key: "destructionInput", data: canManageInventory ? [{ id: "destruction-form" }] : [] },
     { key: "destructionHistory", data: settlementInventoryDestructionRows },
     { key: "audit", data: pieceStockAuditRows },
@@ -69,6 +79,8 @@ export function SettlementScreen() {
     switch (section.key) {
       case "sales":
         return "ملخص بيع المنتجات";
+      case "adminProductSales":
+        return "جرد مبيعات منتج";
       case "destructionInput":
         return "إتلاف من المخزون";
       case "destructionHistory":
@@ -262,6 +274,121 @@ export function SettlementScreen() {
                 <Text style={styles.orderRowMeta}>مرتجع: {item.refundedQty}</Text>
               </View>
               <Text style={styles.orderRowTotal}>{formatMoney(item.netAmount)}</Text>
+            </View>
+          );
+        }
+
+        if (section.key === "adminProductSales") {
+          const reportRow = selectedAdminProductSalesRow ?? {
+            soldQty: 0,
+            refundedQty: 0,
+            netQty: 0,
+            netAmount: 0,
+          };
+
+          return (
+            <View style={styles.orderRow}>
+              <Text style={styles.orderRowMeta}>
+                اختر المنتج والفترة لعرض كمية المبيع والمرتجع لهذا الفرع.
+              </Text>
+              <View style={styles.rowActionButtons}>
+                {productSupplyRows.map((product) => {
+                  const selected =
+                    product.productId === selectedAdminProductSalesProductId;
+                  return (
+                    <Pressable
+                      key={product.productId}
+                      style={[
+                        styles.smallRefreshButton,
+                        selected && styles.addProductButton,
+                      ]}
+                      onPress={() =>
+                        setSelectedAdminProductSalesProductId(product.productId)
+                      }
+                    >
+                      <Text
+                        style={
+                          selected
+                            ? styles.addProductButtonText
+                            : styles.smallRefreshText
+                        }
+                      >
+                        {product.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View style={styles.inputRow}>
+                <Pressable
+                  style={styles.input}
+                  onPress={() => openAdminProductSalesDatePicker("from")}
+                >
+                  <Text
+                    style={
+                      adminProductSalesFromInput
+                        ? styles.datePickerInputText
+                        : styles.datePickerInputPlaceholder
+                    }
+                  >
+                    {adminProductSalesFromInput || "اختر من تاريخ"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={styles.input}
+                  onPress={() => openAdminProductSalesDatePicker("to")}
+                >
+                  <Text
+                    style={
+                      adminProductSalesToInput
+                        ? styles.datePickerInputText
+                        : styles.datePickerInputPlaceholder
+                    }
+                  >
+                    {adminProductSalesToInput || "اختر إلى تاريخ"}
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={styles.rowActionButtons}>
+                <Pressable
+                  style={styles.smallRefreshButton}
+                  onPress={clearAdminProductSalesDateFilters}
+                >
+                  <Text style={styles.smallRefreshText}>مسح التاريخ</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.smallRefreshButton}
+                  onPress={() => void refreshAdminProductSalesData()}
+                >
+                  <Text style={styles.smallRefreshText}>تحديث الجرد</Text>
+                </Pressable>
+              </View>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowId}>
+                  {selectedAdminProductSalesProduct?.name ?? "اختر منتجاً"}
+                </Text>
+                <Text style={styles.orderRowItems}>
+                  {selectedAdminProductSalesProduct?.unitType === "KG"
+                    ? "كيلو"
+                    : "قطعة"}
+                </Text>
+              </View>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowMeta}>
+                  مباع: {formatQuantity(reportRow.soldQty)}
+                </Text>
+                <Text style={styles.orderRowMeta}>
+                  مرتجع: {formatQuantity(reportRow.refundedQty)}
+                </Text>
+              </View>
+              <View style={styles.orderRowMain}>
+                <Text style={styles.orderRowMeta}>
+                  صافي الكمية: {formatQuantity(reportRow.netQty)}
+                </Text>
+                <Text style={styles.orderRowTotal}>
+                  {formatMoney(reportRow.netAmount)}
+                </Text>
+              </View>
             </View>
           );
         }

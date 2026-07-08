@@ -134,10 +134,19 @@ export interface CreateCashboxWithdrawalPayload {
 
 export interface ApiCashboxWithdrawal extends CreateCashboxWithdrawalPayload {
   id: string;
+  store?: Store | null;
   createdByUserId?: string | null;
   createdByDisplayName?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ApiProductSalesSummaryRow {
+  productName: string;
+  soldQty: number;
+  refundedQty: number;
+  netQty: number;
+  netAmount: number;
 }
 
 export interface CreateExpensePayload {
