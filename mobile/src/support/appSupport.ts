@@ -56,6 +56,13 @@ export interface SettlementHistoryRow {
   sharesAmount: number;
   expectedRevenue: number;
   carryInAmount: number;
+  cycleStartedAt?: string | null;
+  salesAmount?: number | null;
+  refundAmount?: number | null;
+  expensesAmount?: number | null;
+  purchasesAmount?: number | null;
+  tawasiAmount?: number | null;
+  employeeWithdrawalsAmount?: number | null;
   actualRemainingAmount: number;
   expectedRemainingAmount: number;
   differenceAmount: number;
@@ -138,6 +145,7 @@ export interface SettlementDayDetail {
   netSalesAmount: number;
   expensesAmount: number;
   purchasesAmount: number;
+  tawasiAmount: number;
   withdrawalsAmount: number;
   productSalesSummaryRows: ProductSalesSummaryRow[];
   carryInAmount: number;
@@ -244,6 +252,20 @@ export function normalizeIsoTimestamp(
   }
 
   return parsed.toISOString();
+}
+
+export function getEarliestIsoTimestamp(
+  ...values: Array<string | null | undefined>
+): string | null {
+  const normalized = values
+    .map((value) => normalizeIsoTimestamp(value))
+    .filter((value): value is string => Boolean(value));
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized.sort()[0];
 }
 
 export function normalizeQuantityForUnit(
@@ -750,6 +772,32 @@ export function mapApiSettlementToRow(item: ApiDailySettlement): SettlementHisto
     sharesAmount: item.sharesAmount,
     expectedRevenue,
     carryInAmount: Number((item.carryInAmount ?? 0).toFixed(2)),
+    cycleStartedAt: item.cycleStartedAt ?? null,
+    salesAmount:
+      item.salesAmount === null || item.salesAmount === undefined
+        ? null
+        : Number(item.salesAmount.toFixed(2)),
+    refundAmount:
+      item.refundAmount === null || item.refundAmount === undefined
+        ? null
+        : Number(item.refundAmount.toFixed(2)),
+    expensesAmount:
+      item.expensesAmount === null || item.expensesAmount === undefined
+        ? null
+        : Number(item.expensesAmount.toFixed(2)),
+    purchasesAmount:
+      item.purchasesAmount === null || item.purchasesAmount === undefined
+        ? null
+        : Number(item.purchasesAmount.toFixed(2)),
+    tawasiAmount:
+      item.tawasiAmount === null || item.tawasiAmount === undefined
+        ? null
+        : Number(item.tawasiAmount.toFixed(2)),
+    employeeWithdrawalsAmount:
+      item.employeeWithdrawalsAmount === null ||
+      item.employeeWithdrawalsAmount === undefined
+        ? null
+        : Number(item.employeeWithdrawalsAmount.toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: getSettlementDifferenceAmount(
@@ -782,6 +830,32 @@ export function mapLocalSettlementToRow(
     sharesAmount: item.sharesAmount,
     expectedRevenue,
     carryInAmount: Number((item.carryInAmount ?? 0).toFixed(2)),
+    cycleStartedAt: item.cycleStartedAt ?? null,
+    salesAmount:
+      item.salesAmount === null || item.salesAmount === undefined
+        ? null
+        : Number(item.salesAmount.toFixed(2)),
+    refundAmount:
+      item.refundAmount === null || item.refundAmount === undefined
+        ? null
+        : Number(item.refundAmount.toFixed(2)),
+    expensesAmount:
+      item.expensesAmount === null || item.expensesAmount === undefined
+        ? null
+        : Number(item.expensesAmount.toFixed(2)),
+    purchasesAmount:
+      item.purchasesAmount === null || item.purchasesAmount === undefined
+        ? null
+        : Number(item.purchasesAmount.toFixed(2)),
+    tawasiAmount:
+      item.tawasiAmount === null || item.tawasiAmount === undefined
+        ? null
+        : Number(item.tawasiAmount.toFixed(2)),
+    employeeWithdrawalsAmount:
+      item.employeeWithdrawalsAmount === null ||
+      item.employeeWithdrawalsAmount === undefined
+        ? null
+        : Number(item.employeeWithdrawalsAmount.toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: getSettlementDifferenceAmount(
@@ -805,7 +879,7 @@ export function mapApiExpenseToRow(item: ApiExpense): ExpenseRow {
     imageUrl: item.imageUrl,
     note: item.note,
     synced: true,
-    occurredAt: item.createdAt,
+    occurredAt: getEarliestIsoTimestamp(item.syncedAt, item.createdAt) ?? item.createdAt,
   };
 }
 
@@ -844,7 +918,7 @@ export function mapApiPurchaseToRow(item: ApiPurchase): PurchaseRow {
     paymentAmount: Number(item.paymentAmount ?? 0),
     note: item.note,
     synced: true,
-    occurredAt: item.createdAt,
+    occurredAt: getEarliestIsoTimestamp(item.syncedAt, item.createdAt) ?? item.createdAt,
   };
 }
 

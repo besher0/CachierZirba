@@ -4,7 +4,7 @@ import { createTypeOrmOptions } from './typeorm.config';
 
 const options = createTypeOrmOptions({
   synchronize: false,
-  migrations: ['src/database/migrations/*.ts'],
+  migrations: ['src/database/migrations/*{.ts,.js}'],
 });
 
 if (options.type !== 'postgres') {

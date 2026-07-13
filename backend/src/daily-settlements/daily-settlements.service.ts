@@ -54,6 +54,15 @@ export class DailySettlementsService {
         actualRemainingAmount: dto.actualRemainingAmount,
         expectedRevenue: dto.expectedRevenue ?? 0,
         carryInAmount: dto.carryInAmount ?? 0,
+        cycleStartedAt: dto.cycleStartedAt
+          ? new Date(dto.cycleStartedAt)
+          : null,
+        salesAmount: dto.salesAmount ?? null,
+        refundAmount: dto.refundAmount ?? null,
+        expensesAmount: dto.expensesAmount ?? null,
+        purchasesAmount: dto.purchasesAmount ?? null,
+        tawasiAmount: dto.tawasiAmount ?? null,
+        employeeWithdrawalsAmount: dto.employeeWithdrawalsAmount ?? null,
         note: dto.note ?? null,
         syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
       });

@@ -178,6 +178,7 @@ import {
   formatDateOnly,
   formatMoney,
   formatQuantity,
+  getEarliestIsoTimestamp,
   getWeekEndSunday,
   getWeekStartMonday,
   inferMimeTypeFromUri,
@@ -309,6 +310,13 @@ function buildDailySettlementCreateSyncJob(
     actualRemainingAmount: settlement.actualRemainingAmount,
     expectedRevenue: settlement.expectedRevenue,
     carryInAmount: settlement.carryInAmount,
+    cycleStartedAt: settlement.cycleStartedAt,
+    salesAmount: settlement.salesAmount,
+    refundAmount: settlement.refundAmount,
+    expensesAmount: settlement.expensesAmount,
+    purchasesAmount: settlement.purchasesAmount,
+    tawasiAmount: settlement.tawasiAmount,
+    employeeWithdrawalsAmount: settlement.employeeWithdrawalsAmount,
     note: settlement.note,
     syncedAt: settlement.syncedAt,
   };
@@ -1382,7 +1390,7 @@ export function useAppController() {
     shouldComputePurchaseReports,
   ]);
 
-  const settlementRecordsByDate = useMemo(() => {
+  const settlementRecordsByCycle = useMemo(() => {
     const orders = new Map<string, OrderHistoryRow[]>();
     const expensesByDate = new Map<string, ExpenseRow[]>();
     const purchasesByDate = new Map<string, PurchaseRow[]>();
@@ -1406,24 +1414,113 @@ export function useAppController() {
       map.set(key, [value]);
     };
 
-    allMergedOrderRows.forEach((item) => {
-      append(orders, toBusinessDateFromTimestamp(item.orderedAt), item);
+    const isInCycle = (
+      recordDate: string,
+      occurredAt: string,
+      cycleStartedAt: string | null,
+      cycleEndedAt: string | null,
+      previousBusinessDate: string | null,
+      businessDate: string,
+    ) => {
+      const normalizedOccurredAt = normalizeIsoTimestamp(occurredAt);
+
+      if (normalizedOccurredAt && cycleEndedAt) {
+        return (
+          normalizedOccurredAt <= cycleEndedAt &&
+          (!cycleStartedAt || normalizedOccurredAt > cycleStartedAt)
+        );
+      }
+
+      if (previousBusinessDate) {
+        return recordDate > previousBusinessDate && recordDate <= businessDate;
+      }
+
+      return recordDate <= businessDate;
+    };
+
+    const chronologicalSettlements = [...mergedSettlementRows].sort((a, b) => {
+      const aClosedAt = normalizeIsoTimestamp(a.syncedAt) ?? a.businessDate;
+      const bClosedAt = normalizeIsoTimestamp(b.syncedAt) ?? b.businessDate;
+      return aClosedAt.localeCompare(bClosedAt);
     });
-    mergedExpenseRows.forEach((item) => {
-      append(expensesByDate, item.expenseDate, item);
-    });
-    mergedPurchaseRows.forEach((item) => {
-      append(purchasesByDate, item.purchaseDate, item);
-    });
-    selectedStoreWithdrawals.forEach((item) => {
-      append(withdrawals, item.withdrawalDate, item);
+
+    let previousClosedAt: string | null = null;
+    let previousBusinessDate: string | null = null;
+
+    chronologicalSettlements.forEach((settlement) => {
+      const key = settlement.clientClosureId;
+      const cycleEndedAt = normalizeIsoTimestamp(settlement.syncedAt);
+      const cycleStartedAt =
+        normalizeIsoTimestamp(settlement.cycleStartedAt) ?? previousClosedAt;
+
+      allMergedOrderRows.forEach((item) => {
+        if (
+          isInCycle(
+            toBusinessDateFromTimestamp(item.orderedAt),
+            item.orderedAt,
+            cycleStartedAt,
+            cycleEndedAt,
+            previousBusinessDate,
+            settlement.businessDate,
+          )
+        ) {
+          append(orders, key, item);
+        }
+      });
+      mergedExpenseRows.forEach((item) => {
+        if (
+          isInCycle(
+            item.expenseDate,
+            item.occurredAt,
+            cycleStartedAt,
+            cycleEndedAt,
+            previousBusinessDate,
+            settlement.businessDate,
+          )
+        ) {
+          append(expensesByDate, key, item);
+        }
+      });
+      mergedPurchaseRows.forEach((item) => {
+        if (
+          isInCycle(
+            item.purchaseDate,
+            item.occurredAt,
+            cycleStartedAt,
+            cycleEndedAt,
+            previousBusinessDate,
+            settlement.businessDate,
+          )
+        ) {
+          append(purchasesByDate, key, item);
+        }
+      });
+      selectedStoreWithdrawals.forEach((item) => {
+        if (
+          isInCycle(
+            item.withdrawalDate,
+            item.createdAt,
+            cycleStartedAt,
+            cycleEndedAt,
+            previousBusinessDate,
+            settlement.businessDate,
+          )
+        ) {
+          append(withdrawals, key, item);
+        }
+      });
+
+      previousClosedAt = cycleEndedAt ?? previousClosedAt;
+      previousBusinessDate = settlement.businessDate;
     });
 
     return { orders, expenses: expensesByDate, purchases: purchasesByDate, withdrawals };
   }, [
     allMergedOrderRows,
+    mergedSettlementRows,
     mergedExpenseRows,
     mergedPurchaseRows,
+    normalizeIsoTimestamp,
     selectedStoreWithdrawals,
     shouldComputeSettlementReports,
   ]);
@@ -1440,50 +1537,66 @@ export function useAppController() {
       }
 
       return mergedSettlementRows.map((settlement) => {
-        const dayOrders = settlementRecordsByDate.orders.get(settlement.businessDate) ?? [];
-        const dayExpenses = settlementRecordsByDate.expenses.get(settlement.businessDate) ?? [];
-        const dayPurchases = settlementRecordsByDate.purchases.get(settlement.businessDate) ?? [];
-        const dayWithdrawals = settlementRecordsByDate.withdrawals.get(settlement.businessDate) ?? [];
+        const dayOrders = settlementRecordsByCycle.orders.get(settlement.clientClosureId) ?? [];
+        const dayExpenses = settlementRecordsByCycle.expenses.get(settlement.clientClosureId) ?? [];
+        const dayPurchases = settlementRecordsByCycle.purchases.get(settlement.clientClosureId) ?? [];
+        const dayWithdrawals = settlementRecordsByCycle.withdrawals.get(settlement.clientClosureId) ?? [];
+        const computedSalesAmount = Number(
+          dayOrders
+            .filter((item) => item.status === "COMPLETED")
+            .reduce((sum, item) => sum + item.total, 0)
+            .toFixed(2),
+        );
+        const computedRefundAmount = Number(
+          dayOrders
+            .filter((item) => item.status === "REFUNDED")
+            .reduce((sum, item) => sum + item.total, 0)
+            .toFixed(2),
+        );
+        const computedExpensesAmount = Number(
+          dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+        );
+        const computedPurchasesAmount = Number(
+          dayPurchases
+            .reduce((sum, item) => sum + item.totalCost, 0)
+            .toFixed(2),
+        );
+        const computedTawasiAmount = Number(
+          dayPurchases
+            .filter((item) => item.purchaseKind === "TAWASI")
+            .reduce((sum, item) => sum + item.totalCost, 0)
+            .toFixed(2),
+        );
+        const computedWithdrawalsAmount = Number(
+          dayWithdrawals.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+        );
 
         return {
           ...settlement,
           ordersCount: dayOrders.length,
-          salesAmount: Number(
-            dayOrders
-              .filter((item) => item.status === "COMPLETED")
-              .reduce((sum, item) => sum + item.total, 0)
-              .toFixed(2),
-          ),
-          refundAmount: Number(
-            dayOrders
-              .filter((item) => item.status === "REFUNDED")
-              .reduce((sum, item) => sum + item.total, 0)
-              .toFixed(2),
-          ),
+          salesAmount: settlement.salesAmount ?? computedSalesAmount,
+          refundAmount: settlement.refundAmount ?? computedRefundAmount,
           expensesCount: dayExpenses.length,
-          expensesAmount: Number(
-            dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
-          ),
+          expensesAmount: settlement.expensesAmount ?? computedExpensesAmount,
           purchasesCount: dayPurchases.filter(
             (item) => item.purchaseKind !== "PAYMENT",
           ).length,
-          purchasesAmount: Number(
-            dayPurchases
-              .reduce((sum, item) => sum + item.totalCost, 0)
-              .toFixed(2),
-          ),
+          purchasesAmount: settlement.purchasesAmount ?? computedPurchasesAmount,
+          tawasiAmount: settlement.tawasiAmount ?? computedTawasiAmount,
           paymentsAmount: Number(
             dayPurchases
               .reduce((sum, item) => sum + item.paymentAmount, 0)
               .toFixed(2),
           ),
           withdrawalsCount: dayWithdrawals.length,
+          withdrawalsAmount:
+            settlement.employeeWithdrawalsAmount ?? computedWithdrawalsAmount,
         };
       });
     },
     [
       mergedSettlementRows,
-      settlementRecordsByDate,
+      settlementRecordsByCycle,
       shouldComputeSettlementReports,
     ],
   );
@@ -1564,11 +1677,14 @@ export function useAppController() {
 
   const isInCurrentSettlementCycle = useCallback(
     (recordDate: string, occurredAt: string) => {
+      const normalizedOccurredAt = normalizeIsoTimestamp(occurredAt);
+
       if (!settlementCycleStartIso) {
-        return recordDate === todayDate;
+        return normalizedOccurredAt
+          ? normalizedOccurredAt <= new Date().toISOString()
+          : recordDate <= todayDate;
       }
 
-      const normalizedOccurredAt = normalizeIsoTimestamp(occurredAt);
       return normalizedOccurredAt
         ? normalizedOccurredAt > settlementCycleStartIso
         : recordDate === todayDate;
@@ -2138,11 +2254,11 @@ export function useAppController() {
 
   const openSettlementDetails = useCallback(
     (settlement: SettlementHistoryRow) => {
-      const dayOrders = settlementRecordsByDate.orders.get(settlement.businessDate) ?? [];
-      const dayExpenses = settlementRecordsByDate.expenses.get(settlement.businessDate) ?? [];
-      const dayPurchases = settlementRecordsByDate.purchases.get(settlement.businessDate) ?? [];
-      const dayWithdrawals = (settlementRecordsByDate.withdrawals.get(
-        settlement.businessDate,
+      const dayOrders = settlementRecordsByCycle.orders.get(settlement.clientClosureId) ?? [];
+      const dayExpenses = settlementRecordsByCycle.expenses.get(settlement.clientClosureId) ?? [];
+      const dayPurchases = settlementRecordsByCycle.purchases.get(settlement.clientClosureId) ?? [];
+      const dayWithdrawals = (settlementRecordsByCycle.withdrawals.get(
+        settlement.clientClosureId,
       ) ?? [])
         .map((item) => ({
           ...item,
@@ -2152,22 +2268,37 @@ export function useAppController() {
       const dayProductSalesSummaryRows =
         buildProductSalesSummaryRowsForOrders(dayOrders);
 
-      const salesAmount = dayOrders
+      const computedSalesAmount = dayOrders
         .filter((item) => item.status === "COMPLETED")
         .reduce((sum, item) => sum + item.total, 0);
-      const refundAmount = dayOrders
+      const computedRefundAmount = dayOrders
         .filter((item) => item.status === "REFUNDED")
         .reduce((sum, item) => sum + item.total, 0);
+      const salesAmount = settlement.salesAmount ?? computedSalesAmount;
+      const refundAmount = settlement.refundAmount ?? computedRefundAmount;
       const netSalesAmount = Number((salesAmount - refundAmount).toFixed(2));
-      const expensesAmount = Number(
+      const computedExpensesAmount = Number(
         dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
       );
-      const purchasesAmount = Number(
+      const computedPurchasesAmount = Number(
         dayPurchases.reduce((sum, item) => sum + item.totalCost, 0).toFixed(2),
       );
-      const withdrawalsAmount = Number(
+      const computedTawasiAmount = Number(
+        dayPurchases
+          .filter((item) => item.purchaseKind === "TAWASI")
+          .reduce((sum, item) => sum + item.totalCost, 0)
+          .toFixed(2),
+      );
+      const computedWithdrawalsAmount = Number(
         dayWithdrawals.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
       );
+      const expensesAmount =
+        settlement.expensesAmount ?? computedExpensesAmount;
+      const purchasesAmount =
+        settlement.purchasesAmount ?? computedPurchasesAmount;
+      const tawasiAmount = settlement.tawasiAmount ?? computedTawasiAmount;
+      const withdrawalsAmount =
+        settlement.employeeWithdrawalsAmount ?? computedWithdrawalsAmount;
 
       const expectedBeforeDistributionAmount = Number(
         (settlement.expectedRevenue ?? 0).toFixed(2),
@@ -2215,6 +2346,7 @@ export function useAppController() {
         netSalesAmount,
         expensesAmount,
         purchasesAmount,
+        tawasiAmount,
         withdrawalsAmount,
         productSalesSummaryRows: dayProductSalesSummaryRows,
         carryInAmount,
@@ -2230,7 +2362,7 @@ export function useAppController() {
     [
       buildProductSalesSummaryRowsForOrders,
       employeeNameById,
-      settlementRecordsByDate,
+      settlementRecordsByCycle,
     ],
   );
 
@@ -2520,6 +2652,22 @@ export function useAppController() {
   const todayPurchasesTotal = useMemo(
     () =>
       purchasesInCurrentCycle.reduce((sum, item) => sum + item.totalCost, 0),
+    [purchasesInCurrentCycle],
+  );
+
+  const todaySupplyPurchasesTotal = useMemo(
+    () =>
+      purchasesInCurrentCycle
+        .filter((item) => item.purchaseKind === "SUPPLY")
+        .reduce((sum, item) => sum + item.totalCost, 0),
+    [purchasesInCurrentCycle],
+  );
+
+  const todayTawasiTotal = useMemo(
+    () =>
+      purchasesInCurrentCycle
+        .filter((item) => item.purchaseKind === "TAWASI")
+        .reduce((sum, item) => sum + item.totalCost, 0),
     [purchasesInCurrentCycle],
   );
 
@@ -3765,7 +3913,9 @@ export function useAppController() {
               amount: item.amount,
               withdrawalDate: item.withdrawalDate,
               note: item.note,
-              createdAt: item.createdAt,
+              createdAt:
+                getEarliestIsoTimestamp(item.syncedAt, item.createdAt) ??
+                item.createdAt,
               synced: true,
             });
           }
@@ -3893,8 +4043,13 @@ export function useAppController() {
       try {
         const withdrawals = await fetchCashboxWithdrawals(authToken, dateQuery);
         setAdminCashboxWithdrawals(withdrawals);
-      } catch {
-        setAdminCashboxWithdrawals([]);
+      } catch (error: unknown) {
+        if (error instanceof ApiError && error.status === 404) {
+          setStatusMessage(
+            "سجل سحوبات الصندوق غير متاح من نسخة السيرفر الحالية. حدّث الباكند وأعد تشغيله.",
+          );
+        }
+        // Keep the last visible rows if the optional withdrawal history fails.
       }
 
       return true;
@@ -3990,10 +4145,15 @@ export function useAppController() {
     };
 
     try {
-      await postCashboxWithdrawal(authToken, payload);
+      const withdrawal = await postCashboxWithdrawal(authToken, payload);
       setAdminCashboxWithdrawalAmountInput("");
       setAdminCashboxWithdrawalNoteInput("");
       await refreshDashboardData();
+      setAdminCashboxWithdrawals((previous) =>
+        [withdrawal, ...previous.filter((item) => item.id !== withdrawal.id)].sort(
+          (a, b) => (b.withdrawnAt ?? "").localeCompare(a.withdrawnAt ?? ""),
+        ),
+      );
       setStatusMessage(
         `تم تسجيل سحب ${formatMoney(amount)} من الصندوق العام.`,
       );
@@ -6111,6 +6271,15 @@ export function useAppController() {
       actualRemainingAmount,
       expectedRevenue: settlementExpectedRevenueAmount,
       carryInAmount,
+      cycleStartedAt: settlementCycleStartIso,
+      salesAmount: settlementSalesTotalWithAudit,
+      refundAmount: settlementRefundTotalWithAudit,
+      expensesAmount: Number(todayExpensesTotal.toFixed(2)),
+      purchasesAmount: Number(todayPurchasesTotal.toFixed(2)),
+      tawasiAmount: Number(todayTawasiTotal.toFixed(2)),
+      employeeWithdrawalsAmount: Number(
+        todayEmployeeWithdrawalsTotal.toFixed(2),
+      ),
       note: settlementNoteInput.trim() || undefined,
       syncedAt: createdAt,
     };
@@ -8384,7 +8553,9 @@ export function useAppController() {
     purchaseInvoicePaymentRows,
     purchaseInvoicePaymentsTotal,
     purchaseInvoiceBalance,
-    todayPurchasesTotal,
+    todayPurchasesTotal: todaySupplyPurchasesTotal,
+    todaySupplyPurchasesTotal,
+    todayTawasiTotal,
     todayRefundTotal,
     todaySalesTotal,
     todaySupplyInputs,

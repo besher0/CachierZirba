@@ -57,6 +57,8 @@ export function SettlementScreen() {
     todayEmployeeWithdrawalsTotal,
     todayExpensesTotal,
     todayPurchasesTotal,
+    todaySupplyPurchasesTotal,
+    todayTawasiTotal,
     updateCashBoxInput,
     setInventoryDestructionNoteInput,
     setSelectedInventoryDestructionProductId,
@@ -169,6 +171,12 @@ export function SettlementScreen() {
                 </Text>
               </View>
             ))}
+            <View style={styles.settlementStatCard}>
+              <Text style={styles.settlementStatLabel}>مبلغ التواصي للدورة</Text>
+              <Text style={styles.settlementStatValue}>
+                {formatMoney(todayTawasiTotal ?? 0)}
+              </Text>
+            </View>
           </View>
           {settlementCycleStartIso ? (
             <Text style={styles.orderRowMeta}>

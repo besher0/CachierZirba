@@ -527,6 +527,10 @@ export function AppOverlays() {
                             )}
                           </Text>
                           <Text style={styles.orderRowMeta}>
+                            مبلغ التواصي:{" "}
+                            {formatMoney(selectedSettlementDetail.tawasiAmount)}
+                          </Text>
+                          <Text style={styles.orderRowMeta}>
                             سحوبات:{" "}
                             {formatMoney(
                               selectedSettlementDetail.withdrawalsAmount,

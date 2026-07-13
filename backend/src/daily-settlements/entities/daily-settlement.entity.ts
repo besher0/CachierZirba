@@ -47,6 +47,27 @@ export class DailySettlement {
   @Column({ type: 'real', default: 0 })
   carryInAmount: number;
 
+  @Column({ nullable: true })
+  cycleStartedAt: Date | null;
+
+  @Column({ type: 'real', nullable: true })
+  salesAmount: number | null;
+
+  @Column({ type: 'real', nullable: true })
+  refundAmount: number | null;
+
+  @Column({ type: 'real', nullable: true })
+  expensesAmount: number | null;
+
+  @Column({ type: 'real', nullable: true })
+  purchasesAmount: number | null;
+
+  @Column({ type: 'real', nullable: true })
+  tawasiAmount: number | null;
+
+  @Column({ type: 'real', nullable: true })
+  employeeWithdrawalsAmount: number | null;
+
   @Column({ type: 'text', nullable: true })
   note: string | null;
 

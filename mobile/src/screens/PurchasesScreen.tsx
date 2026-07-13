@@ -19,7 +19,9 @@ export function PurchasesScreen() {
     closePurchaseDatePicker,
     confirmPurchaseDatePicker,
     deleteProductDefinition,
+    deletePurchaseRecord,
     exportPurchasesData,
+    filteredPurchaseRows,
     formatMoney,
     formatQuantity,
     isAdmin,
@@ -36,6 +38,7 @@ export function PurchasesScreen() {
     openPurchaseDatePicker,
     openProductCreateForm,
     onPurchaseDatePickerChange,
+    pendingPurchaseDeleteIds,
     productEditingId,
     productSupplyRows,
     purchaseDatePickerInputValue,
@@ -44,7 +47,6 @@ export function PurchasesScreen() {
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
-    purchaseHistorySummaryRows,
     purchaseInvoiceDateInput,
     purchaseProductSalesSummaryRows,
     receiveTodaySupplies,
@@ -80,7 +82,7 @@ export function PurchasesScreen() {
   const sections = [
     { key: "supply", data: productSupplyRows },
     { key: "sales", data: purchaseProductSalesSummaryRows },
-    { key: "history", data: purchaseHistorySummaryRows },
+    { key: "history", data: filteredPurchaseRows },
   ];
 
   return (
@@ -307,6 +309,56 @@ export function PurchasesScreen() {
                 {formatMoney(item.netAmount)}
               </Text>
             </View>
+          </View>
+        ) : section.key === "history" ? (
+          <View style={styles.orderRow}>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowId}>{item.productName}</Text>
+              <Text style={styles.orderRowItems}>
+                {item.purchaseKind === "PAYMENT"
+                  ? "دفعة"
+                  : `الكمية: ${formatQuantity(item.quantity)}`}
+              </Text>
+            </View>
+            <View style={styles.orderRowMain}>
+              <Text style={styles.orderRowMeta}>
+                {item.purchaseKind === "PAYMENT"
+                  ? item.note || "دفعة من فاتورة التوريدات"
+                  : `رأس المال: ${formatMoney(item.unitCost)}`}
+              </Text>
+              <Text style={styles.orderRowTotal}>
+                {formatMoney(
+                  item.purchaseKind === "PAYMENT"
+                    ? item.paymentAmount ?? item.totalCost
+                    : item.totalCost,
+                )}
+              </Text>
+            </View>
+            <Text style={styles.orderRowMeta}>{item.purchaseDate}</Text>
+            {item.purchaseKind === "TAWASI" ? (
+              <Text style={styles.orderRowMeta}>
+                تواصي | سعر المبيع: {formatMoney(item.sellPrice)}
+              </Text>
+            ) : null}
+            {canManageInventory ? (
+              <View style={styles.rowActionButtons}>
+                <Pressable
+                  style={[
+                    styles.dangerButton,
+                    pendingPurchaseDeleteIds[item.clientPurchaseId] &&
+                      styles.buttonDisabled,
+                  ]}
+                  disabled={pendingPurchaseDeleteIds[item.clientPurchaseId]}
+                  onPress={() => void deletePurchaseRecord(item.clientPurchaseId)}
+                >
+                  <Text style={styles.dangerButtonText}>
+                    {pendingPurchaseDeleteIds[item.clientPurchaseId]
+                      ? "جار الحذف..."
+                      : "حذف العملية"}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         ) : (
           <View style={styles.orderRow}>

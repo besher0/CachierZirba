@@ -108,6 +108,13 @@ export interface CreateDailySettlementPayload {
   actualRemainingAmount: number;
   expectedRevenue?: number;
   carryInAmount?: number;
+  cycleStartedAt?: string | null;
+  salesAmount?: number | null;
+  refundAmount?: number | null;
+  expensesAmount?: number | null;
+  purchasesAmount?: number | null;
+  tawasiAmount?: number | null;
+  employeeWithdrawalsAmount?: number | null;
   note?: string;
   syncedAt: string;
 }
