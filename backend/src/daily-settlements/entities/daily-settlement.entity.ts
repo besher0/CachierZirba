@@ -47,7 +47,7 @@ export class DailySettlement {
   @Column({ type: 'real', default: 0 })
   carryInAmount: number;
 
-  @Column({ nullable: true })
+  @Column({ type: Date, nullable: true })
   cycleStartedAt: Date | null;
 
   @Column({ type: 'real', nullable: true })
