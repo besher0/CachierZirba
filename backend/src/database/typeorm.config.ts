@@ -21,6 +21,7 @@ import { User } from '../users/entities/user.entity';
 import { CreateInventoryDestructions1788000000000 } from './migrations/1788000000000-CreateInventoryDestructions';
 import { CreateCashboxWithdrawals1789000000000 } from './migrations/1789000000000-CreateCashboxWithdrawals';
 import { AddSettlementCycleSnapshots1790000000000 } from './migrations/1790000000000-AddSettlementCycleSnapshots';
+import { BackfillSettlementCycleSnapshots1791000000000 } from './migrations/1791000000000-BackfillSettlementCycleSnapshots';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -74,6 +75,7 @@ export function createTypeOrmOptions(
         CreateInventoryDestructions1788000000000,
         CreateCashboxWithdrawals1789000000000,
         AddSettlementCycleSnapshots1790000000000,
+        BackfillSettlementCycleSnapshots1791000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

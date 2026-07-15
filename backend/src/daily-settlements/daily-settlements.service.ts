@@ -1,19 +1,51 @@
-import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import {
+  LessThan,
+  ObjectLiteral,
+  Repository,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
+import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
+import { Expense } from '../expenses/entities/expense.entity';
+import { Order } from '../orders/entities/order.entity';
+import { OrderStatus } from '../orders/enums/order-status.enum';
+import { Purchase } from '../purchases/entities/purchase.entity';
 import { StoresService } from '../stores/stores.service';
 import { CreateDailySettlementDto } from './dto/create-daily-settlement.dto';
 import { ListDailySettlementsQueryDto } from './dto/list-daily-settlements-query.dto';
 import { DailySettlement } from './entities/daily-settlement.entity';
+
+type SettlementCycleSnapshots = {
+  cycleStartedAt: Date | null;
+  salesAmount: number;
+  refundAmount: number;
+  expensesAmount: number;
+  purchasesAmount: number;
+  tawasiAmount: number;
+  employeeWithdrawalsAmount: number;
+};
 
 @Injectable()
 export class DailySettlementsService {
   constructor(
     @InjectRepository(DailySettlement)
     private readonly dailySettlementRepository: Repository<DailySettlement>,
+    @InjectRepository(Order)
+    private readonly orderRepository: Repository<Order>,
+    @InjectRepository(Expense)
+    private readonly expenseRepository: Repository<Expense>,
+    @InjectRepository(Purchase)
+    private readonly purchaseRepository: Repository<Purchase>,
+    @InjectRepository(EmployeeWithdrawal)
+    private readonly employeeWithdrawalRepository: Repository<EmployeeWithdrawal>,
     private readonly storesService: StoresService,
   ) {}
 
@@ -48,6 +80,12 @@ export class DailySettlementsService {
     }
 
     try {
+      const syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
+      const snapshots = await this.buildCycleSnapshots(
+        scopedStoreId,
+        syncedAt,
+        dto.cycleStartedAt ? new Date(dto.cycleStartedAt) : undefined,
+      );
       const record = this.dailySettlementRepository.create({
         ...dto,
         storeId: scopedStoreId,
@@ -56,15 +94,16 @@ export class DailySettlementsService {
         carryInAmount: dto.carryInAmount ?? 0,
         cycleStartedAt: dto.cycleStartedAt
           ? new Date(dto.cycleStartedAt)
-          : null,
-        salesAmount: dto.salesAmount ?? null,
-        refundAmount: dto.refundAmount ?? null,
-        expensesAmount: dto.expensesAmount ?? null,
-        purchasesAmount: dto.purchasesAmount ?? null,
-        tawasiAmount: dto.tawasiAmount ?? null,
-        employeeWithdrawalsAmount: dto.employeeWithdrawalsAmount ?? null,
+          : snapshots.cycleStartedAt,
+        salesAmount: dto.salesAmount ?? snapshots.salesAmount,
+        refundAmount: dto.refundAmount ?? snapshots.refundAmount,
+        expensesAmount: dto.expensesAmount ?? snapshots.expensesAmount,
+        purchasesAmount: dto.purchasesAmount ?? snapshots.purchasesAmount,
+        tawasiAmount: dto.tawasiAmount ?? snapshots.tawasiAmount,
+        employeeWithdrawalsAmount:
+          dto.employeeWithdrawalsAmount ?? snapshots.employeeWithdrawalsAmount,
         note: dto.note ?? null,
-        syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
+        syncedAt,
       });
 
       const saved = await this.dailySettlementRepository.save(record);
@@ -173,6 +212,181 @@ export class DailySettlementsService {
       0,
     );
     await this.storesService.setCashCarry(settlement.storeId, carryForward);
+  }
+
+  private async buildCycleSnapshots(
+    storeId: string,
+    cycleEndedAt: Date,
+    requestedCycleStartedAt?: Date,
+  ): Promise<SettlementCycleSnapshots> {
+    const previousSettlement = requestedCycleStartedAt
+      ? null
+      : await this.dailySettlementRepository.findOne({
+          where: {
+            storeId,
+            syncedAt: LessThan(cycleEndedAt),
+          },
+          order: {
+            syncedAt: 'DESC',
+          },
+        });
+    const cycleStartedAt =
+      requestedCycleStartedAt ?? previousSettlement?.syncedAt ?? null;
+    const [
+      orderTotals,
+      expensesAmount,
+      purchaseTotals,
+      employeeWithdrawalsAmount,
+    ] = await Promise.all([
+      this.getOrderCycleTotals(storeId, cycleStartedAt, cycleEndedAt),
+      this.getExpenseCycleTotal(storeId, cycleStartedAt, cycleEndedAt),
+      this.getPurchaseCycleTotals(storeId, cycleStartedAt, cycleEndedAt),
+      this.getEmployeeWithdrawalCycleTotal(
+        storeId,
+        cycleStartedAt,
+        cycleEndedAt,
+      ),
+    ]);
+
+    return {
+      cycleStartedAt,
+      salesAmount: orderTotals.salesAmount,
+      refundAmount: orderTotals.refundAmount,
+      expensesAmount,
+      purchasesAmount: purchaseTotals.purchasesAmount,
+      tawasiAmount: purchaseTotals.tawasiAmount,
+      employeeWithdrawalsAmount,
+    };
+  }
+
+  private applyCycleWindow<T extends ObjectLiteral>(
+    qb: SelectQueryBuilder<T>,
+    dateExpression: string,
+    cycleStartedAt: Date | null,
+    cycleEndedAt: Date,
+  ): SelectQueryBuilder<T> {
+    qb.andWhere(`${dateExpression} <= :cycleEndedAt`, { cycleEndedAt });
+
+    if (cycleStartedAt) {
+      qb.andWhere(`${dateExpression} > :cycleStartedAt`, { cycleStartedAt });
+    }
+
+    return qb;
+  }
+
+  private async getOrderCycleTotals(
+    storeId: string,
+    cycleStartedAt: Date | null,
+    cycleEndedAt: Date,
+  ): Promise<{ salesAmount: number; refundAmount: number }> {
+    const qb = this.orderRepository
+      .createQueryBuilder('order')
+      .select(
+        'COALESCE(SUM(CASE WHEN order.status = :completedStatus THEN order.total ELSE 0 END), 0)',
+        'salesAmount',
+      )
+      .addSelect(
+        'COALESCE(SUM(CASE WHEN order.status = :refundedStatus THEN order.total ELSE 0 END), 0)',
+        'refundAmount',
+      )
+      .where('order.storeId = :storeId', { storeId })
+      .setParameters({
+        completedStatus: OrderStatus.COMPLETED,
+        refundedStatus: OrderStatus.REFUNDED,
+      });
+
+    const row = await this.applyCycleWindow(
+      qb,
+      'order.orderedAt',
+      cycleStartedAt,
+      cycleEndedAt,
+    ).getRawOne<{
+      salesAmount: string | number;
+      refundAmount: string | number;
+    }>();
+
+    return {
+      salesAmount: this.toMoney(row?.salesAmount),
+      refundAmount: this.toMoney(row?.refundAmount),
+    };
+  }
+
+  private async getExpenseCycleTotal(
+    storeId: string,
+    cycleStartedAt: Date | null,
+    cycleEndedAt: Date,
+  ): Promise<number> {
+    const occurredAtExpression =
+      'CASE WHEN expense.syncedAt < expense.createdAt THEN expense.syncedAt ELSE expense.createdAt END';
+    const qb = this.expenseRepository
+      .createQueryBuilder('expense')
+      .select('COALESCE(SUM(expense.amount), 0)', 'total')
+      .where('expense.storeId = :storeId', { storeId });
+
+    const row = await this.applyCycleWindow(
+      qb,
+      occurredAtExpression,
+      cycleStartedAt,
+      cycleEndedAt,
+    ).getRawOne<{ total: string | number }>();
+
+    return this.toMoney(row?.total);
+  }
+
+  private async getPurchaseCycleTotals(
+    storeId: string,
+    cycleStartedAt: Date | null,
+    cycleEndedAt: Date,
+  ): Promise<{ purchasesAmount: number; tawasiAmount: number }> {
+    const occurredAtExpression =
+      'CASE WHEN purchase.syncedAt < purchase.createdAt THEN purchase.syncedAt ELSE purchase.createdAt END';
+    const qb = this.purchaseRepository
+      .createQueryBuilder('purchase')
+      .select('COALESCE(SUM(purchase.totalCost), 0)', 'purchasesAmount')
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN purchase.purchaseKind = 'TAWASI' THEN purchase.totalCost ELSE 0 END), 0)`,
+        'tawasiAmount',
+      )
+      .where('purchase.storeId = :storeId', { storeId });
+
+    const row = await this.applyCycleWindow(
+      qb,
+      occurredAtExpression,
+      cycleStartedAt,
+      cycleEndedAt,
+    ).getRawOne<{
+      purchasesAmount: string | number;
+      tawasiAmount: string | number;
+    }>();
+
+    return {
+      purchasesAmount: this.toMoney(row?.purchasesAmount),
+      tawasiAmount: this.toMoney(row?.tawasiAmount),
+    };
+  }
+
+  private async getEmployeeWithdrawalCycleTotal(
+    storeId: string,
+    cycleStartedAt: Date | null,
+    cycleEndedAt: Date,
+  ): Promise<number> {
+    const qb = this.employeeWithdrawalRepository
+      .createQueryBuilder('withdrawal')
+      .select('COALESCE(SUM(withdrawal.amount), 0)', 'total')
+      .where('withdrawal.storeId = :storeId', { storeId });
+
+    const row = await this.applyCycleWindow(
+      qb,
+      'withdrawal.createdAt',
+      cycleStartedAt,
+      cycleEndedAt,
+    ).getRawOne<{ total: string | number }>();
+
+    return this.toMoney(row?.total);
+  }
+
+  private toMoney(value: string | number | null | undefined): number {
+    return Number(Number(value ?? 0).toFixed(2));
   }
 
   private resolveStoreForRead(
