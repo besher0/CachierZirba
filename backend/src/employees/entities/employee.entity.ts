@@ -32,6 +32,9 @@ export class Employee {
   @Column({ type: 'real' })
   weeklySalary: number;
 
+  @Column({ type: 'int', default: 1 })
+  payrollWeekStartDay: number;
+
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 

@@ -36,6 +36,7 @@ export function EmployeesScreen() {
     employeeId,
     employeeName,
     employeeNameInput,
+    employeePayrollWeekStartDayInput,
     employeeSummaryRow,
     employeeWeeklySalaryInput,
     employeeWeeklySnapshots,
@@ -68,6 +69,7 @@ export function EmployeesScreen() {
     placeholderTextColor,
     primaryButton,
     primaryButtonText,
+    payrollWeekdayOptions,
     recentAbsenceRows,
     recentWithdrawalRows,
     refreshEmployeesData,
@@ -85,6 +87,7 @@ export function EmployeesScreen() {
     setAbsenceEmployeeIdInput,
     setAbsenceNoteInput,
     setEmployeeNameInput,
+    setEmployeePayrollWeekStartDayInput,
     setEmployeeWeeklySalaryInput,
     setWithdrawalAmountInput,
     setWithdrawalDateInput,
@@ -100,8 +103,6 @@ export function EmployeesScreen() {
     styles,
     syncedText,
     value,
-    weekEndDate,
-    weekStartDate,
     weeklySalary,
     withdrawalAmountInput,
     withdrawalDate,
@@ -129,8 +130,8 @@ export function EmployeesScreen() {
                         </Text>
                       )}
                       <Text style={styles.orderRowMeta}>
-                        أسبوع الحساب: {weekStartDate} إلى {weekEndDate} (الموظف
-                        مداوم افتراضياً إلا إذا سجلت غياب)
+                        كل موظف له يوم بداية حساب خاص. الموظف مداوم
+                        افتراضياً إلا إذا سجلت غياب.
                       </Text>
                       <View style={styles.inputRow}>
                         <TextInput
@@ -148,6 +149,35 @@ export function EmployeesScreen() {
                           placeholder="اسم الموظف"
                           placeholderTextColor="#d7b3c4"
                         />
+                      </View>
+                      <View style={styles.categoryRow}>
+                        {payrollWeekdayOptions.map((option) => {
+                          const selected =
+                            employeePayrollWeekStartDayInput === option.value;
+                          return (
+                            <Pressable
+                              key={option.value}
+                              style={[
+                                styles.storeChip,
+                                selected && styles.storeChipSelected,
+                              ]}
+                              onPress={() =>
+                                setEmployeePayrollWeekStartDayInput(
+                                  option.value,
+                                )
+                              }
+                            >
+                              <Text
+                                style={[
+                                  styles.storeChipText,
+                                  selected && styles.storeChipTextSelected,
+                                ]}
+                              >
+                                {option.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
                       </View>
                       <Pressable
                         style={[
@@ -187,6 +217,17 @@ export function EmployeesScreen() {
                               <Text style={styles.orderRowItems}>
                                 راتب أسبوعي: {formatMoney(item.weeklySalary)}
                               </Text>
+                              <Text style={styles.orderRowMeta}>
+                                أسبوع الحساب: {item.weekStartDate} إلى{" "}
+                                {item.weekEndDate}
+                              </Text>
+                              <Text style={styles.orderRowMeta}>
+                                بداية الأسبوع:{" "}
+                                {payrollWeekdayOptions.find(
+                                  (option) =>
+                                    option.value === item.payrollWeekStartDay,
+                                )?.label ?? "-"}
+                              </Text>
                             </View>
                             <View style={styles.orderRowMain}>
                               <Text style={styles.orderRowMeta}>
@@ -204,6 +245,12 @@ export function EmployeesScreen() {
                               <Text style={styles.orderRowMeta}>
                                 السحوبات: {formatMoney(item.withdrawalsAmount)}
                               </Text>
+                              {item.carriedDebtAmount > 0 ? (
+                                <Text style={styles.pendingText}>
+                                  دين مرحّل:{" "}
+                                  {formatMoney(item.carriedDebtAmount)}
+                                </Text>
+                              ) : null}
                               <Text
                                 style={
                                   item.balance >= 0

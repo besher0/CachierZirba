@@ -305,6 +305,7 @@ export interface Employee {
   storeId: string;
   name: string;
   weeklySalary: number;
+  payrollWeekStartDay: number;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -337,6 +338,7 @@ export interface CreateEmployeePayload {
   storeId: string;
   name: string;
   weeklySalary: number;
+  payrollWeekStartDay?: number;
   isActive: boolean;
   syncedAt: string;
 }
@@ -344,6 +346,7 @@ export interface CreateEmployeePayload {
 export interface UpdateEmployeePayload {
   name?: string;
   weeklySalary?: number;
+  payrollWeekStartDay?: number;
   isActive?: boolean;
   syncedAt?: string;
 }
@@ -391,9 +394,11 @@ export interface EmployeeWeeklySnapshot {
   weekStartDate: string;
   weekEndDate: string;
   weeklySalary: number;
+  payrollWeekStartDay: number;
   absenceDays: number;
   attendanceDays: number;
   earnedAmount: number;
+  carriedDebtAmount: number;
   withdrawalsAmount: number;
   balance: number;
 }

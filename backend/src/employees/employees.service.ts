@@ -51,6 +51,7 @@ export class EmployeesService {
         this.employeeRepository.create({
           ...dto,
           storeId,
+          payrollWeekStartDay: dto.payrollWeekStartDay ?? 1,
           isActive: dto.isActive ?? true,
           syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
         }),
@@ -77,6 +78,10 @@ export class EmployeesService {
 
     if (dto.weeklySalary !== undefined) {
       record.weeklySalary = dto.weeklySalary;
+    }
+
+    if (dto.payrollWeekStartDay !== undefined) {
+      record.payrollWeekStartDay = dto.payrollWeekStartDay;
     }
 
     if (dto.isActive !== undefined) {

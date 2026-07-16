@@ -3,10 +3,12 @@ import {
   IsBoolean,
   IsDateString,
   IsNotEmpty,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -29,6 +31,13 @@ export class CreateEmployeeDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   weeklySalary: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  payrollWeekStartDay?: number;
 
   @IsOptional()
   @IsBoolean()

@@ -179,8 +179,8 @@ import {
   formatMoney,
   formatQuantity,
   getEarliestIsoTimestamp,
-  getWeekEndSunday,
-  getWeekStartMonday,
+  getWeekEndFromStart,
+  getWeekStartForDay,
   inferMimeTypeFromUri,
   isLikelyNetworkError,
   isRemoteUri,
@@ -202,6 +202,7 @@ import {
   normalizeExpenseCategoryValue,
   normalizeIsoTimestamp,
   normalizeNumericInputText,
+  normalizePayrollWeekStartDay,
   normalizeProductKey,
   normalizeQuantityForUnit,
   parseNumberInput,
@@ -224,6 +225,16 @@ const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 15000;
 const RESOURCE_REFRESH_TTL_MS = 60000;
 const ADMIN_DASHBOARD_ALL_STORES = "__ALL__";
 const ORDER_REFRESH_LIMIT = 200;
+const DEFAULT_PAYROLL_WEEK_START_DAY = 1;
+const PAYROLL_WEEKDAY_OPTIONS = [
+  { value: 0, label: "الأحد" },
+  { value: 1, label: "الاثنين" },
+  { value: 2, label: "الثلاثاء" },
+  { value: 3, label: "الأربعاء" },
+  { value: 4, label: "الخميس" },
+  { value: 5, label: "الجمعة" },
+  { value: 6, label: "السبت" },
+] as const;
 
 type RefreshTimestamps = Record<string, number>;
 
@@ -408,6 +419,15 @@ function correctPurchaseSyncJobDate(job: SyncJob): SyncJob {
       purchaseDate,
     },
   } as SyncJob;
+}
+
+function normalizeLocalEmployeePayrollDay(employee: Employee): Employee {
+  return {
+    ...employee,
+    payrollWeekStartDay: normalizePayrollWeekStartDay(
+      employee.payrollWeekStartDay,
+    ),
+  };
 }
 
 export function useAppController() {
@@ -638,6 +658,8 @@ export function useAppController() {
   const [employeeNameInput, setEmployeeNameInput] = useState("");
   const [employeeWeeklySalaryInput, setEmployeeWeeklySalaryInput] =
     useState("");
+  const [employeePayrollWeekStartDayInput, setEmployeePayrollWeekStartDayInput] =
+    useState(DEFAULT_PAYROLL_WEEK_START_DAY);
   const [employeeEditingId, setEmployeeEditingId] = useState<string | null>(
     null,
   );
@@ -2672,11 +2694,11 @@ export function useAppController() {
   );
 
   const weekStartDate = useMemo(
-    () => getWeekStartMonday(todayDate),
+    () => getWeekStartForDay(todayDate, DEFAULT_PAYROLL_WEEK_START_DAY),
     [todayDate],
   );
   const weekEndDate = useMemo(
-    () => getWeekEndSunday(weekStartDate),
+    () => getWeekEndFromStart(weekStartDate),
     [weekStartDate],
   );
 
@@ -2692,44 +2714,112 @@ export function useAppController() {
       }
 
       return selectedStoreEmployees.map((employee) => {
-        const weekAbsenceDays = new Set(
-          selectedStoreAbsences
-            .filter(
-              (entry) =>
-                entry.employeeId === employee.id &&
-                entry.absenceDate >= weekStartDate &&
-                entry.absenceDate <= weekEndDate,
-            )
-            .map((entry) => entry.absenceDate),
-        ).size;
-        const absenceDays = Math.min(7, weekAbsenceDays);
-        const attendanceDays = Math.max(0, 7 - absenceDays);
-        const earnedAmount = Number(
-          ((attendanceDays / 7) * employee.weeklySalary).toFixed(2),
+        const payrollWeekStartDay = normalizePayrollWeekStartDay(
+          employee.payrollWeekStartDay,
         );
-        const withdrawalsAmount = Number(
-          selectedStoreWithdrawals
-            .filter(
-              (entry) =>
-                entry.employeeId === employee.id &&
-                entry.withdrawalDate >= weekStartDate &&
-                entry.withdrawalDate <= weekEndDate,
-            )
-            .reduce((sum, entry) => sum + entry.amount, 0)
-            .toFixed(2),
+        const employeeWeekStartDate = getWeekStartForDay(
+          todayDate,
+          payrollWeekStartDay,
         );
-        const balance = Number((earnedAmount - withdrawalsAmount).toFixed(2));
+        const employeeWeekEndDate = getWeekEndFromStart(
+          employeeWeekStartDate,
+        );
+        const employeeAbsenceRows = selectedStoreAbsences.filter(
+          (entry) => entry.employeeId === employee.id,
+        );
+        const employeeWithdrawalRows = selectedStoreWithdrawals.filter(
+          (entry) => entry.employeeId === employee.id,
+        );
+        const summarizeWeek = (startDate: string, endDate: string) => {
+          const weekAbsenceDays = new Set(
+            employeeAbsenceRows
+              .filter(
+                (entry) =>
+                  entry.absenceDate >= startDate &&
+                  entry.absenceDate <= endDate,
+              )
+              .map((entry) => entry.absenceDate),
+          ).size;
+          const absenceDays = Math.min(7, weekAbsenceDays);
+          const attendanceDays = Math.max(0, 7 - absenceDays);
+          const earnedAmount = Number(
+            ((attendanceDays / 7) * employee.weeklySalary).toFixed(2),
+          );
+          const withdrawalsAmount = Number(
+            employeeWithdrawalRows
+              .filter(
+                (entry) =>
+                  entry.withdrawalDate >= startDate &&
+                  entry.withdrawalDate <= endDate,
+              )
+              .reduce((sum, entry) => sum + entry.amount, 0)
+              .toFixed(2),
+          );
+
+          return {
+            absenceDays,
+            attendanceDays,
+            earnedAmount,
+            withdrawalsAmount,
+          };
+        };
+        const historicalWithdrawalDates = employeeWithdrawalRows
+          .map((entry) => entry.withdrawalDate)
+          .filter((withdrawalDate) => withdrawalDate < employeeWeekStartDate)
+          .sort();
+        let carriedDebtAmount = 0;
+
+        if (historicalWithdrawalDates.length > 0) {
+          let cursorStartDate = getWeekStartForDay(
+            historicalWithdrawalDates[0],
+            payrollWeekStartDay,
+          );
+
+          while (cursorStartDate < employeeWeekStartDate) {
+            const cursorEndDate = getWeekEndFromStart(cursorStartDate);
+            const historicalSummary = summarizeWeek(
+              cursorStartDate,
+              cursorEndDate,
+            );
+            const historicalBalance = Number(
+              (
+                historicalSummary.earnedAmount -
+                historicalSummary.withdrawalsAmount -
+                carriedDebtAmount
+              ).toFixed(2),
+            );
+            carriedDebtAmount =
+              historicalBalance < 0 ? Number((-historicalBalance).toFixed(2)) : 0;
+            cursorStartDate = toIsoDateOnly(
+              addDays(dateFromIsoOnly(cursorStartDate), 7),
+            );
+          }
+        }
+
+        const currentSummary = summarizeWeek(
+          employeeWeekStartDate,
+          employeeWeekEndDate,
+        );
+        const balance = Number(
+          (
+            currentSummary.earnedAmount -
+            currentSummary.withdrawalsAmount -
+            carriedDebtAmount
+          ).toFixed(2),
+        );
 
         return {
           employeeId: employee.id,
           employeeName: employee.name,
-          weekStartDate,
-          weekEndDate,
+          weekStartDate: employeeWeekStartDate,
+          weekEndDate: employeeWeekEndDate,
           weeklySalary: employee.weeklySalary,
-          absenceDays,
-          attendanceDays,
-          earnedAmount,
-          withdrawalsAmount,
+          payrollWeekStartDay,
+          absenceDays: currentSummary.absenceDays,
+          attendanceDays: currentSummary.attendanceDays,
+          earnedAmount: currentSummary.earnedAmount,
+          carriedDebtAmount,
+          withdrawalsAmount: currentSummary.withdrawalsAmount,
           balance,
         };
       });
@@ -2739,8 +2829,7 @@ export function useAppController() {
       selectedStoreEmployees,
       selectedStoreWithdrawals,
       shouldComputeEmployeeReports,
-      weekEndDate,
-      weekStartDate,
+      todayDate,
     ],
   );
 
@@ -3857,6 +3946,9 @@ export function useAppController() {
             storeId: item.storeId,
             name: item.name,
             weeklySalary: item.weeklySalary,
+            payrollWeekStartDay: normalizePayrollWeekStartDay(
+              item.payrollWeekStartDay,
+            ),
             isActive: item.isActive,
             createdAt: item.createdAt,
             updatedAt: item.updatedAt,
@@ -3867,7 +3959,9 @@ export function useAppController() {
           .filter(
             (item) => item.storeId === selectedStoreId && item.synced !== true,
           )
-          .forEach((item) => selected.set(item.id, item));
+          .forEach((item) =>
+            selected.set(item.id, normalizeLocalEmployeePayrollDay(item)),
+          );
 
         return [
           ...previous.filter((item) => item.storeId !== selectedStoreId),
@@ -5187,7 +5281,7 @@ export function useAppController() {
         setInventoryAdjustments(cachedInventoryAdjustments);
         setInventoryDestructions(cachedInventoryDestructions);
         setProducts(initialProducts);
-        setEmployees(cachedEmployees);
+        setEmployees(cachedEmployees.map(normalizeLocalEmployeePayrollDay));
         setEmployeeAbsences(cachedEmployeeAbsences);
         setEmployeeWithdrawals(cachedEmployeeWithdrawals);
         hasLoadedCashCarryRef.current = true;
@@ -5314,6 +5408,9 @@ export function useAppController() {
             storeId: item.storeId,
             name: item.name,
             weeklySalary: item.weeklySalary,
+            payrollWeekStartDay: normalizePayrollWeekStartDay(
+              item.payrollWeekStartDay,
+            ),
             isActive: item.isActive,
             syncedAt: item.updatedAt,
           },
@@ -5509,6 +5606,7 @@ export function useAppController() {
     setEmployeeEditingId(null);
     setEmployeeNameInput("");
     setEmployeeWeeklySalaryInput("");
+    setEmployeePayrollWeekStartDayInput(DEFAULT_PAYROLL_WEEK_START_DAY);
     setTawasiCapitalInput("");
     setTawasiSellPriceInput("");
     setTawasiNoteInput("");
@@ -7375,6 +7473,7 @@ export function useAppController() {
     setEmployeeEditingId(null);
     setEmployeeNameInput("");
     setEmployeeWeeklySalaryInput("");
+    setEmployeePayrollWeekStartDayInput(DEFAULT_PAYROLL_WEEK_START_DAY);
   };
 
   const beginEmployeeEdit = (employeeId: string) => {
@@ -7392,6 +7491,9 @@ export function useAppController() {
     setEmployeeEditingId(employee.id);
     setEmployeeNameInput(employee.name);
     setEmployeeWeeklySalaryInput(String(employee.weeklySalary));
+    setEmployeePayrollWeekStartDayInput(
+      normalizePayrollWeekStartDay(employee.payrollWeekStartDay),
+    );
     setStatusMessage(`تعديل راتب ${employee.name}.`);
   };
 
@@ -7419,6 +7521,9 @@ export function useAppController() {
       return;
     }
 
+    const payrollWeekStartDay = normalizePayrollWeekStartDay(
+      employeePayrollWeekStartDayInput,
+    );
     const isEditing = Boolean(employeeEditingId);
     const existingEmployee = isEditing
       ? employees.find((item) => item.id === employeeEditingId)
@@ -7447,6 +7552,7 @@ export function useAppController() {
       storeId: effectiveStoreId,
       name,
       weeklySalary,
+      payrollWeekStartDay,
       isActive: existingEmployee?.isActive ?? true,
       createdAt: existingEmployee?.createdAt ?? now,
       updatedAt: now,
@@ -7465,12 +7571,14 @@ export function useAppController() {
       storeId: employee.storeId,
       name: employee.name,
       weeklySalary: employee.weeklySalary,
+      payrollWeekStartDay: employee.payrollWeekStartDay,
       isActive: employee.isActive,
       syncedAt: now,
     };
     const updatePayload: UpdateEmployeePayload = {
       name: employee.name,
       weeklySalary: employee.weeklySalary,
+      payrollWeekStartDay: employee.payrollWeekStartDay,
       isActive: employee.isActive,
       syncedAt: now,
     };
@@ -7575,8 +7683,19 @@ export function useAppController() {
       },
     });
     setAbsenceNoteInput('');
+    const absenceEmployee = selectedStoreEmployees.find(
+      (item) => item.id === absenceEmployeeIdInput,
+    );
+    const absenceWeekStartDate = getWeekStartForDay(
+      todayDate,
+      normalizePayrollWeekStartDay(absenceEmployee?.payrollWeekStartDay),
+    );
+    const absenceWeekEndDate = getWeekEndFromStart(absenceWeekStartDate);
+    const weekStartDate = absenceWeekStartDate;
+    const weekEndDate = absenceWeekEndDate;
     setStatusMessage(
-      absenceDateInput >= weekStartDate && absenceDateInput <= weekEndDate
+      absenceDateInput >= absenceWeekStartDate &&
+        absenceDateInput <= absenceWeekEndDate
         ? 'تم تسجيل الغياب وتحديث المستحق.'
         : `تم تسجيل الغياب، لكنه خارج أسبوع الحساب ${weekStartDate} إلى ${weekEndDate}.`,
     );
@@ -7651,6 +7770,16 @@ export function useAppController() {
     });
     setWithdrawalAmountInput('');
     setWithdrawalNoteInput('');
+    const withdrawalEmployee = selectedStoreEmployees.find(
+      (item) => item.id === withdrawalEmployeeIdInput,
+    );
+    const withdrawalWeekStartDate = getWeekStartForDay(
+      todayDate,
+      normalizePayrollWeekStartDay(withdrawalEmployee?.payrollWeekStartDay),
+    );
+    const withdrawalWeekEndDate = getWeekEndFromStart(withdrawalWeekStartDate);
+    const weekStartDate = withdrawalWeekStartDate;
+    const weekEndDate = withdrawalWeekEndDate;
     setStatusMessage(
       withdrawalDateInput >= weekStartDate &&
         withdrawalDateInput <= weekEndDate
@@ -8324,6 +8453,7 @@ export function useAppController() {
     effectiveExpenseCategoryOptions,
     employeeNameInput,
     employeeEditingId,
+    employeePayrollWeekStartDayInput,
     employeeWeeklySalaryInput,
     employeeWeeklySnapshots,
     expenseAmountInput,
@@ -8415,6 +8545,7 @@ export function useAppController() {
     purchaseInvoiceDateInput,
     purchaseInvoiceNoteInput,
     purchaseInvoiceTitle: activePurchaseInvoiceTitle,
+    payrollWeekdayOptions: PAYROLL_WEEKDAY_OPTIONS,
     purchases,
     pushPadToken,
     queue,
@@ -8466,6 +8597,7 @@ export function useAppController() {
     setSelectedAdminProductSalesProductId,
     setDiscountInput,
     setEmployeeNameInput,
+    setEmployeePayrollWeekStartDayInput,
     setEmployeeWeeklySalaryInput,
     setExpenseAmountInput,
     setExpenseCategoryInput,

@@ -1070,3 +1070,26 @@ export function getWeekStartMonday(isoDate: string): string {
 export function getWeekEndSunday(weekStartIso: string): string {
   return toIsoDateOnly(addDays(dateFromIsoOnly(weekStartIso), 6));
 }
+
+export function normalizePayrollWeekStartDay(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 6) {
+    return 1;
+  }
+
+  return parsed;
+}
+
+export function getWeekStartForDay(
+  isoDate: string,
+  weekStartDay: number,
+): string {
+  const date = dateFromIsoOnly(isoDate);
+  const normalizedStartDay = normalizePayrollWeekStartDay(weekStartDay);
+  const daysSinceStart = (date.getDay() - normalizedStartDay + 7) % 7;
+  return toIsoDateOnly(addDays(date, -daysSinceStart));
+}
+
+export function getWeekEndFromStart(weekStartIso: string): string {
+  return toIsoDateOnly(addDays(dateFromIsoOnly(weekStartIso), 6));
+}
