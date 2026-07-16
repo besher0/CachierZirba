@@ -5,11 +5,13 @@ export class AddEmployeePayrollWeekStartDay1792000000000 implements MigrationInt
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `ALTER TABLE "employees" ADD "payrollWeekStartDay" integer NOT NULL DEFAULT 1`,
+      `ALTER TABLE "employees" ADD COLUMN IF NOT EXISTS "payrollWeekStartDay" integer NOT NULL DEFAULT 1`,
     );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "employees" DROP COLUMN "payrollWeekStartDay"`);
+    await queryRunner.query(
+      `ALTER TABLE "employees" DROP COLUMN IF EXISTS "payrollWeekStartDay"`,
+    );
   }
 }

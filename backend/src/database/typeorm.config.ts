@@ -22,6 +22,8 @@ import { CreateInventoryDestructions1788000000000 } from './migrations/178800000
 import { CreateCashboxWithdrawals1789000000000 } from './migrations/1789000000000-CreateCashboxWithdrawals';
 import { AddSettlementCycleSnapshots1790000000000 } from './migrations/1790000000000-AddSettlementCycleSnapshots';
 import { BackfillSettlementCycleSnapshots1791000000000 } from './migrations/1791000000000-BackfillSettlementCycleSnapshots';
+import { AddEmployeePayrollWeekStartDay1792000000000 } from './migrations/1792000000000-AddEmployeePayrollWeekStartDay';
+import { AddExpenseSettlementCycleAnchor1793000000000 } from './migrations/1793000000000-AddExpenseSettlementCycleAnchor';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -76,6 +78,8 @@ export function createTypeOrmOptions(
         CreateCashboxWithdrawals1789000000000,
         AddSettlementCycleSnapshots1790000000000,
         BackfillSettlementCycleSnapshots1791000000000,
+        AddEmployeePayrollWeekStartDay1792000000000,
+        AddExpenseSettlementCycleAnchor1793000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

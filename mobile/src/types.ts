@@ -160,6 +160,7 @@ export interface CreateExpensePayload {
   clientExpenseId: string;
   storeId: string;
   expenseDate: string;
+  cycleStartClosureId?: string | null;
   category: ExpenseCategory;
   description: string;
   amount: number;

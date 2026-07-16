@@ -169,6 +169,8 @@ import {
   ProductSalesSummaryRow,
   ProductSupplyRow,
   PurchaseRow,
+  RENT_CART_ITEM_ID,
+  RENT_CART_ITEM_NAME,
   SettlementDayDetail,
   SettlementHistoryRow,
   addDays,
@@ -1181,8 +1183,12 @@ export function useAppController() {
   const shouldComputeEmployeeReports =
     heavyReportScreen === "employees" || heavyReportScreen === "settlement";
 
-  const settlementCycleStartIso = useMemo(() => {
-    const candidates: string[] = [];
+  const settlementCycleStart = useMemo(() => {
+    const candidates: Array<{
+      clientClosureId: string;
+      businessDate: string;
+      closedAt: string;
+    }> = [];
 
     selectedStoreSettlements.forEach((item) => {
       if (selectedStoreRemoteSettlementDates.has(item.businessDate)) {
@@ -1193,14 +1199,22 @@ export function useAppController() {
         item.syncedAt ?? item.createdLocallyAt,
       );
       if (candidate) {
-        candidates.push(candidate);
+        candidates.push({
+          clientClosureId: item.clientClosureId,
+          businessDate: item.businessDate,
+          closedAt: candidate,
+        });
       }
     });
 
     selectedStoreRemoteSettlements.forEach((item) => {
       const candidate = normalizeIsoTimestamp(item.syncedAt);
       if (candidate) {
-        candidates.push(candidate);
+        candidates.push({
+          clientClosureId: item.clientClosureId,
+          businessDate: item.businessDate,
+          closedAt: candidate,
+        });
       }
     });
 
@@ -1208,12 +1222,18 @@ export function useAppController() {
       return null;
     }
 
-    return candidates.sort((a, b) => b.localeCompare(a))[0];
+    return candidates.sort((a, b) => {
+      const dateComparison = b.businessDate.localeCompare(a.businessDate);
+      return dateComparison || b.closedAt.localeCompare(a.closedAt);
+    })[0];
   }, [
     selectedStoreRemoteSettlementDates,
     selectedStoreRemoteSettlements,
     selectedStoreSettlements,
   ]);
+  const settlementCycleStartIso = settlementCycleStart?.closedAt ?? null;
+  const settlementCycleStartClosureId =
+    settlementCycleStart?.clientClosureId ?? null;
 
   const carryInAmount = useMemo(
     () =>
@@ -1460,14 +1480,13 @@ export function useAppController() {
       return recordDate <= businessDate;
     };
 
-    const chronologicalSettlements = [...mergedSettlementRows].sort((a, b) => {
-      const aClosedAt = normalizeIsoTimestamp(a.syncedAt) ?? a.businessDate;
-      const bClosedAt = normalizeIsoTimestamp(b.syncedAt) ?? b.businessDate;
-      return aClosedAt.localeCompare(bClosedAt);
-    });
+    const chronologicalSettlements = [...mergedSettlementRows].sort((a, b) =>
+      a.businessDate.localeCompare(b.businessDate),
+    );
 
     let previousClosedAt: string | null = null;
     let previousBusinessDate: string | null = null;
+    let previousClosureId: string | null = null;
 
     chronologicalSettlements.forEach((settlement) => {
       const key = settlement.clientClosureId;
@@ -1490,16 +1509,18 @@ export function useAppController() {
         }
       });
       mergedExpenseRows.forEach((item) => {
-        if (
-          isInCycle(
-            item.expenseDate,
-            item.occurredAt,
-            cycleStartedAt,
-            cycleEndedAt,
-            previousBusinessDate,
-            settlement.businessDate,
-          )
-        ) {
+        const belongsToCycle =
+          item.cycleStartClosureId !== undefined
+            ? item.cycleStartClosureId === previousClosureId
+            : isInCycle(
+                item.expenseDate,
+                item.occurredAt,
+                cycleStartedAt,
+                cycleEndedAt,
+                previousBusinessDate,
+                settlement.businessDate,
+              );
+        if (belongsToCycle) {
           append(expensesByDate, key, item);
         }
       });
@@ -1534,6 +1555,7 @@ export function useAppController() {
 
       previousClosedAt = cycleEndedAt ?? previousClosedAt;
       previousBusinessDate = settlement.businessDate;
+      previousClosureId = settlement.clientClosureId;
     });
 
     return { orders, expenses: expensesByDate, purchases: purchasesByDate, withdrawals };
@@ -1741,12 +1763,15 @@ export function useAppController() {
       }
 
       return mergedExpenseRows.filter((item) =>
-        isInCurrentSettlementCycle(item.expenseDate, item.occurredAt),
+        item.cycleStartClosureId !== undefined
+          ? item.cycleStartClosureId === settlementCycleStartClosureId
+          : isInCurrentSettlementCycle(item.expenseDate, item.occurredAt),
       );
     },
     [
       isInCurrentSettlementCycle,
       mergedExpenseRows,
+      settlementCycleStartClosureId,
       shouldComputeSettlementReports,
     ],
   );
@@ -3848,6 +3873,19 @@ export function useAppController() {
     try {
       const data = await fetchExpenses(authToken, { storeId: selectedStoreId });
       setRemoteExpenses(data);
+      const remoteIds = new Set(data.map((item) => item.clientExpenseId));
+      setExpenses((previous) => {
+        const next = previous.filter(
+          (item) =>
+            item.storeId !== selectedStoreId ||
+            item.synced !== true ||
+            !remoteIds.has(item.clientExpenseId),
+        );
+        if (next.length !== previous.length) {
+          void saveArray(STORAGE_KEYS.expenses, next);
+        }
+        return next;
+      });
       return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث المصاريف من السيرفر.");
@@ -6082,6 +6120,34 @@ export function useAppController() {
     setStatusMessage(`تمت إضافة منوعات بقيمة ${formatMoney(miscAmount)}.`);
   };
 
+  const addRentAmountToCart = () => {
+    if (!posPadInput.trim()) {
+      setStatusMessage("أدخل مبلغ الأجار من لوحة الأرقام أولاً.");
+      return;
+    }
+
+    const rentAmount = parseNumberInput(posPadInput);
+    if (rentAmount <= 0) {
+      setStatusMessage("مبلغ الأجار غير صالح.");
+      return;
+    }
+
+    const rentItem: CartItem = {
+      id: RENT_CART_ITEM_ID,
+      name: RENT_CART_ITEM_NAME,
+      unitType: "PIECE",
+      quantity: 1,
+      price: rentAmount,
+      costPrice: 0,
+    };
+
+    setCart((previous) => [...previous, rentItem]);
+    setPosPadInput("");
+    setPendingMultiplier(null);
+    setPendingAmountValue(null);
+    setStatusMessage(`تمت إضافة أجار بقيمة ${formatMoney(rentAmount)}.`);
+  };
+
   const addTawasiSupplyFromPad = async () => {
     if (isBuildingOrderRef.current) {
       return;
@@ -6625,6 +6691,9 @@ export function useAppController() {
         clientExpenseId,
         storeId: effectiveStoreId,
         expenseDate: expenseDateInput,
+        ...(settlementCycleStartClosureId
+          ? { cycleStartClosureId: settlementCycleStartClosureId }
+          : {}),
         category: expenseCategoryValue,
         description: expenseDescriptionInput.trim(),
         amount,
@@ -8400,6 +8469,7 @@ export function useAppController() {
     addExpenseCategoryOption,
     addMiscAmountToCart,
     addProductToCart,
+    addRentAmountToCart,
     addTawasiSupplyFromPad,
     adminCashboxWithdrawalAmountInput,
     adminCashboxWithdrawalNoteInput,

@@ -62,6 +62,7 @@ export function PosScreen() {
     activePosProductKey,
     addMiscAmountToCart,
     addProductToCart,
+    addRentAmountToCart,
     addTawasiSupplyFromPad,
     applyDiscountFromPad,
     backspacePad,
@@ -553,20 +554,26 @@ export function PosScreen() {
                           </Pressable>
                           <Pressable
                             style={styles.padActionButton}
+                            onPress={addRentAmountToCart}
+                          >
+                            <Text style={styles.padActionText}>أجار</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.padActionButton}
                             onPress={() => void addTawasiSupplyFromPad()}
                           >
                             <Text style={styles.padActionText}>
                               تواصي
                             </Text>
                           </Pressable>
+                        </View>
+                        <View style={styles.padActionRow}>
                           <Pressable
                             style={styles.padActionButton}
                             onPress={roundPadValue}
                           >
                             <Text style={styles.padActionText}>مدور</Text>
                           </Pressable>
-                        </View>
-                        <View style={styles.padActionRow}>
                           <Pressable
                             style={styles.padActionButtonPrimary}
                             onPress={activateMultiply}

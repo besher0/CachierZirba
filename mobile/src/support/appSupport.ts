@@ -75,6 +75,7 @@ export interface SettlementHistoryRow {
 export interface ExpenseRow {
   clientExpenseId: string;
   expenseDate: string;
+  cycleStartClosureId?: string | null;
   category: ExpenseCategory;
   description: string;
   amount: number;
@@ -179,6 +180,8 @@ export const EXPORT_FILE_PREFIX = "zerbe";
 export const CLICK_SOUND_SOURCE = require("../../assets/click.wav");
 export const MISC_CART_ITEM_ID = "__MISC__";
 export const MISC_CART_ITEM_NAME = "منوعات";
+export const RENT_CART_ITEM_ID = "__RENT__";
+export const RENT_CART_ITEM_NAME = "أجار";
 export const PRODUCT_ORDER_STORAGE_KEY = `${STORAGE_KEYS.products}.orderByStore.v1`;
 export const POS_PRODUCT_COLUMNS_DESKTOP = 4;
 export const POS_PRODUCT_COLUMNS_MOBILE = 4;
@@ -873,6 +876,7 @@ export function mapApiExpenseToRow(item: ApiExpense): ExpenseRow {
   return {
     clientExpenseId: item.clientExpenseId,
     expenseDate: item.expenseDate,
+    cycleStartClosureId: item.cycleStartClosureId,
     category: item.category,
     description: item.description,
     amount: item.amount,
@@ -887,6 +891,7 @@ export function mapLocalExpenseToRow(item: LocalExpense): ExpenseRow {
   return {
     clientExpenseId: item.clientExpenseId,
     expenseDate: item.expenseDate,
+    cycleStartClosureId: item.cycleStartClosureId,
     category: item.category,
     description: item.description,
     amount: item.amount,

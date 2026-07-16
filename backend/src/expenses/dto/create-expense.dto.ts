@@ -24,6 +24,11 @@ export class CreateExpenseDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
   expenseDate: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  cycleStartClosureId?: string | null;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(80)

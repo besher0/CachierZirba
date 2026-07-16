@@ -4,12 +4,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  LessThan,
-  ObjectLiteral,
-  Repository,
-  SelectQueryBuilder,
-} from 'typeorm';
+import { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
@@ -219,17 +214,10 @@ export class DailySettlementsService {
     cycleEndedAt: Date,
     requestedCycleStartedAt?: Date,
   ): Promise<SettlementCycleSnapshots> {
-    const previousSettlement = requestedCycleStartedAt
-      ? null
-      : await this.dailySettlementRepository.findOne({
-          where: {
-            storeId,
-            syncedAt: LessThan(cycleEndedAt),
-          },
-          order: {
-            syncedAt: 'DESC',
-          },
-        });
+    const previousSettlement = await this.dailySettlementRepository.findOne({
+      where: { storeId },
+      order: { createdAt: 'DESC' },
+    });
     const cycleStartedAt =
       requestedCycleStartedAt ?? previousSettlement?.syncedAt ?? null;
     const [
@@ -239,7 +227,10 @@ export class DailySettlementsService {
       employeeWithdrawalsAmount,
     ] = await Promise.all([
       this.getOrderCycleTotals(storeId, cycleStartedAt, cycleEndedAt),
-      this.getExpenseCycleTotal(storeId, cycleStartedAt, cycleEndedAt),
+      this.getExpenseCycleTotal(
+        storeId,
+        previousSettlement?.clientClosureId ?? null,
+      ),
       this.getPurchaseCycleTotals(storeId, cycleStartedAt, cycleEndedAt),
       this.getEmployeeWithdrawalCycleTotal(
         storeId,
@@ -313,22 +304,22 @@ export class DailySettlementsService {
 
   private async getExpenseCycleTotal(
     storeId: string,
-    cycleStartedAt: Date | null,
-    cycleEndedAt: Date,
+    cycleStartClosureId: string | null,
   ): Promise<number> {
-    const occurredAtExpression =
-      'CASE WHEN expense.syncedAt < expense.createdAt THEN expense.syncedAt ELSE expense.createdAt END';
     const qb = this.expenseRepository
       .createQueryBuilder('expense')
       .select('COALESCE(SUM(expense.amount), 0)', 'total')
       .where('expense.storeId = :storeId', { storeId });
 
-    const row = await this.applyCycleWindow(
-      qb,
-      occurredAtExpression,
-      cycleStartedAt,
-      cycleEndedAt,
-    ).getRawOne<{ total: string | number }>();
+    if (cycleStartClosureId) {
+      qb.andWhere('expense.cycleStartClosureId = :cycleStartClosureId', {
+        cycleStartClosureId,
+      });
+    } else {
+      qb.andWhere('expense.cycleStartClosureId IS NULL');
+    }
+
+    const row = await qb.getRawOne<{ total: string | number }>();
 
     return this.toMoney(row?.total);
   }

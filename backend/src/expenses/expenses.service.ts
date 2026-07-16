@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
+import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { StoresService } from '../stores/stores.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { ListExpensesQueryDto } from './dto/list-expenses-query.dto';
@@ -19,6 +20,8 @@ export class ExpensesService {
   constructor(
     @InjectRepository(Expense)
     private readonly expenseRepository: Repository<Expense>,
+    @InjectRepository(DailySettlement)
+    private readonly dailySettlementRepository: Repository<DailySettlement>,
     private readonly storesService: StoresService,
   ) {}
 
@@ -36,9 +39,14 @@ export class ExpensesService {
     }
 
     try {
+      const cycleStartClosureId =
+        dto.cycleStartClosureId === undefined
+          ? await this.findCurrentCycleStartClosureId(scopedStoreId)
+          : dto.cycleStartClosureId;
       const record = this.expenseRepository.create({
         ...dto,
         storeId: scopedStoreId,
+        cycleStartClosureId,
         imageUrl: dto.imageUrl?.trim() || null,
         note: dto.note ?? null,
         syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
@@ -160,6 +168,17 @@ export class ExpensesService {
     }
 
     return record;
+  }
+
+  private async findCurrentCycleStartClosureId(
+    storeId: string,
+  ): Promise<string | null> {
+    const latestSettlement = await this.dailySettlementRepository.findOne({
+      where: { storeId },
+      order: { createdAt: 'DESC' },
+    });
+
+    return latestSettlement?.clientClosureId ?? null;
   }
 
   private resolveStoreForRead(
