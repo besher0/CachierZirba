@@ -91,6 +91,36 @@ export class CreateDailySettlementDto {
   employeeWithdrawalsAmount?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(0)
+  ordersCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(0)
+  expensesCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(0)
+  purchasesCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(0)
+  withdrawalsCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  paymentsAmount?: number;
+
+  @IsOptional()
   @IsString()
   @MaxLength(500)
   note?: string;

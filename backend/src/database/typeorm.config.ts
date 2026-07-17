@@ -24,6 +24,7 @@ import { AddSettlementCycleSnapshots1790000000000 } from './migrations/179000000
 import { BackfillSettlementCycleSnapshots1791000000000 } from './migrations/1791000000000-BackfillSettlementCycleSnapshots';
 import { AddEmployeePayrollWeekStartDay1792000000000 } from './migrations/1792000000000-AddEmployeePayrollWeekStartDay';
 import { AddExpenseSettlementCycleAnchor1793000000000 } from './migrations/1793000000000-AddExpenseSettlementCycleAnchor';
+import { AddSettlementArchiveSnapshots1794000000000 } from './migrations/1794000000000-AddSettlementArchiveSnapshots';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -80,6 +81,7 @@ export function createTypeOrmOptions(
         BackfillSettlementCycleSnapshots1791000000000,
         AddEmployeePayrollWeekStartDay1792000000000,
         AddExpenseSettlementCycleAnchor1793000000000,
+        AddSettlementArchiveSnapshots1794000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

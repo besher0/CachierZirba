@@ -75,6 +75,8 @@ interface ListQuery {
 interface ExpenseListQuery extends ListQuery {
   category?: string;
   description?: string;
+  cycleStartClosureId?: string;
+  unanchoredCycle?: boolean;
 }
 
 interface PurchaseListQuery extends ListQuery {
@@ -156,6 +158,8 @@ function buildExpenseQuery(params: ExpenseListQuery): string {
     to: params.to,
     category: params.category,
     description: params.description,
+    cycleStartClosureId: params.cycleStartClosureId,
+    unanchoredCycle: params.unanchoredCycle ? "true" : undefined,
   });
 }
 

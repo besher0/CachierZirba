@@ -115,6 +115,11 @@ export interface CreateDailySettlementPayload {
   purchasesAmount?: number | null;
   tawasiAmount?: number | null;
   employeeWithdrawalsAmount?: number | null;
+  ordersCount?: number | null;
+  expensesCount?: number | null;
+  purchasesCount?: number | null;
+  withdrawalsCount?: number | null;
+  paymentsAmount?: number | null;
   note?: string;
   syncedAt: string;
 }

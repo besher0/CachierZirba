@@ -63,6 +63,11 @@ export interface SettlementHistoryRow {
   purchasesAmount?: number | null;
   tawasiAmount?: number | null;
   employeeWithdrawalsAmount?: number | null;
+  ordersCount?: number | null;
+  expensesCount?: number | null;
+  purchasesCount?: number | null;
+  withdrawalsCount?: number | null;
+  paymentsAmount?: number | null;
   actualRemainingAmount: number;
   expectedRemainingAmount: number;
   differenceAmount: number;
@@ -801,6 +806,14 @@ export function mapApiSettlementToRow(item: ApiDailySettlement): SettlementHisto
       item.employeeWithdrawalsAmount === undefined
         ? null
         : Number(item.employeeWithdrawalsAmount.toFixed(2)),
+    ordersCount: item.ordersCount ?? null,
+    expensesCount: item.expensesCount ?? null,
+    purchasesCount: item.purchasesCount ?? null,
+    withdrawalsCount: item.withdrawalsCount ?? null,
+    paymentsAmount:
+      item.paymentsAmount === null || item.paymentsAmount === undefined
+        ? null
+        : Number(item.paymentsAmount.toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: getSettlementDifferenceAmount(
@@ -859,6 +872,14 @@ export function mapLocalSettlementToRow(
       item.employeeWithdrawalsAmount === undefined
         ? null
         : Number(item.employeeWithdrawalsAmount.toFixed(2)),
+    ordersCount: item.ordersCount ?? null,
+    expensesCount: item.expensesCount ?? null,
+    purchasesCount: item.purchasesCount ?? null,
+    withdrawalsCount: item.withdrawalsCount ?? null,
+    paymentsAmount:
+      item.paymentsAmount === null || item.paymentsAmount === undefined
+        ? null
+        : Number(item.paymentsAmount.toFixed(2)),
     actualRemainingAmount,
     expectedRemainingAmount: expectedRemainingClamped,
     differenceAmount: getSettlementDifferenceAmount(

@@ -139,6 +139,14 @@ export class ExpensesService {
       });
     }
 
+    if (query.cycleStartClosureId) {
+      qb.andWhere('e.cycleStartClosureId = :cycleStartClosureId', {
+        cycleStartClosureId: query.cycleStartClosureId,
+      });
+    } else if (query.unanchoredCycle) {
+      qb.andWhere('e.cycleStartClosureId IS NULL');
+    }
+
     return qb.getMany();
   }
 

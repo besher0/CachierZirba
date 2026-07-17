@@ -72,7 +72,7 @@ export class EmployeesController {
     @Query() query: ListEmployeesQueryDto,
     @CurrentUser() authUser: AuthUser,
   ): Promise<EmployeeWithdrawal[]> {
-    return this.employeesService.findWithdrawals(query.storeId, authUser);
+    return this.employeesService.findWithdrawals(query, authUser);
   }
 
   @Post('withdrawals')

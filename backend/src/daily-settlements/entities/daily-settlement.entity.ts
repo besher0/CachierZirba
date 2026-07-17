@@ -68,6 +68,21 @@ export class DailySettlement {
   @Column({ type: 'real', nullable: true })
   employeeWithdrawalsAmount: number | null;
 
+  @Column({ type: 'integer', nullable: true })
+  ordersCount: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  expensesCount: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  purchasesCount: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  withdrawalsCount: number | null;
+
+  @Column({ type: 'real', nullable: true })
+  paymentsAmount: number | null;
+
   @Column({ type: 'text', nullable: true })
   note: string | null;
 

@@ -12,6 +12,7 @@ import { StoresService } from '../stores/stores.service';
 import { CreateEmployeeAbsenceDto } from './dto/create-employee-absence.dto';
 import { CreateEmployeeWithdrawalDto } from './dto/create-employee-withdrawal.dto';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { ListEmployeesQueryDto } from './dto/list-employees-query.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeeAbsence } from './entities/employee-absence.entity';
 import { EmployeeWithdrawal } from './entities/employee-withdrawal.entity';
@@ -151,14 +152,28 @@ export class EmployeesService {
   }
 
   async findWithdrawals(
-    storeId: string | undefined,
+    query: ListEmployeesQueryDto,
     authUser: AuthUser,
   ): Promise<EmployeeWithdrawal[]> {
-    const scopedStoreId = this.resolveStoreForRead(storeId, authUser);
-    return this.withdrawalRepository.find({
-      where: scopedStoreId ? { storeId: scopedStoreId } : {},
-      order: { withdrawalDate: 'DESC', createdAt: 'DESC' },
-    });
+    const scopedStoreId = this.resolveStoreForRead(query.storeId, authUser);
+    const qb = this.withdrawalRepository
+      .createQueryBuilder('withdrawal')
+      .orderBy('withdrawal.withdrawalDate', 'DESC')
+      .addOrderBy('withdrawal.createdAt', 'DESC');
+
+    if (scopedStoreId) {
+      qb.andWhere('withdrawal.storeId = :storeId', { storeId: scopedStoreId });
+    }
+
+    if (query.from) {
+      qb.andWhere('withdrawal.createdAt >= :from', { from: query.from });
+    }
+
+    if (query.to) {
+      qb.andWhere('withdrawal.createdAt <= :to', { to: query.to });
+    }
+
+    return qb.getMany();
   }
 
   async createWithdrawal(

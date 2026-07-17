@@ -76,6 +76,14 @@ export class InventoryDestructionsService {
       qb.andWhere('destruction.storeId = :storeId', { storeId });
     }
 
+    if (query.from) {
+      qb.andWhere('destruction.destroyedAt >= :from', { from: query.from });
+    }
+
+    if (query.to) {
+      qb.andWhere('destruction.destroyedAt <= :to', { to: query.to });
+    }
+
     return qb.getMany();
   }
 

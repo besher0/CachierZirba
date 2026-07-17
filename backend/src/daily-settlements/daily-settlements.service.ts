@@ -26,6 +26,11 @@ type SettlementCycleSnapshots = {
   purchasesAmount: number;
   tawasiAmount: number;
   employeeWithdrawalsAmount: number;
+  ordersCount: number;
+  expensesCount: number;
+  purchasesCount: number;
+  withdrawalsCount: number;
+  paymentsAmount: number;
 };
 
 @Injectable()
@@ -97,6 +102,11 @@ export class DailySettlementsService {
         tawasiAmount: dto.tawasiAmount ?? snapshots.tawasiAmount,
         employeeWithdrawalsAmount:
           dto.employeeWithdrawalsAmount ?? snapshots.employeeWithdrawalsAmount,
+        ordersCount: dto.ordersCount ?? snapshots.ordersCount,
+        expensesCount: dto.expensesCount ?? snapshots.expensesCount,
+        purchasesCount: dto.purchasesCount ?? snapshots.purchasesCount,
+        withdrawalsCount: dto.withdrawalsCount ?? snapshots.withdrawalsCount,
+        paymentsAmount: dto.paymentsAmount ?? snapshots.paymentsAmount,
         note: dto.note ?? null,
         syncedAt,
       });
@@ -222,9 +232,9 @@ export class DailySettlementsService {
       requestedCycleStartedAt ?? previousSettlement?.syncedAt ?? null;
     const [
       orderTotals,
-      expensesAmount,
+      expenseTotals,
       purchaseTotals,
-      employeeWithdrawalsAmount,
+      employeeWithdrawalTotals,
     ] = await Promise.all([
       this.getOrderCycleTotals(storeId, cycleStartedAt, cycleEndedAt),
       this.getExpenseCycleTotal(
@@ -243,10 +253,16 @@ export class DailySettlementsService {
       cycleStartedAt,
       salesAmount: orderTotals.salesAmount,
       refundAmount: orderTotals.refundAmount,
-      expensesAmount,
+      expensesAmount: expenseTotals.expensesAmount,
       purchasesAmount: purchaseTotals.purchasesAmount,
       tawasiAmount: purchaseTotals.tawasiAmount,
-      employeeWithdrawalsAmount,
+      employeeWithdrawalsAmount:
+        employeeWithdrawalTotals.employeeWithdrawalsAmount,
+      ordersCount: orderTotals.ordersCount,
+      expensesCount: expenseTotals.expensesCount,
+      purchasesCount: purchaseTotals.purchasesCount,
+      withdrawalsCount: employeeWithdrawalTotals.withdrawalsCount,
+      paymentsAmount: purchaseTotals.paymentsAmount,
     };
   }
 
@@ -269,7 +285,11 @@ export class DailySettlementsService {
     storeId: string,
     cycleStartedAt: Date | null,
     cycleEndedAt: Date,
-  ): Promise<{ salesAmount: number; refundAmount: number }> {
+  ): Promise<{
+    salesAmount: number;
+    refundAmount: number;
+    ordersCount: number;
+  }> {
     const qb = this.orderRepository
       .createQueryBuilder('order')
       .select(
@@ -280,6 +300,7 @@ export class DailySettlementsService {
         'COALESCE(SUM(CASE WHEN order.status = :refundedStatus THEN order.total ELSE 0 END), 0)',
         'refundAmount',
       )
+      .addSelect('COUNT(order.id)', 'ordersCount')
       .where('order.storeId = :storeId', { storeId })
       .setParameters({
         completedStatus: OrderStatus.COMPLETED,
@@ -294,21 +315,24 @@ export class DailySettlementsService {
     ).getRawOne<{
       salesAmount: string | number;
       refundAmount: string | number;
+      ordersCount: string | number;
     }>();
 
     return {
       salesAmount: this.toMoney(row?.salesAmount),
       refundAmount: this.toMoney(row?.refundAmount),
+      ordersCount: this.toCount(row?.ordersCount),
     };
   }
 
   private async getExpenseCycleTotal(
     storeId: string,
     cycleStartClosureId: string | null,
-  ): Promise<number> {
+  ): Promise<{ expensesAmount: number; expensesCount: number }> {
     const qb = this.expenseRepository
       .createQueryBuilder('expense')
       .select('COALESCE(SUM(expense.amount), 0)', 'total')
+      .addSelect('COUNT(expense.id)', 'expensesCount')
       .where('expense.storeId = :storeId', { storeId });
 
     if (cycleStartClosureId) {
@@ -319,16 +343,27 @@ export class DailySettlementsService {
       qb.andWhere('expense.cycleStartClosureId IS NULL');
     }
 
-    const row = await qb.getRawOne<{ total: string | number }>();
+    const row = await qb.getRawOne<{
+      total: string | number;
+      expensesCount: string | number;
+    }>();
 
-    return this.toMoney(row?.total);
+    return {
+      expensesAmount: this.toMoney(row?.total),
+      expensesCount: this.toCount(row?.expensesCount),
+    };
   }
 
   private async getPurchaseCycleTotals(
     storeId: string,
     cycleStartedAt: Date | null,
     cycleEndedAt: Date,
-  ): Promise<{ purchasesAmount: number; tawasiAmount: number }> {
+  ): Promise<{
+    purchasesAmount: number;
+    tawasiAmount: number;
+    purchasesCount: number;
+    paymentsAmount: number;
+  }> {
     const occurredAtExpression =
       'CASE WHEN purchase.syncedAt < purchase.createdAt THEN purchase.syncedAt ELSE purchase.createdAt END';
     const qb = this.purchaseRepository
@@ -338,6 +373,11 @@ export class DailySettlementsService {
         `COALESCE(SUM(CASE WHEN purchase.purchaseKind = 'TAWASI' THEN purchase.totalCost ELSE 0 END), 0)`,
         'tawasiAmount',
       )
+      .addSelect(
+        `COUNT(CASE WHEN purchase.purchaseKind <> 'PAYMENT' THEN 1 END)`,
+        'purchasesCount',
+      )
+      .addSelect('COALESCE(SUM(purchase.paymentAmount), 0)', 'paymentsAmount')
       .where('purchase.storeId = :storeId', { storeId });
 
     const row = await this.applyCycleWindow(
@@ -348,11 +388,15 @@ export class DailySettlementsService {
     ).getRawOne<{
       purchasesAmount: string | number;
       tawasiAmount: string | number;
+      purchasesCount: string | number;
+      paymentsAmount: string | number;
     }>();
 
     return {
       purchasesAmount: this.toMoney(row?.purchasesAmount),
       tawasiAmount: this.toMoney(row?.tawasiAmount),
+      purchasesCount: this.toCount(row?.purchasesCount),
+      paymentsAmount: this.toMoney(row?.paymentsAmount),
     };
   }
 
@@ -360,10 +404,14 @@ export class DailySettlementsService {
     storeId: string,
     cycleStartedAt: Date | null,
     cycleEndedAt: Date,
-  ): Promise<number> {
+  ): Promise<{
+    employeeWithdrawalsAmount: number;
+    withdrawalsCount: number;
+  }> {
     const qb = this.employeeWithdrawalRepository
       .createQueryBuilder('withdrawal')
       .select('COALESCE(SUM(withdrawal.amount), 0)', 'total')
+      .addSelect('COUNT(withdrawal.id)', 'withdrawalsCount')
       .where('withdrawal.storeId = :storeId', { storeId });
 
     const row = await this.applyCycleWindow(
@@ -371,13 +419,23 @@ export class DailySettlementsService {
       'withdrawal.createdAt',
       cycleStartedAt,
       cycleEndedAt,
-    ).getRawOne<{ total: string | number }>();
+    ).getRawOne<{
+      total: string | number;
+      withdrawalsCount: string | number;
+    }>();
 
-    return this.toMoney(row?.total);
+    return {
+      employeeWithdrawalsAmount: this.toMoney(row?.total),
+      withdrawalsCount: this.toCount(row?.withdrawalsCount),
+    };
   }
 
   private toMoney(value: string | number | null | undefined): number {
     return Number(Number(value ?? 0).toFixed(2));
+  }
+
+  private toCount(value: string | number | null | undefined): number {
+    return Number.parseInt(String(value ?? 0), 10) || 0;
   }
 
   private resolveStoreForRead(

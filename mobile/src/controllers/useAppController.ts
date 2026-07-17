@@ -330,6 +330,11 @@ function buildDailySettlementCreateSyncJob(
     purchasesAmount: settlement.purchasesAmount,
     tawasiAmount: settlement.tawasiAmount,
     employeeWithdrawalsAmount: settlement.employeeWithdrawalsAmount,
+    ordersCount: settlement.ordersCount,
+    expensesCount: settlement.expensesCount,
+    purchasesCount: settlement.purchasesCount,
+    withdrawalsCount: settlement.withdrawalsCount,
+    paymentsAmount: settlement.paymentsAmount,
     note: settlement.note,
     syncedAt: settlement.syncedAt,
   };
@@ -503,6 +508,15 @@ export function useAppController() {
     key: string;
     promise: Promise<boolean>;
   } | null>(null);
+  const latestRemoteSettlementCycleRef = useRef<{
+    closedAt: string | null;
+    clientClosureId: string | null;
+    businessDate: string | null;
+  }>({
+    closedAt: null,
+    clientClosureId: null,
+    businessDate: null,
+  });
   const activeScreenRefreshPromiseRef = useRef<{
     key: string;
     promise: Promise<void>;
@@ -1432,143 +1446,6 @@ export function useAppController() {
     shouldComputePurchaseReports,
   ]);
 
-  const settlementRecordsByCycle = useMemo(() => {
-    const orders = new Map<string, OrderHistoryRow[]>();
-    const expensesByDate = new Map<string, ExpenseRow[]>();
-    const purchasesByDate = new Map<string, PurchaseRow[]>();
-    const withdrawals = new Map<string, EmployeeWithdrawalEntry[]>();
-
-    if (!shouldComputeSettlementReports) {
-      return {
-        orders,
-        expenses: expensesByDate,
-        purchases: purchasesByDate,
-        withdrawals,
-      };
-    }
-
-    const append = <T,>(map: Map<string, T[]>, key: string, value: T) => {
-      const rows = map.get(key);
-      if (rows) {
-        rows.push(value);
-        return;
-      }
-      map.set(key, [value]);
-    };
-
-    const isInCycle = (
-      recordDate: string,
-      occurredAt: string,
-      cycleStartedAt: string | null,
-      cycleEndedAt: string | null,
-      previousBusinessDate: string | null,
-      businessDate: string,
-    ) => {
-      const normalizedOccurredAt = normalizeIsoTimestamp(occurredAt);
-
-      if (normalizedOccurredAt && cycleEndedAt) {
-        return (
-          normalizedOccurredAt <= cycleEndedAt &&
-          (!cycleStartedAt || normalizedOccurredAt > cycleStartedAt)
-        );
-      }
-
-      if (previousBusinessDate) {
-        return recordDate > previousBusinessDate && recordDate <= businessDate;
-      }
-
-      return recordDate <= businessDate;
-    };
-
-    const chronologicalSettlements = [...mergedSettlementRows].sort((a, b) =>
-      a.businessDate.localeCompare(b.businessDate),
-    );
-
-    let previousClosedAt: string | null = null;
-    let previousBusinessDate: string | null = null;
-    let previousClosureId: string | null = null;
-
-    chronologicalSettlements.forEach((settlement) => {
-      const key = settlement.clientClosureId;
-      const cycleEndedAt = normalizeIsoTimestamp(settlement.syncedAt);
-      const cycleStartedAt =
-        normalizeIsoTimestamp(settlement.cycleStartedAt) ?? previousClosedAt;
-
-      allMergedOrderRows.forEach((item) => {
-        if (
-          isInCycle(
-            toBusinessDateFromTimestamp(item.orderedAt),
-            item.orderedAt,
-            cycleStartedAt,
-            cycleEndedAt,
-            previousBusinessDate,
-            settlement.businessDate,
-          )
-        ) {
-          append(orders, key, item);
-        }
-      });
-      mergedExpenseRows.forEach((item) => {
-        const belongsToCycle =
-          item.cycleStartClosureId !== undefined
-            ? item.cycleStartClosureId === previousClosureId
-            : isInCycle(
-                item.expenseDate,
-                item.occurredAt,
-                cycleStartedAt,
-                cycleEndedAt,
-                previousBusinessDate,
-                settlement.businessDate,
-              );
-        if (belongsToCycle) {
-          append(expensesByDate, key, item);
-        }
-      });
-      mergedPurchaseRows.forEach((item) => {
-        if (
-          isInCycle(
-            item.purchaseDate,
-            item.occurredAt,
-            cycleStartedAt,
-            cycleEndedAt,
-            previousBusinessDate,
-            settlement.businessDate,
-          )
-        ) {
-          append(purchasesByDate, key, item);
-        }
-      });
-      selectedStoreWithdrawals.forEach((item) => {
-        if (
-          isInCycle(
-            item.withdrawalDate,
-            item.createdAt,
-            cycleStartedAt,
-            cycleEndedAt,
-            previousBusinessDate,
-            settlement.businessDate,
-          )
-        ) {
-          append(withdrawals, key, item);
-        }
-      });
-
-      previousClosedAt = cycleEndedAt ?? previousClosedAt;
-      previousBusinessDate = settlement.businessDate;
-      previousClosureId = settlement.clientClosureId;
-    });
-
-    return { orders, expenses: expensesByDate, purchases: purchasesByDate, withdrawals };
-  }, [
-    allMergedOrderRows,
-    mergedSettlementRows,
-    mergedExpenseRows,
-    mergedPurchaseRows,
-    normalizeIsoTimestamp,
-    selectedStoreWithdrawals,
-    shouldComputeSettlementReports,
-  ]);
-
   const employeeNameById = useMemo(
     () => new Map(selectedStoreEmployees.map((employee) => [employee.id, employee.name])),
     [selectedStoreEmployees],
@@ -1581,66 +1458,24 @@ export function useAppController() {
       }
 
       return mergedSettlementRows.map((settlement) => {
-        const dayOrders = settlementRecordsByCycle.orders.get(settlement.clientClosureId) ?? [];
-        const dayExpenses = settlementRecordsByCycle.expenses.get(settlement.clientClosureId) ?? [];
-        const dayPurchases = settlementRecordsByCycle.purchases.get(settlement.clientClosureId) ?? [];
-        const dayWithdrawals = settlementRecordsByCycle.withdrawals.get(settlement.clientClosureId) ?? [];
-        const computedSalesAmount = Number(
-          dayOrders
-            .filter((item) => item.status === "COMPLETED")
-            .reduce((sum, item) => sum + item.total, 0)
-            .toFixed(2),
-        );
-        const computedRefundAmount = Number(
-          dayOrders
-            .filter((item) => item.status === "REFUNDED")
-            .reduce((sum, item) => sum + item.total, 0)
-            .toFixed(2),
-        );
-        const computedExpensesAmount = Number(
-          dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
-        );
-        const computedPurchasesAmount = Number(
-          dayPurchases
-            .reduce((sum, item) => sum + item.totalCost, 0)
-            .toFixed(2),
-        );
-        const computedTawasiAmount = Number(
-          dayPurchases
-            .filter((item) => item.purchaseKind === "TAWASI")
-            .reduce((sum, item) => sum + item.totalCost, 0)
-            .toFixed(2),
-        );
-        const computedWithdrawalsAmount = Number(
-          dayWithdrawals.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
-        );
-
         return {
           ...settlement,
-          ordersCount: dayOrders.length,
-          salesAmount: settlement.salesAmount ?? computedSalesAmount,
-          refundAmount: settlement.refundAmount ?? computedRefundAmount,
-          expensesCount: dayExpenses.length,
-          expensesAmount: settlement.expensesAmount ?? computedExpensesAmount,
-          purchasesCount: dayPurchases.filter(
-            (item) => item.purchaseKind !== "PAYMENT",
-          ).length,
-          purchasesAmount: settlement.purchasesAmount ?? computedPurchasesAmount,
-          tawasiAmount: settlement.tawasiAmount ?? computedTawasiAmount,
-          paymentsAmount: Number(
-            dayPurchases
-              .reduce((sum, item) => sum + item.paymentAmount, 0)
-              .toFixed(2),
-          ),
-          withdrawalsCount: dayWithdrawals.length,
-          withdrawalsAmount:
-            settlement.employeeWithdrawalsAmount ?? computedWithdrawalsAmount,
+          ordersCount: settlement.ordersCount ?? 0,
+          salesAmount: settlement.salesAmount ?? 0,
+          refundAmount: settlement.refundAmount ?? 0,
+          expensesCount: settlement.expensesCount ?? 0,
+          expensesAmount: settlement.expensesAmount ?? 0,
+          purchasesCount: settlement.purchasesCount ?? 0,
+          purchasesAmount: settlement.purchasesAmount ?? 0,
+          tawasiAmount: settlement.tawasiAmount ?? 0,
+          paymentsAmount: settlement.paymentsAmount ?? 0,
+          withdrawalsCount: settlement.withdrawalsCount ?? 0,
+          withdrawalsAmount: settlement.employeeWithdrawalsAmount ?? 0,
         };
       });
     },
     [
       mergedSettlementRows,
-      settlementRecordsByCycle,
       shouldComputeSettlementReports,
     ],
   );
@@ -2300,116 +2135,230 @@ export function useAppController() {
   }, []);
 
   const openSettlementDetails = useCallback(
-    (settlement: SettlementHistoryRow) => {
-      const dayOrders = settlementRecordsByCycle.orders.get(settlement.clientClosureId) ?? [];
-      const dayExpenses = settlementRecordsByCycle.expenses.get(settlement.clientClosureId) ?? [];
-      const dayPurchases = settlementRecordsByCycle.purchases.get(settlement.clientClosureId) ?? [];
-      const dayWithdrawals = (settlementRecordsByCycle.withdrawals.get(
-        settlement.clientClosureId,
-      ) ?? [])
-        .map((item) => ({
+    async (settlement: SettlementHistoryRow) => {
+      const chronologicalSettlements = [...mergedSettlementRows].sort((a, b) =>
+        a.businessDate.localeCompare(b.businessDate),
+      );
+      const settlementIndex = chronologicalSettlements.findIndex(
+        (item) => item.clientClosureId === settlement.clientClosureId,
+      );
+      const previousSettlement =
+        settlementIndex > 0 ? chronologicalSettlements[settlementIndex - 1] : null;
+      const cycleStartedAt =
+        normalizeIsoTimestamp(settlement.cycleStartedAt) ??
+        normalizeIsoTimestamp(previousSettlement?.syncedAt);
+      const cycleEndedAt = normalizeIsoTimestamp(settlement.syncedAt);
+
+      const isInCycle = (recordDate: string, occurredAt: string) => {
+        const normalizedOccurredAt = normalizeIsoTimestamp(occurredAt);
+        if (normalizedOccurredAt && cycleEndedAt) {
+          return (
+            normalizedOccurredAt <= cycleEndedAt &&
+            (!cycleStartedAt || normalizedOccurredAt > cycleStartedAt)
+          );
+        }
+
+        if (previousSettlement) {
+          return (
+            recordDate > previousSettlement.businessDate &&
+            recordDate <= settlement.businessDate
+          );
+        }
+
+        return recordDate <= settlement.businessDate;
+      };
+
+      const showSettlementDetail = ({
+        orders,
+        expenses,
+        purchases,
+        withdrawals,
+      }: {
+        orders: OrderHistoryRow[];
+        expenses: ExpenseRow[];
+        purchases: PurchaseRow[];
+        withdrawals: EmployeeWithdrawalEntry[];
+      }) => {
+        const dayWithdrawals = withdrawals.map((item) => ({
           ...item,
-          employeeName:
-            employeeNameById.get(item.employeeId) ?? item.employeeId,
+          employeeName: employeeNameById.get(item.employeeId) ?? item.employeeId,
         }));
-      const dayProductSalesSummaryRows =
-        buildProductSalesSummaryRowsForOrders(dayOrders);
+        const productSalesRows = buildProductSalesSummaryRowsForOrders(orders);
+        const computedSalesAmount = Number(
+          orders
+            .filter((item) => item.status === "COMPLETED")
+            .reduce((sum, item) => sum + item.total, 0)
+            .toFixed(2),
+        );
+        const computedRefundAmount = Number(
+          orders
+            .filter((item) => item.status === "REFUNDED")
+            .reduce((sum, item) => sum + item.total, 0)
+            .toFixed(2),
+        );
+        const salesAmount = settlement.salesAmount ?? computedSalesAmount;
+        const refundAmount = settlement.refundAmount ?? computedRefundAmount;
+        const netSalesAmount = Number((salesAmount - refundAmount).toFixed(2));
+        const computedExpensesAmount = Number(
+          expenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+        );
+        const computedPurchasesAmount = Number(
+          purchases.reduce((sum, item) => sum + item.totalCost, 0).toFixed(2),
+        );
+        const computedTawasiAmount = Number(
+          purchases
+            .filter((item) => item.purchaseKind === "TAWASI")
+            .reduce((sum, item) => sum + item.totalCost, 0)
+            .toFixed(2),
+        );
+        const computedWithdrawalsAmount = Number(
+          dayWithdrawals.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+        );
+        const expensesAmount = settlement.expensesAmount ?? computedExpensesAmount;
+        const purchasesAmount =
+          settlement.purchasesAmount ?? computedPurchasesAmount;
+        const tawasiAmount = settlement.tawasiAmount ?? computedTawasiAmount;
+        const withdrawalsAmount =
+          settlement.employeeWithdrawalsAmount ?? computedWithdrawalsAmount;
+        const expectedBeforeDistributionAmount = Number(
+          (settlement.expectedRevenue ?? 0).toFixed(2),
+        );
+        const distributedAmount = Number(
+          (settlement.cashBoxAmount + settlement.sharesAmount).toFixed(2),
+        );
+        const expectedRemainingAmount = Number(
+          Math.max(
+            expectedBeforeDistributionAmount - distributedAmount,
+            0,
+          ).toFixed(2),
+        );
+        const inferredCarryInAmount = Number(
+          (
+            expectedBeforeDistributionAmount -
+            (netSalesAmount -
+              expensesAmount -
+              purchasesAmount -
+              withdrawalsAmount)
+          ).toFixed(2),
+        );
+        const carryInAmount =
+          settlement.carryInAmount > 0
+            ? settlement.carryInAmount
+            : inferredCarryInAmount;
+        const actualRemainingAmount = Number(
+          settlement.actualRemainingAmount.toFixed(2),
+        );
+        const differenceAmount = Number(
+          (
+            actualRemainingAmount - expectedBeforeDistributionAmount
+          ).toFixed(2),
+        );
 
-      const computedSalesAmount = dayOrders
-        .filter((item) => item.status === "COMPLETED")
-        .reduce((sum, item) => sum + item.total, 0);
-      const computedRefundAmount = dayOrders
-        .filter((item) => item.status === "REFUNDED")
-        .reduce((sum, item) => sum + item.total, 0);
-      const salesAmount = settlement.salesAmount ?? computedSalesAmount;
-      const refundAmount = settlement.refundAmount ?? computedRefundAmount;
-      const netSalesAmount = Number((salesAmount - refundAmount).toFixed(2));
-      const computedExpensesAmount = Number(
-        dayExpenses.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
-      );
-      const computedPurchasesAmount = Number(
-        dayPurchases.reduce((sum, item) => sum + item.totalCost, 0).toFixed(2),
-      );
-      const computedTawasiAmount = Number(
-        dayPurchases
-          .filter((item) => item.purchaseKind === "TAWASI")
-          .reduce((sum, item) => sum + item.totalCost, 0)
-          .toFixed(2),
-      );
-      const computedWithdrawalsAmount = Number(
-        dayWithdrawals.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
-      );
-      const expensesAmount =
-        settlement.expensesAmount ?? computedExpensesAmount;
-      const purchasesAmount =
-        settlement.purchasesAmount ?? computedPurchasesAmount;
-      const tawasiAmount = settlement.tawasiAmount ?? computedTawasiAmount;
-      const withdrawalsAmount =
-        settlement.employeeWithdrawalsAmount ?? computedWithdrawalsAmount;
+        setSelectedSettlementDetail({
+          businessDate: settlement.businessDate,
+          orders,
+          expenses,
+          purchases,
+          withdrawals: dayWithdrawals,
+          note: settlement.note,
+          salesAmount: Number(salesAmount.toFixed(2)),
+          refundAmount: Number(refundAmount.toFixed(2)),
+          netSalesAmount,
+          expensesAmount,
+          purchasesAmount,
+          tawasiAmount,
+          withdrawalsAmount,
+          productSalesSummaryRows: productSalesRows,
+          carryInAmount,
+          expectedBeforeDistributionAmount,
+          distributedAmount,
+          expectedRemainingAmount,
+          actualRemainingAmount,
+          differenceAmount,
+          sharesAmount: Number(settlement.sharesAmount.toFixed(2)),
+          cashBoxAmount: Number(settlement.cashBoxAmount.toFixed(2)),
+        });
+      };
 
-      const expectedBeforeDistributionAmount = Number(
-        (settlement.expectedRevenue ?? 0).toFixed(2),
-      );
-      const distributedAmount = Number(
-        (settlement.cashBoxAmount + settlement.sharesAmount).toFixed(2),
-      );
-      const expectedRemainingAmount = Number(
-        Math.max(
-          expectedBeforeDistributionAmount - distributedAmount,
-          0,
-        ).toFixed(2),
-      );
-      const inferredCarryInAmount = Number(
-        (
-          expectedBeforeDistributionAmount -
-          (netSalesAmount -
-            expensesAmount -
-            purchasesAmount -
-            withdrawalsAmount)
-        ).toFixed(2),
-      );
-      const carryInAmount =
-        settlement.carryInAmount > 0
-          ? settlement.carryInAmount
-          : inferredCarryInAmount;
-      const actualRemainingAmount = Number(
-        settlement.actualRemainingAmount.toFixed(2),
-      );
-      const differenceAmount = Number(
-        (
-          actualRemainingAmount - expectedBeforeDistributionAmount
-        ).toFixed(2),
-      );
-
-      setSelectedSettlementDetail({
-        businessDate: settlement.businessDate,
-        orders: dayOrders,
-        expenses: dayExpenses,
-        purchases: dayPurchases,
-        withdrawals: dayWithdrawals,
-        note: settlement.note,
-        salesAmount: Number(salesAmount.toFixed(2)),
-        refundAmount: Number(refundAmount.toFixed(2)),
-        netSalesAmount,
-        expensesAmount,
-        purchasesAmount,
-        tawasiAmount,
-        withdrawalsAmount,
-        productSalesSummaryRows: dayProductSalesSummaryRows,
-        carryInAmount,
-        expectedBeforeDistributionAmount,
-        distributedAmount,
-        expectedRemainingAmount,
-        actualRemainingAmount,
-        differenceAmount,
-        sharesAmount: Number(settlement.sharesAmount.toFixed(2)),
-        cashBoxAmount: Number(settlement.cashBoxAmount.toFixed(2)),
+      showSettlementDetail({
+        orders: [],
+        expenses: [],
+        purchases: [],
+        withdrawals: [],
       });
+
+      if (!authToken || !selectedStoreId || !isOnline || !cycleEndedAt) {
+        return;
+      }
+
+      try {
+        const cycleFromDate = cycleStartedAt
+          ? toBusinessDateFromTimestamp(cycleStartedAt)
+          : undefined;
+        const [orderData, expenseData, purchaseData, withdrawalData] =
+          await Promise.all([
+            fetchOrders(authToken, {
+              storeId: selectedStoreId,
+              from: cycleStartedAt ?? undefined,
+              to: cycleEndedAt,
+            }),
+            fetchExpenses(authToken, {
+              storeId: selectedStoreId,
+              ...(previousSettlement
+                ? { cycleStartClosureId: previousSettlement.clientClosureId }
+                : { unanchoredCycle: true }),
+              to: settlement.businessDate,
+            }),
+            fetchPurchases(authToken, {
+              storeId: selectedStoreId,
+              from: cycleFromDate,
+              to: settlement.businessDate,
+            }),
+            fetchEmployeeWithdrawals(authToken, {
+              storeId: selectedStoreId,
+              from: cycleStartedAt ?? undefined,
+              to: cycleEndedAt,
+            }),
+          ]);
+
+        const orders = orderData
+          .map(mapApiOrderToRow)
+          .filter((item) =>
+            isInCycle(toBusinessDateFromTimestamp(item.orderedAt), item.orderedAt),
+          );
+        const expenses = expenseData
+          .map(mapApiExpenseToRow)
+          .filter((item) => isInCycle(item.expenseDate, item.occurredAt));
+        const purchases = purchaseData
+          .map(mapApiPurchaseToRow)
+          .filter((item) => isInCycle(item.purchaseDate, item.occurredAt));
+        const withdrawals = withdrawalData
+          .map((item): EmployeeWithdrawalEntry => ({
+            id: item.clientWithdrawalId,
+            employeeId: item.employeeClientId,
+            storeId: item.storeId,
+            amount: item.amount,
+            withdrawalDate: item.withdrawalDate,
+            note: item.note,
+            createdAt:
+              getEarliestIsoTimestamp(item.syncedAt, item.createdAt) ??
+              item.createdAt,
+            synced: true,
+          }))
+          .filter((item) => isInCycle(item.withdrawalDate, item.createdAt));
+
+        showSettlementDetail({ orders, expenses, purchases, withdrawals });
+      } catch {
+        setStatusMessage("تعذر تحميل تفاصيل هذه التسوية حالياً.");
+      }
     },
     [
+      authToken,
       buildProductSalesSummaryRowsForOrders,
       employeeNameById,
-      settlementRecordsByCycle,
+      isOnline,
+      mergedSettlementRows,
+      selectedStoreId,
     ],
   );
 
@@ -3744,6 +3693,7 @@ export function useAppController() {
     try {
       const data = await fetchOrders(authToken, {
         storeId: selectedStoreId,
+        limit: ORDER_REFRESH_LIMIT,
       });
       setRemoteOrders(data);
       return true;
@@ -3767,6 +3717,21 @@ export function useAppController() {
       const data = await fetchDailySettlements(authToken, {
         storeId: selectedStoreId,
       });
+      const latestRemoteSettlement = [...data].sort((a, b) => {
+        const dateComparison = b.businessDate.localeCompare(a.businessDate);
+        return dateComparison || b.syncedAt.localeCompare(a.syncedAt);
+      })[0];
+      latestRemoteSettlementCycleRef.current = latestRemoteSettlement
+        ? {
+            closedAt: normalizeIsoTimestamp(latestRemoteSettlement.syncedAt),
+            clientClosureId: latestRemoteSettlement.clientClosureId,
+            businessDate: latestRemoteSettlement.businessDate,
+          }
+        : {
+            closedAt: null,
+            clientClosureId: null,
+            businessDate: null,
+          };
       const remoteSettlementDates = new Set(
         data.map((item) => item.businessDate),
       );
@@ -4116,14 +4081,190 @@ export function useAppController() {
       return settlementRefreshPromiseRef.current.promise;
     }
 
-    const refreshPromise = Promise.all([
-      refreshSettlementOrdersData(),
-      refreshInventoryData(),
-      refreshDailySettlementsData(),
-      refreshEmployeesData(),
-      refreshExpensesData(),
-      refreshProductsData(),
-    ]).then((results) => results.every(Boolean));
+    const refreshPromise = (async () => {
+      const settlementsOk = await refreshDailySettlementsData();
+      const remoteCycleStart = latestRemoteSettlementCycleRef.current.closedAt;
+      const localCycleStart = settlementCycleStartIso ?? null;
+      const useLocalCycleStart =
+        localCycleStart !== null &&
+        (remoteCycleStart === null || localCycleStart > remoteCycleStart);
+      const cycleStart = useLocalCycleStart
+        ? localCycleStart
+        : remoteCycleStart ?? undefined;
+      const cycleStartDate = cycleStart
+        ? toBusinessDateFromTimestamp(cycleStart)
+        : undefined;
+      const cycleStartClosureId =
+        (useLocalCycleStart
+          ? settlementCycleStartClosureId
+          : latestRemoteSettlementCycleRef.current.clientClosureId) ??
+        settlementCycleStartClosureId ??
+        undefined;
+      const todayIso = new Date().toISOString();
+
+      try {
+        const [
+          orderData,
+          purchaseData,
+          expenseData,
+          stockData,
+          destructionData,
+          employeeData,
+          absenceData,
+          withdrawalData,
+          productsOk,
+        ] = await Promise.all([
+          fetchOrders(authToken, {
+            storeId: selectedStoreId,
+            from: cycleStart,
+            to: todayIso,
+          }),
+          fetchPurchases(authToken, {
+            storeId: selectedStoreId,
+            from: cycleStartDate,
+            to: todayDate,
+          }),
+          fetchExpenses(authToken, {
+            storeId: selectedStoreId,
+            ...(cycleStartClosureId
+              ? { cycleStartClosureId }
+              : { unanchoredCycle: true }),
+            to: todayDate,
+          }),
+          fetchInventoryStock(authToken, { storeId: selectedStoreId }),
+          fetchInventoryDestructions(authToken, {
+            storeId: selectedStoreId,
+            from: cycleStart,
+            to: todayIso,
+          }),
+          fetchEmployees(authToken, { storeId: selectedStoreId }),
+          fetchEmployeeAbsences(authToken, { storeId: selectedStoreId }),
+          fetchEmployeeWithdrawals(authToken, {
+            storeId: selectedStoreId,
+            from: cycleStart,
+            to: todayIso,
+          }),
+          refreshProductsData(),
+        ]);
+
+        setRemoteOrders(orderData);
+        replaceRemotePurchases(purchaseData);
+        setRemoteExpenses(expenseData);
+        setRemoteInventoryStockRows(stockData);
+        setRemoteInventoryDestructions(destructionData);
+
+        const pendingAbsenceDeletes = new Set(
+          queue
+            .filter(
+              (job) =>
+                job.entity === "EMPLOYEE_ABSENCE" && job.action === "DELETE",
+            )
+            .map((job) => job.referenceId),
+        );
+        const pendingWithdrawalDeletes = new Set(
+          queue
+            .filter(
+              (job) =>
+                job.entity === "EMPLOYEE_WITHDRAWAL" &&
+                job.action === "DELETE",
+            )
+            .map((job) => job.referenceId),
+        );
+
+        setEmployees((previous) => {
+          const selected = new Map<string, Employee>();
+          employeeData.forEach((item) => {
+            selected.set(item.clientEmployeeId, {
+              id: item.clientEmployeeId,
+              storeId: item.storeId,
+              name: item.name,
+              weeklySalary: item.weeklySalary,
+              payrollWeekStartDay: normalizePayrollWeekStartDay(
+                item.payrollWeekStartDay,
+              ),
+              isActive: item.isActive,
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+              synced: true,
+            });
+          });
+          previous
+            .filter(
+              (item) => item.storeId === selectedStoreId && item.synced !== true,
+            )
+            .forEach((item) =>
+              selected.set(item.id, normalizeLocalEmployeePayrollDay(item)),
+            );
+
+          return [
+            ...previous.filter((item) => item.storeId !== selectedStoreId),
+            ...Array.from(selected.values()),
+          ].sort((a, b) => a.name.localeCompare(b.name, "ar"));
+        });
+
+        setEmployeeAbsences((previous) => {
+          const selected = new Map<string, EmployeeAbsenceEntry>();
+          absenceData.forEach((item) => {
+            if (!pendingAbsenceDeletes.has(item.clientAbsenceId)) {
+              selected.set(item.clientAbsenceId, {
+                id: item.clientAbsenceId,
+                employeeId: item.employeeClientId,
+                storeId: item.storeId,
+                absenceDate: item.absenceDate,
+                note: item.note,
+                createdAt: item.createdAt,
+                synced: true,
+              });
+            }
+          });
+          previous
+            .filter(
+              (item) => item.storeId === selectedStoreId && item.synced !== true,
+            )
+            .forEach((item) => selected.set(item.id, item));
+
+          return [
+            ...previous.filter((item) => item.storeId !== selectedStoreId),
+            ...Array.from(selected.values()),
+          ].sort((a, b) => b.absenceDate.localeCompare(a.absenceDate));
+        });
+
+        setEmployeeWithdrawals((previous) => {
+          const selected = new Map<string, EmployeeWithdrawalEntry>();
+          withdrawalData.forEach((item) => {
+            if (!pendingWithdrawalDeletes.has(item.clientWithdrawalId)) {
+              selected.set(item.clientWithdrawalId, {
+                id: item.clientWithdrawalId,
+                employeeId: item.employeeClientId,
+                storeId: item.storeId,
+                amount: item.amount,
+                withdrawalDate: item.withdrawalDate,
+                note: item.note,
+                createdAt:
+                  getEarliestIsoTimestamp(item.syncedAt, item.createdAt) ??
+                  item.createdAt,
+                synced: true,
+              });
+            }
+          });
+          previous
+            .filter(
+              (item) => item.storeId === selectedStoreId && item.synced !== true,
+            )
+            .forEach((item) => selected.set(item.id, item));
+
+          return [
+            ...previous.filter((item) => item.storeId !== selectedStoreId),
+            ...Array.from(selected.values()),
+          ].sort((a, b) => b.withdrawalDate.localeCompare(a.withdrawalDate));
+        });
+
+        return settlementsOk && productsOk;
+      } catch (error: unknown) {
+        handleApiFailure(error, "تعذر تحديث بيانات التسوية من السيرفر.");
+        return false;
+      }
+    })();
     settlementRefreshPromiseRef.current = {
       key: refreshKey,
       promise: refreshPromise,
@@ -4138,14 +4279,16 @@ export function useAppController() {
     }
   }, [
     authToken,
+    handleApiFailure,
     isOnline,
+    queue,
     refreshDailySettlementsData,
-    refreshEmployeesData,
-    refreshExpensesData,
-    refreshInventoryData,
-    refreshSettlementOrdersData,
     refreshProductsData,
+    replaceRemotePurchases,
     selectedStoreId,
+    settlementCycleStartClosureId,
+    settlementCycleStartIso,
+    todayDate,
   ]);
 
   const refreshDashboardData = useCallback(async () => {
@@ -4409,12 +4552,7 @@ export function useAppController() {
             return;
           case "settlement":
             await Promise.all([
-              refreshForStore("settlement-orders", refreshSettlementOrdersData),
-              refreshForStore("inventory", refreshInventoryData),
-              refreshForStore("settlements", refreshDailySettlementsData),
-              refreshForStore("employees", refreshEmployeesData),
-              refreshForStore("expenses", refreshExpensesData),
-              refreshGlobal("products", refreshProductsData),
+              refreshForStore("settlement", refreshSettlementData),
               isAdmin
                 ? refreshResource(
                     `product-sales:${selectedStoreId}:${adminProductSalesFromInput}:${adminProductSalesToInput}`,
@@ -4469,7 +4607,7 @@ export function useAppController() {
     refreshInventoryData,
     refreshOrdersData,
     refreshProductsData,
-    refreshSettlementOrdersData,
+    refreshSettlementData,
     refreshResource,
     refreshStoresData,
     selectedStoreId,
@@ -6443,6 +6581,17 @@ export function useAppController() {
       tawasiAmount: Number(todayTawasiTotal.toFixed(2)),
       employeeWithdrawalsAmount: Number(
         todayEmployeeWithdrawalsTotal.toFixed(2),
+      ),
+      ordersCount: ordersInCurrentCycle.length,
+      expensesCount: expensesInCurrentCycle.length,
+      purchasesCount: purchasesInCurrentCycle.filter(
+        (item) => item.purchaseKind !== "PAYMENT",
+      ).length,
+      withdrawalsCount: withdrawalsInCurrentCycle.length,
+      paymentsAmount: Number(
+        purchasesInCurrentCycle
+          .reduce((sum, item) => sum + item.paymentAmount, 0)
+          .toFixed(2),
       ),
       note: settlementNoteInput.trim() || undefined,
       syncedAt: createdAt,
