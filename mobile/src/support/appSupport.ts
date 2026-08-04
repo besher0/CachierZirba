@@ -123,6 +123,7 @@ export interface ProductSupplyRow {
   unitType: ProductTemplate["unitType"];
   sellPrice: number;
   costPrice: number;
+  excludeFromPurchaseInvoice: boolean;
   remainingQty: number;
   previousRemainingQty: number;
   receivedToday: number;
@@ -185,6 +186,8 @@ export const EXPORT_FILE_PREFIX = "zerbe";
 export const CLICK_SOUND_SOURCE = require("../../assets/click.wav");
 export const MISC_CART_ITEM_ID = "__MISC__";
 export const MISC_CART_ITEM_NAME = "منوعات";
+export const ICE_CREAM_CART_ITEM_ID = "__ICE_CREAM__";
+export const ICE_CREAM_CART_ITEM_NAME = "بوظة";
 export const RENT_CART_ITEM_ID = "__RENT__";
 export const RENT_CART_ITEM_NAME = "أجار";
 export const PRODUCT_ORDER_STORAGE_KEY = `${STORAGE_KEYS.products}.orderByStore.v1`;
@@ -346,6 +349,7 @@ export function buildProductsFromHistory(
         unitType: "PIECE",
         costPrice: item.unitPrice > 0 ? item.unitPrice : 0,
         price: item.unitPrice > 0 ? item.unitPrice : 0,
+        excludeFromPurchaseInvoice: false,
       });
     });
   });
@@ -363,6 +367,7 @@ export function mapApiProductToLocal(product: ApiProduct): LocalProduct {
     unitType: product.unitType,
     price: product.price,
     costPrice: product.costPrice,
+    excludeFromPurchaseInvoice: product.excludeFromPurchaseInvoice ?? false,
     synced: true,
     createdLocallyAt: product.createdAt,
     updatedLocallyAt: product.updatedAt,
@@ -388,6 +393,7 @@ export function toLocalProduct(
     unitType: product.unitType,
     price: product.price,
     costPrice: product.costPrice,
+    excludeFromPurchaseInvoice: product.excludeFromPurchaseInvoice ?? false,
     synced: (product as LocalProduct).synced ?? false,
     createdLocallyAt,
     updatedLocallyAt,

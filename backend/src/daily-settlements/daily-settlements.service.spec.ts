@@ -156,4 +156,49 @@ describe('DailySettlementsService', () => {
     expect(repository.save).toHaveBeenCalledWith(created);
     expect(storesService.setCashCarry).toHaveBeenCalledWith(storeId, 30);
   });
+
+  it('excludes stock-only purchases from generated purchase totals', async () => {
+    const purchaseQb = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      setParameters: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({
+        purchasesAmount: 0,
+        tawasiAmount: 0,
+        purchasesCount: 0,
+        paymentsAmount: 0,
+      }),
+    };
+    purchaseRepository.createQueryBuilder.mockReturnValueOnce(purchaseQb);
+    const created = {
+      ...payload,
+      expectedRevenue: undefined,
+      note: null,
+      syncedAt: new Date(payload.syncedAt),
+    } as DailySettlement;
+    const saved = { ...created, id: 'server-id' } as DailySettlement;
+    repository.findOne
+      ?.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(saved);
+    repository.create?.mockReturnValue(created);
+    repository.save?.mockResolvedValue(saved);
+
+    await service.createOrUpdate(
+      { ...payload, expectedRevenue: undefined },
+      cashierUser,
+    );
+
+    expect(purchaseQb.select).toHaveBeenCalledWith(
+      expect.stringContaining("purchase.purchaseKind <> 'STOCK_ONLY'"),
+      'purchasesAmount',
+    );
+    expect(purchaseQb.addSelect).toHaveBeenCalledWith(
+      expect.stringContaining("'STOCK_ONLY'"),
+      'purchasesCount',
+    );
+  });
 });

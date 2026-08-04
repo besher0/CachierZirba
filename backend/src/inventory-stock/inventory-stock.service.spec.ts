@@ -200,6 +200,29 @@ describe('InventoryStockService', () => {
     ]);
   });
 
+  it('counts stock-only purchases as received inventory', async () => {
+    mockSingleProduct();
+    purchaseRepository.find.mockResolvedValue([
+      {
+        storeId,
+        productName: 'Cake',
+        quantity: 4,
+        purchaseKind: 'STOCK_ONLY',
+        purchaseDate: '2020-01-03',
+        createdAt: new Date('2020-01-03T12:00:00.000Z'),
+      } as Purchase,
+    ]);
+
+    const rows = await service.findAll({ storeId }, authUser);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        productClientId: 'product-1',
+        remainingQty: 4,
+      }),
+    ]);
+  });
+
   it('does not change previous remaining from movements after the last settlement', async () => {
     mockSingleProduct();
     dailySettlementRepository.find.mockResolvedValue([

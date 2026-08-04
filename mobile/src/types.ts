@@ -33,6 +33,7 @@ export interface ProductTemplate {
   price: number;
   costPrice: number;
   unitType: 'PIECE' | 'KG';
+  excludeFromPurchaseInvoice?: boolean;
 }
 
 export interface CreateProductPayload {
@@ -41,6 +42,7 @@ export interface CreateProductPayload {
   unitType: 'PIECE' | 'KG';
   price: number;
   costPrice: number;
+  excludeFromPurchaseInvoice: boolean;
   syncedAt: string;
 }
 
@@ -49,11 +51,13 @@ export interface UpdateProductPayload {
   unitType?: 'PIECE' | 'KG';
   price?: number;
   costPrice?: number;
+  excludeFromPurchaseInvoice?: boolean;
   syncedAt?: string;
 }
 
 export interface LocalProduct extends ProductTemplate {
   clientProductId: string;
+  excludeFromPurchaseInvoice: boolean;
   synced: boolean;
   createdLocallyAt: string;
   updatedLocallyAt: string;
@@ -124,7 +128,7 @@ export interface CreateDailySettlementPayload {
   syncedAt: string;
 }
 
-export type PurchaseKind = 'SUPPLY' | 'TAWASI' | 'PAYMENT';
+export type PurchaseKind = 'SUPPLY' | 'TAWASI' | 'PAYMENT' | 'STOCK_ONLY';
 
 export interface LocalDailySettlement extends CreateDailySettlementPayload {
   synced: boolean;

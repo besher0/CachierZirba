@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsBoolean,
   IsIn,
   IsNumber,
   IsOptional,
@@ -31,6 +32,10 @@ export class UpdateProductDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   costPrice?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  excludeFromPurchaseInvoice?: boolean;
 
   @IsOptional()
   @IsDateString()

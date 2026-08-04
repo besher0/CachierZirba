@@ -28,6 +28,9 @@ export class Product {
   @Column({ type: 'real' })
   costPrice: number;
 
+  @Column({ type: 'boolean', default: false })
+  excludeFromPurchaseInvoice: boolean;
+
   @Column()
   syncedAt: Date;
 

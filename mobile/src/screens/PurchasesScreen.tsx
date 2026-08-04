@@ -30,6 +30,7 @@ export function PurchasesScreen() {
     isSavingSupplyPayment,
     isSavingTawasi,
     newProductCostPriceInput,
+    newProductExcludeFromPurchaseInvoice,
     newProductNameInput,
     newProductSellPriceInput,
     newProductUnitType,
@@ -51,12 +52,14 @@ export function PurchasesScreen() {
     purchaseProductSalesSummaryRows,
     receiveTodaySupplies,
     refreshActiveScreenData,
+    registerStockOnlySupply,
     registerSupplyPayment,
     registerTawasiSupply,
     resetProductForm,
     saveProductDefinition,
     setActiveScreen,
     setNewProductCostPriceInput,
+    setNewProductExcludeFromPurchaseInvoice,
     setNewProductNameInput,
     setNewProductSellPriceInput,
     setNewProductUnitType,
@@ -234,6 +237,11 @@ export function PurchasesScreen() {
               <Text style={styles.orderRowMeta}>
                 {item.unitType === "KG" ? "يباع بالكيلو" : "يباع بالقطعة"}
               </Text>
+              {item.excludeFromPurchaseInvoice ? (
+                <Text style={styles.orderRowMeta}>
+                  جرد فقط | خارج فاتورة التوريدات
+                </Text>
+              ) : null}
             </View>
             <View style={styles.orderRowMain}>
               <Text style={styles.orderRowMeta}>مبيع: {formatMoney(item.sellPrice)}</Text>
@@ -274,6 +282,14 @@ export function PurchasesScreen() {
                 >
                   <Text style={styles.smallRefreshText}>تعديل المنتج</Text>
                 </Pressable>
+                {item.excludeFromPurchaseInvoice ? (
+                  <Pressable
+                    style={styles.smallRefreshButton}
+                    onPress={() => void registerStockOnlySupply(item.productId)}
+                  >
+                    <Text style={styles.smallRefreshText}>جرد فقط</Text>
+                  </Pressable>
+                ) : null}
                 {isAdmin ? (
                   <Pressable
                     style={styles.dangerButton}
@@ -317,6 +333,8 @@ export function PurchasesScreen() {
               <Text style={styles.orderRowItems}>
                 {item.purchaseKind === "PAYMENT"
                   ? "دفعة"
+                  : item.purchaseKind === "STOCK_ONLY"
+                  ? `جرد فقط: ${formatQuantity(item.quantity)}`
                   : `الكمية: ${formatQuantity(item.quantity)}`}
               </Text>
             </View>
@@ -324,12 +342,16 @@ export function PurchasesScreen() {
               <Text style={styles.orderRowMeta}>
                 {item.purchaseKind === "PAYMENT"
                   ? item.note || "دفعة من فاتورة التوريدات"
+                  : item.purchaseKind === "STOCK_ONLY"
+                  ? item.note || "جرد فقط خارج فاتورة التوريدات"
                   : `رأس المال: ${formatMoney(item.unitCost)}`}
               </Text>
               <Text style={styles.orderRowTotal}>
                 {formatMoney(
                   item.purchaseKind === "PAYMENT"
                     ? item.paymentAmount ?? item.totalCost
+                    : item.purchaseKind === "STOCK_ONLY"
+                    ? 0
                     : item.totalCost,
                 )}
               </Text>
@@ -338,6 +360,11 @@ export function PurchasesScreen() {
             {item.purchaseKind === "TAWASI" ? (
               <Text style={styles.orderRowMeta}>
                 تواصي | سعر المبيع: {formatMoney(item.sellPrice)}
+              </Text>
+            ) : null}
+            {item.purchaseKind === "STOCK_ONLY" ? (
+              <Text style={styles.orderRowMeta}>
+                جرد فقط | خارج فاتورة التوريدات
               </Text>
             ) : null}
             {canManageInventory ? (
@@ -385,6 +412,11 @@ export function PurchasesScreen() {
             {item.purchaseKind === "TAWASI" ? (
               <Text style={styles.orderRowMeta}>
                 تواصي | سعر المبيع: {formatMoney(item.sellPrice)}
+              </Text>
+            ) : null}
+            {item.purchaseKind === "STOCK_ONLY" ? (
+              <Text style={styles.orderRowMeta}>
+                جرد فقط | خارج فاتورة التوريدات
               </Text>
             ) : null}
           </View>
@@ -582,6 +614,28 @@ export function PurchasesScreen() {
                   placeholderTextColor="#d7b3c4"
                 />
               </View>
+              <Pressable
+                style={[
+                  styles.storeChip,
+                  newProductExcludeFromPurchaseInvoice &&
+                    styles.storeChipSelected,
+                ]}
+                onPress={() =>
+                  setNewProductExcludeFromPurchaseInvoice(
+                    !newProductExcludeFromPurchaseInvoice,
+                  )
+                }
+              >
+                <Text
+                  style={[
+                    styles.storeChipText,
+                    newProductExcludeFromPurchaseInvoice &&
+                      styles.storeChipTextSelected,
+                  ]}
+                >
+                  لا يدخل في فاتورة التوريدات
+                </Text>
+              </Pressable>
               <View style={styles.supplyActionRow}>
                 <Pressable style={styles.supplyActionButtonPrimary} onPress={saveProductDefinition}>
                   <Text style={styles.supplyActionButtonTextPrimary}>حفظ المنتج</Text>

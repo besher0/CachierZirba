@@ -35,8 +35,8 @@ export class UpdatePurchaseDto {
   totalCost?: number;
 
   @IsOptional()
-  @IsIn(['SUPPLY', 'TAWASI', 'PAYMENT'])
-  purchaseKind?: 'SUPPLY' | 'TAWASI' | 'PAYMENT';
+  @IsIn(['SUPPLY', 'TAWASI', 'PAYMENT', 'STOCK_ONLY'])
+  purchaseKind?: 'SUPPLY' | 'TAWASI' | 'PAYMENT' | 'STOCK_ONLY';
 
   @IsOptional()
   @Type(() => Number)

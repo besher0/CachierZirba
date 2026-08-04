@@ -157,6 +157,8 @@ import {
   EXPORT_FILE_PREFIX,
   ExpenseCategoryOption,
   ExpenseRow,
+  ICE_CREAM_CART_ITEM_ID,
+  ICE_CREAM_CART_ITEM_NAME,
   MISC_CART_ITEM_ID,
   MISC_CART_ITEM_NAME,
   MobileNavItem,
@@ -261,7 +263,7 @@ interface TodayPurchaseInvoiceRow {
 interface PurchaseHistorySummaryRow {
   key: string;
   productName: string;
-  purchaseKind: "SUPPLY" | "TAWASI";
+  purchaseKind: "SUPPLY" | "TAWASI" | "STOCK_ONLY";
   quantity: number;
   unitCost: number;
   totalCost: number;
@@ -664,6 +666,10 @@ export function useAppController() {
     useState<ProductTemplate["unitType"]>("PIECE");
   const [newProductSellPriceInput, setNewProductSellPriceInput] = useState("");
   const [newProductCostPriceInput, setNewProductCostPriceInput] = useState("");
+  const [
+    newProductExcludeFromPurchaseInvoice,
+    setNewProductExcludeFromPurchaseInvoice,
+  ] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [employeeAbsences, setEmployeeAbsences] = useState<
     EmployeeAbsenceEntry[]
@@ -1772,7 +1778,6 @@ export function useAppController() {
         grouped.set(key, {
           key,
           productName: item.productName,
-          purchaseKind: item.purchaseKind === "TAWASI" ? "TAWASI" : "SUPPLY",
           quantity: item.quantity,
           unitCost: item.unitCost,
           totalCost: item.totalCost,
@@ -1785,6 +1790,12 @@ export function useAppController() {
           purchaseDates: new Set([item.purchaseDate]),
           sortIndex:
             orderIndexByProduct.get(productKey) ?? Number.MAX_SAFE_INTEGER,
+          purchaseKind:
+            item.purchaseKind === "STOCK_ONLY"
+              ? "STOCK_ONLY"
+              : item.purchaseKind === "TAWASI"
+              ? "TAWASI"
+              : "SUPPLY",
         });
       });
 
@@ -1830,7 +1841,7 @@ export function useAppController() {
       .filter(
         (item) =>
           item.purchaseDate === activePurchaseInvoiceDate &&
-          item.purchaseKind !== "PAYMENT",
+          (item.purchaseKind === "SUPPLY" || item.purchaseKind === "TAWASI"),
       )
       .forEach((item) => {
         const key =
@@ -2003,10 +2014,12 @@ export function useAppController() {
       }
 
       const hasInvoiceRows = mergedPurchaseRows.some(
-        (item) => item.purchaseDate === requestedDate,
+        (item) =>
+          item.purchaseDate === requestedDate &&
+          item.purchaseKind !== "STOCK_ONLY",
       );
       if (!hasInvoiceRows) {
-        setStatusMessage("لا توجد توريدات أو دفعات مسجلة لهذا التاريخ.");
+        setStatusMessage("لا توجد توريدات قابلة للفوترة لهذا التاريخ.");
         return;
       }
 
@@ -2384,6 +2397,8 @@ export function useAppController() {
           unitType: product.unitType,
           sellPrice: product.price,
           costPrice: product.costPrice,
+          excludeFromPurchaseInvoice:
+            product.excludeFromPurchaseInvoice ?? false,
           remainingQty: Number((stockRow?.remainingQty ?? 0).toFixed(3)),
           previousRemainingQty: Number(
             (stockRow?.previousRemainingQty ?? 0).toFixed(3),
@@ -2400,6 +2415,8 @@ export function useAppController() {
         unitType: product.unitType,
         sellPrice: product.price,
         costPrice: product.costPrice,
+        excludeFromPurchaseInvoice:
+          product.excludeFromPurchaseInvoice ?? false,
         remainingQty: 0,
         previousRemainingQty: 0,
         loggedToday: 0,
@@ -2555,6 +2572,8 @@ export function useAppController() {
         unitType: product.unitType,
         sellPrice: product.price,
         costPrice: product.costPrice,
+        excludeFromPurchaseInvoice:
+          product.excludeFromPurchaseInvoice ?? false,
         remainingQty,
         previousRemainingQty,
         loggedToday,
@@ -2647,7 +2666,9 @@ export function useAppController() {
 
   const todayPurchasesTotal = useMemo(
     () =>
-      purchasesInCurrentCycle.reduce((sum, item) => sum + item.totalCost, 0),
+      purchasesInCurrentCycle
+        .filter((item) => item.purchaseKind !== "STOCK_ONLY")
+        .reduce((sum, item) => sum + item.totalCost, 0),
     [purchasesInCurrentCycle],
   );
 
@@ -6258,6 +6279,34 @@ export function useAppController() {
     setStatusMessage(`تمت إضافة منوعات بقيمة ${formatMoney(miscAmount)}.`);
   };
 
+  const addIceCreamAmountToCart = () => {
+    if (!posPadInput.trim()) {
+      setStatusMessage("أدخل مبلغ البوظة من لوحة الأرقام أولاً.");
+      return;
+    }
+
+    const iceCreamAmount = parseNumberInput(posPadInput);
+    if (iceCreamAmount <= 0) {
+      setStatusMessage("مبلغ البوظة غير صالح.");
+      return;
+    }
+
+    const iceCreamItem: CartItem = {
+      id: ICE_CREAM_CART_ITEM_ID,
+      name: ICE_CREAM_CART_ITEM_NAME,
+      unitType: "PIECE",
+      quantity: 1,
+      price: iceCreamAmount,
+      costPrice: 0,
+    };
+
+    setCart((previous) => [...previous, iceCreamItem]);
+    setPosPadInput("");
+    setPendingMultiplier(null);
+    setPendingAmountValue(null);
+    setStatusMessage(`تمت إضافة بوظة بقيمة ${formatMoney(iceCreamAmount)}.`);
+  };
+
   const addRentAmountToCart = () => {
     if (!posPadInput.trim()) {
       setStatusMessage("أدخل مبلغ الأجار من لوحة الأرقام أولاً.");
@@ -6585,7 +6634,9 @@ export function useAppController() {
       ordersCount: ordersInCurrentCycle.length,
       expensesCount: expensesInCurrentCycle.length,
       purchasesCount: purchasesInCurrentCycle.filter(
-        (item) => item.purchaseKind !== "PAYMENT",
+        (item) =>
+          item.purchaseKind !== "PAYMENT" &&
+          item.purchaseKind !== "STOCK_ONLY",
       ).length,
       withdrawalsCount: withdrawalsInCurrentCycle.length,
       paymentsAmount: Number(
@@ -7044,6 +7095,7 @@ export function useAppController() {
     setNewProductUnitType('PIECE');
     setNewProductSellPriceInput('');
     setNewProductCostPriceInput('');
+    setNewProductExcludeFromPurchaseInvoice(false);
     setProductEditingId(null);
     setIsProductFormOpen(false);
   };
@@ -7053,6 +7105,7 @@ export function useAppController() {
     setNewProductUnitType('PIECE');
     setNewProductSellPriceInput('');
     setNewProductCostPriceInput('');
+    setNewProductExcludeFromPurchaseInvoice(false);
     setProductEditingId(null);
     setIsProductFormOpen(true);
   };
@@ -7073,6 +7126,9 @@ export function useAppController() {
     setNewProductUnitType(product.unitType);
     setNewProductSellPriceInput(String(product.price));
     setNewProductCostPriceInput(String(product.costPrice));
+    setNewProductExcludeFromPurchaseInvoice(
+      product.excludeFromPurchaseInvoice ?? false,
+    );
     setIsProductFormOpen(true);
     setStatusMessage(`تعديل المنتج ${product.name}.`);
   };
@@ -7114,6 +7170,7 @@ export function useAppController() {
       unitType: newProductUnitType,
       price: sellPrice,
       costPrice,
+      excludeFromPurchaseInvoice: newProductExcludeFromPurchaseInvoice,
       synced: false,
       createdLocallyAt: existingProduct?.createdLocallyAt ?? now,
       updatedLocallyAt: now,
@@ -7138,6 +7195,8 @@ export function useAppController() {
                 unitType: nextProduct.unitType,
                 price: nextProduct.price,
                 costPrice: nextProduct.costPrice,
+                excludeFromPurchaseInvoice:
+                  nextProduct.excludeFromPurchaseInvoice,
               }
             : item,
         ),
@@ -7150,6 +7209,7 @@ export function useAppController() {
       unitType: newProductUnitType,
       price: sellPrice,
       costPrice,
+      excludeFromPurchaseInvoice: newProductExcludeFromPurchaseInvoice,
       syncedAt: now,
     };
     const updatePayload: UpdateProductPayload = {
@@ -7157,6 +7217,7 @@ export function useAppController() {
       unitType: newProductUnitType,
       price: sellPrice,
       costPrice,
+      excludeFromPurchaseInvoice: newProductExcludeFromPurchaseInvoice,
       syncedAt: now,
     };
 
@@ -7314,9 +7375,13 @@ export function useAppController() {
       return;
     }
 
-    const rowsToReceive = productSupplyRows.filter((row) => row.receivedToday > 0);
+    const rowsToReceive = productSupplyRows.filter(
+      (row) => row.receivedToday > 0 && !row.excludeFromPurchaseInvoice,
+    );
     if (rowsToReceive.length === 0) {
-      setStatusMessage('أدخل كميات التوريد في خانة "نزل اليوم" أولاً.');
+      setStatusMessage(
+        'أدخل كميات لمنتجات تدخل في فاتورة التوريدات، أو استخدم زر "جرد فقط" للمنتجات الخاصة.',
+      );
       return;
     }
 
@@ -7431,6 +7496,105 @@ export function useAppController() {
     }
 
     setStatusMessage(`تم استلام ${rowsToReceive.length} توريد.`);
+  };
+
+  const registerStockOnlySupply = async (productId: string) => {
+    if (!session) {
+      setStatusMessage('سجّل الدخول أولاً.');
+      return;
+    }
+
+    if (!canManageInventory) {
+      setStatusMessage('وضع القراءة فقط: تسجيل الجرد متاح للكاشير أو الأدمن فقط.');
+      return;
+    }
+
+    const effectiveStoreId = isCashier ? assignedStoreId ?? '' : selectedStoreId;
+    if (!effectiveStoreId) {
+      setStatusMessage('اختر المحل أولاً.');
+      return;
+    }
+
+    const row = productSupplyRows.find((item) => item.productId === productId);
+    if (!row || !row.excludeFromPurchaseInvoice) {
+      setStatusMessage('اختر منتج جرد فقط قبل التسجيل.');
+      return;
+    }
+
+    const quantity = parseNumberInput(todaySupplyInputs[productId] ?? '');
+    if (quantity <= 0) {
+      setStatusMessage('أدخل كمية الجرد فقط في خانة "نزل اليوم" أولاً.');
+      return;
+    }
+
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const purchaseDate = toIsoDateOnly(nowDate);
+    const payload: CreatePurchasePayload = {
+      clientPurchaseId: makeId('pur'),
+      storeId: effectiveStoreId,
+      productName: row.name,
+      quantity,
+      unitCost: 0,
+      totalCost: 0,
+      purchaseKind: 'STOCK_ONLY',
+      sellPrice: row.sellPrice,
+      paymentAmount: 0,
+      purchaseDate,
+      note: 'جرد فقط خارج فاتورة التوريدات',
+      syncedAt: now,
+    };
+    const localRecord: LocalPurchase = {
+      ...payload,
+      synced: false,
+      createdLocallyAt: now,
+      updatedLocallyAt: now,
+    };
+
+    setPurchases((previous) => {
+      const next = [localRecord, ...previous];
+      persistArrayDeferred(STORAGE_KEYS.purchases, next);
+      return next;
+    });
+
+    setTodaySupplyInputs((previous) => {
+      const next = { ...previous };
+      delete next[productId];
+      return next;
+    });
+
+    const syncJob: SyncJob = {
+      id: makeId('job'),
+      referenceId: localRecord.clientPurchaseId,
+      retries: 0,
+      createdAt: now,
+      entity: 'PURCHASE',
+      action: 'CREATE',
+      payload,
+    };
+
+    if (isOnline && authToken) {
+      try {
+        const remotePurchase = await postPurchase(authToken, payload);
+        markPurchaseSynced(localRecord.clientPurchaseId);
+        upsertRemotePurchase(remotePurchase as ApiPurchase);
+        setStatusMessage(`تم تسجيل جرد فقط للمنتج ${row.name}.`);
+        return;
+      } catch (error: unknown) {
+        enqueueJob(syncJob);
+
+        if (error instanceof ApiError && error.status === 401) {
+          logout('انتهت الجلسة وتم حفظ الجرد محلياً لحين تسجيل الدخول.');
+          return;
+        }
+
+        setStatusMessage(`تم حفظ جرد المنتج ${row.name} محلياً بانتظار المزامنة.`);
+        return;
+      }
+    }
+
+    enqueueJob(syncJob);
+    setStatusMessage(`لا يوجد إنترنت: تم تخزين جرد المنتج ${row.name} محلياً.`);
   };
 
   const registerTawasiSupply = async () => {
@@ -8387,7 +8551,7 @@ export function useAppController() {
       purchaseInvoiceRows.length === 0 &&
       purchaseInvoicePaymentRows.length === 0
     ) {
-      setStatusMessage("لا توجد توريدات أو دفعات مسجلة لهذا التاريخ لإنشاء فاتورة.");
+      setStatusMessage("لا توجد توريدات أو دفعات قابلة للفوترة لهذا التاريخ.");
       return;
     }
 
@@ -8593,6 +8757,8 @@ export function useAppController() {
     Date,
     DateTimePicker,
     DraggableGrid,
+    ICE_CREAM_CART_ITEM_ID,
+    ICE_CREAM_CART_ITEM_NAME,
     Image,
     MISC_CART_ITEM_ID,
     MISC_CART_ITEM_NAME,
@@ -8616,6 +8782,7 @@ export function useAppController() {
     addEmployeeDefinition,
     addEmployeeWithdrawal,
     addExpenseCategoryOption,
+    addIceCreamAmountToCart,
     addMiscAmountToCart,
     addProductToCart,
     addRentAmountToCart,
@@ -8724,6 +8891,7 @@ export function useAppController() {
     navItems,
     newExpenseCategoryLabelInput,
     newProductCostPriceInput,
+    newProductExcludeFromPurchaseInvoice,
     newProductNameInput,
     newProductSellPriceInput,
     newProductUnitType,
@@ -8783,6 +8951,7 @@ export function useAppController() {
     refreshActiveScreenData,
     refreshSettlementData,
     recordInventoryDestruction,
+    registerStockOnlySupply,
     registerTawasiSupply,
     registerSupplyPayment,
     removeEmployeeAbsence,
@@ -8831,6 +9000,7 @@ export function useAppController() {
     setIsRefundMode,
     setNewExpenseCategoryLabelInput,
     setNewProductCostPriceInput,
+    setNewProductExcludeFromPurchaseInvoice,
     setNewProductNameInput,
     setNewProductSellPriceInput,
     setNewProductUnitType,

@@ -65,6 +65,10 @@ export class ProductsService {
       record.costPrice = dto.costPrice;
     }
 
+    if (dto.excludeFromPurchaseInvoice !== undefined) {
+      record.excludeFromPurchaseInvoice = dto.excludeFromPurchaseInvoice;
+    }
+
     record.syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
 
     await this.productRepository.save(record);

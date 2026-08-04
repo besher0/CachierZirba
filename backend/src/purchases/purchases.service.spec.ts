@@ -95,4 +95,37 @@ describe('PurchasesService', () => {
     expect(storesService.findById).toHaveBeenCalledWith(storeId);
     expect(repository.save).toHaveBeenCalledWith(created);
   });
+
+  it('accepts stock-only purchases for inventory without invoice cost', async () => {
+    const stockOnlyPayload = {
+      ...payload,
+      clientPurchaseId: 'stock-only-1',
+      quantity: 3,
+      unitCost: 0,
+      totalCost: 0,
+      purchaseKind: 'STOCK_ONLY' as const,
+      paymentAmount: 0,
+      note: 'جرد فقط خارج فاتورة التوريدات',
+    };
+    const created = {
+      ...stockOnlyPayload,
+      syncedAt: new Date(payload.syncedAt),
+    } as Purchase;
+    const saved = { ...created, id: 'server-id' } as Purchase;
+    repository.findOne
+      ?.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(saved);
+    repository.create?.mockReturnValue(created);
+    repository.save?.mockResolvedValue(saved);
+
+    await expect(service.create(stockOnlyPayload, adminUser)).resolves.toBe(saved);
+    expect(repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purchaseKind: 'STOCK_ONLY',
+        unitCost: 0,
+        totalCost: 0,
+        paymentAmount: 0,
+      }),
+    );
+  });
 });

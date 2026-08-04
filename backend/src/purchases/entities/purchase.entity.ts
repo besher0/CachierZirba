@@ -41,7 +41,7 @@ export class Purchase {
   totalCost: number;
 
   @Column({ type: 'varchar', length: 20, default: 'SUPPLY' })
-  purchaseKind: 'SUPPLY' | 'TAWASI' | 'PAYMENT';
+  purchaseKind: 'SUPPLY' | 'TAWASI' | 'PAYMENT' | 'STOCK_ONLY';
 
   @Column({ type: 'real', nullable: true })
   sellPrice: number | null;

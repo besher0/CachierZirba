@@ -368,13 +368,16 @@ export class DailySettlementsService {
       'CASE WHEN purchase.syncedAt < purchase.createdAt THEN purchase.syncedAt ELSE purchase.createdAt END';
     const qb = this.purchaseRepository
       .createQueryBuilder('purchase')
-      .select('COALESCE(SUM(purchase.totalCost), 0)', 'purchasesAmount')
+      .select(
+        `COALESCE(SUM(CASE WHEN purchase.purchaseKind <> 'STOCK_ONLY' THEN purchase.totalCost ELSE 0 END), 0)`,
+        'purchasesAmount',
+      )
       .addSelect(
         `COALESCE(SUM(CASE WHEN purchase.purchaseKind = 'TAWASI' THEN purchase.totalCost ELSE 0 END), 0)`,
         'tawasiAmount',
       )
       .addSelect(
-        `COUNT(CASE WHEN purchase.purchaseKind <> 'PAYMENT' THEN 1 END)`,
+        `COUNT(CASE WHEN purchase.purchaseKind NOT IN ('PAYMENT', 'STOCK_ONLY') THEN 1 END)`,
         'purchasesCount',
       )
       .addSelect('COALESCE(SUM(purchase.paymentAmount), 0)', 'paymentsAmount')

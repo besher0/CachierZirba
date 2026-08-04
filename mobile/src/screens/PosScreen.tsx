@@ -48,6 +48,8 @@ export function PosScreen() {
   const [posProductsPaneWidth, setPosProductsPaneWidth] = useState(0);
   const {
     DraggableGrid,
+    ICE_CREAM_CART_ITEM_ID,
+    ICE_CREAM_CART_ITEM_NAME,
     LocalProduct,
     MISC_CART_ITEM_ID,
     MISC_CART_ITEM_NAME,
@@ -60,6 +62,7 @@ export function PosScreen() {
     activateAmountMode,
     activateMultiply,
     activePosProductKey,
+    addIceCreamAmountToCart,
     addMiscAmountToCart,
     addProductToCart,
     addRentAmountToCart,
@@ -361,7 +364,12 @@ export function PosScreen() {
                               const isMiscItem =
                                 item.id === MISC_CART_ITEM_ID ||
                                 item.name === MISC_CART_ITEM_NAME;
-                              const priceLabel = isMiscItem
+                              const isIceCreamItem =
+                                item.id === ICE_CREAM_CART_ITEM_ID ||
+                                item.name === ICE_CREAM_CART_ITEM_NAME;
+                              const isVariablePriceItem =
+                                isMiscItem || isIceCreamItem;
+                              const priceLabel = isVariablePriceItem
                                 ? "سعر متغير"
                                 : formatMoney(item.price);
                               const isDisabled = isPosProductReordering;
@@ -406,6 +414,10 @@ export function PosScreen() {
                                       }
                                       if (isMiscItem) {
                                         addMiscAmountToCart();
+                                        return;
+                                      }
+                                      if (isIceCreamItem) {
+                                        addIceCreamAmountToCart();
                                         return;
                                       }
                                       addProductToCart(item.id);
@@ -551,6 +563,12 @@ export function PosScreen() {
                             onPress={addMiscAmountToCart}
                           >
                             <Text style={styles.padActionText}>المنوعات</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.padActionButton}
+                            onPress={addIceCreamAmountToCart}
+                          >
+                            <Text style={styles.padActionText}>البوظة</Text>
                           </Pressable>
                           <Pressable
                             style={styles.padActionButton}
