@@ -25,6 +25,8 @@ import { BackfillSettlementCycleSnapshots1791000000000 } from './migrations/1791
 import { AddEmployeePayrollWeekStartDay1792000000000 } from './migrations/1792000000000-AddEmployeePayrollWeekStartDay';
 import { AddExpenseSettlementCycleAnchor1793000000000 } from './migrations/1793000000000-AddExpenseSettlementCycleAnchor';
 import { AddSettlementArchiveSnapshots1794000000000 } from './migrations/1794000000000-AddSettlementArchiveSnapshots';
+import { AddDailySettlementLatestIndex1795000000000 } from './migrations/1795000000000-AddDailySettlementLatestIndex';
+import { AddDashboardAggregationIndexes1796000000000 } from './migrations/1796000000000-AddDashboardAggregationIndexes';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -50,8 +52,7 @@ const entities = [
 export function createTypeOrmOptions(
   overrides: DatabaseConfigOverrides = {},
 ): TypeOrmModuleOptions {
-  const synchronize =
-    overrides.synchronize ?? process.env.TYPEORM_SYNCHRONIZE !== 'false';
+  const synchronize = resolveSynchronize(overrides.synchronize);
   const databaseUrl = process.env.DATABASE_URL?.trim();
   const migrations = overrides.migrations;
 
@@ -82,6 +83,8 @@ export function createTypeOrmOptions(
         AddEmployeePayrollWeekStartDay1792000000000,
         AddExpenseSettlementCycleAnchor1793000000000,
         AddSettlementArchiveSnapshots1794000000000,
+        AddDailySettlementLatestIndex1795000000000,
+        AddDashboardAggregationIndexes1796000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,
@@ -95,4 +98,21 @@ export function createTypeOrmOptions(
     migrations,
     synchronize,
   };
+}
+
+function resolveSynchronize(override: boolean | undefined): boolean {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const envRequestedSynchronize = process.env.TYPEORM_SYNCHRONIZE === 'true';
+
+  if (isProduction && (envRequestedSynchronize || override === true)) {
+    throw new Error(
+      'TYPEORM_SYNCHRONIZE=true is not allowed in production. Use migrations for schema changes.',
+    );
+  }
+
+  if (override !== undefined) {
+    return override;
+  }
+
+  return envRequestedSynchronize;
 }

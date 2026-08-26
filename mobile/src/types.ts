@@ -464,13 +464,13 @@ export interface ExpenseCreateSyncJob extends SyncJobBase {
 export interface ExpenseUpdateSyncJob extends SyncJobBase {
   action: 'UPDATE';
   entity: 'EXPENSE';
-  payload: UpdateExpensePayload;
+  payload: UpdateExpensePayload & { storeId?: string };
 }
 
 export interface ExpenseDeleteSyncJob extends SyncJobBase {
   action: 'DELETE';
   entity: 'EXPENSE';
-  payload: { clientExpenseId: string };
+  payload: { clientExpenseId: string; storeId?: string };
 }
 
 export interface PurchaseCreateSyncJob extends SyncJobBase {
@@ -482,13 +482,13 @@ export interface PurchaseCreateSyncJob extends SyncJobBase {
 export interface PurchaseUpdateSyncJob extends SyncJobBase {
   action: 'UPDATE';
   entity: 'PURCHASE';
-  payload: UpdatePurchasePayload;
+  payload: UpdatePurchasePayload & { storeId?: string };
 }
 
 export interface PurchaseDeleteSyncJob extends SyncJobBase {
   action: 'DELETE';
   entity: 'PURCHASE';
-  payload: { clientPurchaseId: string };
+  payload: { clientPurchaseId: string; storeId?: string };
 }
 
 export interface ProductCreateSyncJob extends SyncJobBase {
@@ -500,13 +500,13 @@ export interface ProductCreateSyncJob extends SyncJobBase {
 export interface ProductUpdateSyncJob extends SyncJobBase {
   action: 'UPDATE';
   entity: 'PRODUCT';
-  payload: UpdateProductPayload;
+  payload: UpdateProductPayload & { storeId?: string };
 }
 
 export interface ProductDeleteSyncJob extends SyncJobBase {
   action: 'DELETE';
   entity: 'PRODUCT';
-  payload: { clientProductId: string };
+  payload: { clientProductId: string; storeId?: string };
 }
 
 export interface InventoryAdjustmentCreateSyncJob extends SyncJobBase {
@@ -530,7 +530,7 @@ export interface EmployeeCreateSyncJob extends SyncJobBase {
 export interface EmployeeUpdateSyncJob extends SyncJobBase {
   action: 'UPDATE';
   entity: 'EMPLOYEE';
-  payload: UpdateEmployeePayload;
+  payload: UpdateEmployeePayload & { storeId?: string };
 }
 
 export interface EmployeeAbsenceCreateSyncJob extends SyncJobBase {
@@ -542,7 +542,7 @@ export interface EmployeeAbsenceCreateSyncJob extends SyncJobBase {
 export interface EmployeeAbsenceDeleteSyncJob extends SyncJobBase {
   action: 'DELETE';
   entity: 'EMPLOYEE_ABSENCE';
-  payload: { clientAbsenceId: string };
+  payload: { clientAbsenceId: string; storeId?: string };
 }
 
 export interface EmployeeWithdrawalCreateSyncJob extends SyncJobBase {
@@ -554,7 +554,7 @@ export interface EmployeeWithdrawalCreateSyncJob extends SyncJobBase {
 export interface EmployeeWithdrawalDeleteSyncJob extends SyncJobBase {
   action: 'DELETE';
   entity: 'EMPLOYEE_WITHDRAWAL';
-  payload: { clientWithdrawalId: string };
+  payload: { clientWithdrawalId: string; storeId?: string };
 }
 
 export type SyncJob =

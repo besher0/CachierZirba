@@ -36,6 +36,8 @@ import {
 } from '../types';
 
 const REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_LIST_LIMIT = 200;
+const DEFAULT_LIST_OFFSET = 0;
 const DEFAULT_MAX_NETWORK_RETRIES = 1;
 const RETRY_BASE_DELAY_MS = 500;
 const WRITE_REQUEST_OPTIONS = {
@@ -156,6 +158,8 @@ function buildExpenseQuery(params: ExpenseListQuery): string {
     storeId: params.storeId,
     from: params.from,
     to: params.to,
+    limit: String(params.limit ?? DEFAULT_LIST_LIMIT),
+    offset: String(params.offset ?? DEFAULT_LIST_OFFSET),
     category: params.category,
     description: params.description,
     cycleStartClosureId: params.cycleStartClosureId,
@@ -168,6 +172,8 @@ function buildPurchaseQuery(params: PurchaseListQuery): string {
     storeId: params.storeId,
     from: params.from,
     to: params.to,
+    limit: String(params.limit ?? DEFAULT_LIST_LIMIT),
+    offset: String(params.offset ?? DEFAULT_LIST_OFFSET),
     product: params.product,
   });
 }
@@ -287,8 +293,11 @@ export function addStoreCashCarry(
   });
 }
 
-export function postOrder(token: string, payload: CreateOrderPayload) {
-  return request('/orders', {
+export function postOrder(
+  token: string,
+  payload: CreateOrderPayload,
+): Promise<ApiOrder> {
+  return request<ApiOrder>('/orders', {
     method: 'POST',
     body: JSON.stringify(payload),
     token,

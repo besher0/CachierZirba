@@ -83,6 +83,9 @@ import {
 import {
   ApiCashboxWithdrawal,
   ApiDailySettlement,
+  ApiEmployee,
+  ApiEmployeeAbsence,
+  ApiEmployeeWithdrawal,
   ApiExpense,
   ApiInventoryAdjustment,
   ApiInventoryDestruction,
@@ -147,6 +150,11 @@ import {
   PieceStockAuditRow,
 } from "../models/settlement";
 import { buildSettlementAdjustmentOrders } from "./settlementController";
+import { getSyncInvalidationPlan } from "./syncQueueInvalidation";
+import {
+  getNextSyncRetryDelayMs,
+  SYNC_RETRY_BASE_DELAY_MS,
+} from "./syncQueueRetry";
 import { Pressable } from "../components/TapPressable";
 import {
   BRAND_CATEGORY,
@@ -223,12 +231,12 @@ import {
   uploadExpenseImageToCloudinary,
 } from "../support/appSupport";
 
-const SYNC_RETRY_DELAY_MS = 10000;
 const MAX_SYNC_JOB_RETRIES = 5;
-const ACTIVE_SCREEN_REFRESH_INTERVAL_MS = 15000;
 const RESOURCE_REFRESH_TTL_MS = 60000;
 const ADMIN_DASHBOARD_ALL_STORES = "__ALL__";
 const ORDER_REFRESH_LIMIT = 200;
+const LIST_REFRESH_LIMIT = 200;
+const SETTLEMENT_CYCLE_PAGE_LIMIT = 500;
 const DEFAULT_PAYROLL_WEEK_START_DAY = 1;
 const PAYROLL_WEEKDAY_OPTIONS = [
   { value: 0, label: "الأحد" },
@@ -245,6 +253,28 @@ type RefreshTimestamps = Record<string, number>;
 interface ActiveScreenRefreshOptions {
   force?: boolean;
   showIndicator?: boolean;
+}
+
+interface DailySettlementRefreshOptions {
+  limit?: number;
+  offset?: number;
+  merge?: boolean;
+}
+
+async function fetchAllListPages<T>(
+  fetchPage: (offset: number) => Promise<T[]>,
+  limit = SETTLEMENT_CYCLE_PAGE_LIMIT,
+): Promise<T[]> {
+  const rows: T[] = [];
+
+  for (let offset = 0; ; offset += limit) {
+    const page = await fetchPage(offset);
+    rows.push(...page);
+
+    if (page.length < limit) {
+      return rows;
+    }
+  }
 }
 
 interface TodayPurchaseInvoiceRow {
@@ -481,6 +511,11 @@ export function useAppController() {
   const activeScreenRef = useRef<AppScreenKey>("pos");
   const isBuildingOrderRef = useRef(false);
   const inFlightSyncJobIdsRef = useRef<Set<string>>(new Set());
+  const syncRetryDelayMsRef = useRef(SYNC_RETRY_BASE_DELAY_MS);
+  const nextSyncAttemptAtRef = useRef(0);
+  const syncWasAvailableRef = useRef(false);
+  const syncQueueRef = useRef<() => Promise<void>>(async () => {});
+  const [syncRetryTick, setSyncRetryTick] = useState(0);
   const pendingOrderSyncMarkIdsRef = useRef<Set<string>>(new Set());
   const syncQueuePersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSyncQueuePersistenceRef = useRef<{
@@ -523,6 +558,10 @@ export function useAppController() {
     key: string;
     promise: Promise<void>;
   } | null>(null);
+  const refreshActiveScreenDataRef = useRef<
+    (options?: ActiveScreenRefreshOptions) => Promise<void>
+  >(async () => {});
+  const appStateRef = useRef(AppState.currentState);
   const [statusMessage, setStatusMessage] = useState("جاهز للعمل.");
 
   const [stores, setStores] = useState<Store[]>([]);
@@ -2310,28 +2349,44 @@ export function useAppController() {
           : undefined;
         const [orderData, expenseData, purchaseData, withdrawalData] =
           await Promise.all([
-            fetchOrders(authToken, {
-              storeId: selectedStoreId,
-              from: cycleStartedAt ?? undefined,
-              to: cycleEndedAt,
-            }),
-            fetchExpenses(authToken, {
-              storeId: selectedStoreId,
-              ...(previousSettlement
-                ? { cycleStartClosureId: previousSettlement.clientClosureId }
-                : { unanchoredCycle: true }),
-              to: settlement.businessDate,
-            }),
-            fetchPurchases(authToken, {
-              storeId: selectedStoreId,
-              from: cycleFromDate,
-              to: settlement.businessDate,
-            }),
-            fetchEmployeeWithdrawals(authToken, {
-              storeId: selectedStoreId,
-              from: cycleStartedAt ?? undefined,
-              to: cycleEndedAt,
-            }),
+            fetchAllListPages((offset) =>
+              fetchOrders(authToken, {
+                storeId: selectedStoreId,
+                from: cycleStartedAt ?? undefined,
+                to: cycleEndedAt,
+                limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+                offset,
+              }),
+            ),
+            fetchAllListPages((offset) =>
+              fetchExpenses(authToken, {
+                storeId: selectedStoreId,
+                ...(previousSettlement
+                  ? { cycleStartClosureId: previousSettlement.clientClosureId }
+                  : { unanchoredCycle: true }),
+                to: settlement.businessDate,
+                limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+                offset,
+              }),
+            ),
+            fetchAllListPages((offset) =>
+              fetchPurchases(authToken, {
+                storeId: selectedStoreId,
+                from: cycleFromDate,
+                to: settlement.businessDate,
+                limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+                offset,
+              }),
+            ),
+            fetchAllListPages((offset) =>
+              fetchEmployeeWithdrawals(authToken, {
+                storeId: selectedStoreId,
+                from: cycleStartedAt ?? undefined,
+                to: cycleEndedAt,
+                limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+                offset,
+              }),
+            ),
           ]);
 
         const orders = orderData
@@ -3509,6 +3564,16 @@ export function useAppController() {
     });
   }, []);
 
+  const upsertRemoteExpense = useCallback((expense: ApiExpense) => {
+    setRemoteExpenses((previous) => {
+      const rows = new Map(previous.map((item) => [item.clientExpenseId, item]));
+      rows.set(expense.clientExpenseId, expense);
+      return Array.from(rows.values()).sort((a, b) =>
+        b.expenseDate.localeCompare(a.expenseDate),
+      );
+    });
+  }, []);
+
   const upsertRemoteSettlement = useCallback(
     (settlement: ApiDailySettlement) => {
       setRemoteSettlements((previous) => {
@@ -3536,6 +3601,37 @@ export function useAppController() {
         (item) => item.clientPurchaseId !== clientPurchaseId,
       ),
     );
+  }, []);
+
+  const removeRemoteExpense = useCallback((clientExpenseId: string) => {
+    setRemoteExpenses((previous) =>
+      previous.filter((item) => item.clientExpenseId !== clientExpenseId),
+    );
+  }, []);
+
+  const upsertSyncedProduct = useCallback((product: ApiProduct) => {
+    setProducts((previous) => {
+      const localProduct = mapApiProductToLocal(product);
+      const rows = new Map(previous.map((item) => [item.clientProductId, item]));
+      rows.set(product.clientProductId, localProduct);
+      const next = Array.from(rows.values()).sort((a, b) =>
+        a.name.localeCompare(b.name, "ar"),
+      );
+      void saveArray(STORAGE_KEYS.products, next);
+      return next;
+    });
+  }, []);
+
+  const removeSyncedProduct = useCallback((clientProductId: string) => {
+    setProducts((previous) => {
+      const next = previous.filter(
+        (item) => item.clientProductId !== clientProductId,
+      );
+      if (next.length !== previous.length) {
+        void saveArray(STORAGE_KEYS.products, next);
+      }
+      return next;
+    });
   }, []);
 
   const markProductSynced = useCallback((referenceId: string) => {
@@ -3619,12 +3715,71 @@ export function useAppController() {
     });
   }, []);
 
+  const upsertSyncedEmployee = useCallback((employee: ApiEmployee) => {
+    setEmployees((previous) => {
+      const nextEmployee: Employee = {
+        id: employee.clientEmployeeId,
+        storeId: employee.storeId,
+        name: employee.name,
+        weeklySalary: employee.weeklySalary,
+        payrollWeekStartDay: normalizePayrollWeekStartDay(
+          employee.payrollWeekStartDay,
+        ),
+        isActive: employee.isActive,
+        createdAt: employee.createdAt,
+        updatedAt: employee.updatedAt,
+        synced: true,
+      };
+      const rows = new Map(previous.map((item) => [item.id, item]));
+      rows.set(nextEmployee.id, nextEmployee);
+      const next = Array.from(rows.values()).sort((a, b) =>
+        a.name.localeCompare(b.name, "ar"),
+      );
+      void saveArray(STORAGE_KEYS.employees, next);
+      return next;
+    });
+  }, []);
+
   const markEmployeeAbsenceSynced = useCallback((referenceId: string) => {
     setEmployeeAbsences((previous) => {
       const next = previous.map((item) =>
         item.id === referenceId ? { ...item, synced: true } : item,
       );
       void saveArray(STORAGE_KEYS.employeeAbsences, next);
+      return next;
+    });
+  }, []);
+
+  const upsertSyncedEmployeeAbsence = useCallback(
+    (absence: ApiEmployeeAbsence) => {
+      setEmployeeAbsences((previous) => {
+        const nextAbsence: EmployeeAbsenceEntry = {
+          id: absence.clientAbsenceId,
+          employeeId: absence.employeeClientId,
+          storeId: absence.storeId,
+          absenceDate: absence.absenceDate,
+          note: absence.note,
+          createdAt: absence.createdAt,
+          synced: true,
+        };
+        const rows = new Map(previous.map((item) => [item.id, item]));
+        rows.set(nextAbsence.id, nextAbsence);
+        const next = Array.from(rows.values()).sort((a, b) =>
+          b.absenceDate.localeCompare(a.absenceDate),
+        );
+        void saveArray(STORAGE_KEYS.employeeAbsences, next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const removeSyncedEmployeeAbsence = useCallback((clientAbsenceId: string) => {
+    setEmployeeAbsences((previous) => {
+      const next = previous.filter((item) => item.id !== clientAbsenceId);
+      if (next.length !== previous.length) {
+        void saveArray(STORAGE_KEYS.employeeAbsences, next);
+      }
       return next;
     });
   }, []);
@@ -3638,6 +3793,46 @@ export function useAppController() {
       return next;
     });
   }, []);
+
+  const upsertSyncedEmployeeWithdrawal = useCallback(
+    (withdrawal: ApiEmployeeWithdrawal) => {
+      setEmployeeWithdrawals((previous) => {
+        const nextWithdrawal: EmployeeWithdrawalEntry = {
+          id: withdrawal.clientWithdrawalId,
+          employeeId: withdrawal.employeeClientId,
+          storeId: withdrawal.storeId,
+          amount: withdrawal.amount,
+          withdrawalDate: withdrawal.withdrawalDate,
+          note: withdrawal.note,
+          createdAt:
+            getEarliestIsoTimestamp(withdrawal.syncedAt, withdrawal.createdAt) ??
+            withdrawal.createdAt,
+          synced: true,
+        };
+        const rows = new Map(previous.map((item) => [item.id, item]));
+        rows.set(nextWithdrawal.id, nextWithdrawal);
+        const next = Array.from(rows.values()).sort((a, b) =>
+          b.withdrawalDate.localeCompare(a.withdrawalDate),
+        );
+        void saveArray(STORAGE_KEYS.employeeWithdrawals, next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const removeSyncedEmployeeWithdrawal = useCallback(
+    (clientWithdrawalId: string) => {
+      setEmployeeWithdrawals((previous) => {
+        const next = previous.filter((item) => item.id !== clientWithdrawalId);
+        if (next.length !== previous.length) {
+          void saveArray(STORAGE_KEYS.employeeWithdrawals, next);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const enqueueJob = useCallback((job: SyncJob) => {
     setQueue((previous) => {
@@ -3729,7 +3924,9 @@ export function useAppController() {
     selectedStoreId,
   ]);
 
-  const refreshDailySettlementsData = useCallback(async () => {
+  const refreshDailySettlementsData = useCallback(async (
+    options: DailySettlementRefreshOptions = {},
+  ) => {
     if (!authToken || !selectedStoreId || !isOnline) {
       return false;
     }
@@ -3737,6 +3934,8 @@ export function useAppController() {
     try {
       const data = await fetchDailySettlements(authToken, {
         storeId: selectedStoreId,
+        limit: options.limit ?? LIST_REFRESH_LIMIT,
+        offset: options.offset ?? 0,
       });
       const latestRemoteSettlement = [...data].sort((a, b) => {
         const dateComparison = b.businessDate.localeCompare(a.businessDate);
@@ -3770,7 +3969,22 @@ export function useAppController() {
           .map((item) => item.createdLocallyAt || item.syncedAt),
       );
 
-      setRemoteSettlements(data);
+      if (options.merge) {
+        setRemoteSettlements((previous) => {
+          const rows = new Map(
+            previous.map((item) => [
+              `${item.storeId}:${item.clientClosureId}`,
+              item,
+            ]),
+          );
+          data.forEach((item) =>
+            rows.set(`${item.storeId}:${item.clientClosureId}`, item),
+          );
+          return Array.from(rows.values());
+        });
+      } else {
+        setRemoteSettlements(data);
+      }
       setDailySettlements((previous) => {
         const next = previous.filter(
           (item) =>
@@ -3857,7 +4071,11 @@ export function useAppController() {
     }
 
     try {
-      const data = await fetchExpenses(authToken, { storeId: selectedStoreId });
+      const data = await fetchExpenses(authToken, {
+        storeId: selectedStoreId,
+        limit: LIST_REFRESH_LIMIT,
+        offset: 0,
+      });
       setRemoteExpenses(data);
       const remoteIds = new Set(data.map((item) => item.clientExpenseId));
       setExpenses((previous) => {
@@ -3887,6 +4105,8 @@ export function useAppController() {
     try {
       const data = await fetchPurchases(authToken, {
         storeId: selectedStoreId,
+        limit: LIST_REFRESH_LIMIT,
+        offset: 0,
       });
       replaceRemotePurchases(data);
       return true;
@@ -3910,7 +4130,11 @@ export function useAppController() {
     try {
       const [purchaseData, stockData, adjustmentData, destructionData] =
         await Promise.all([
-        fetchPurchases(authToken, { storeId: selectedStoreId }),
+        fetchPurchases(authToken, {
+          storeId: selectedStoreId,
+          limit: LIST_REFRESH_LIMIT,
+          offset: 0,
+        }),
         fetchInventoryStock(authToken, { storeId: selectedStoreId }),
         fetchInventoryAdjustments(authToken, { storeId: selectedStoreId }),
         fetchInventoryDestructions(authToken, { storeId: selectedStoreId }),
@@ -4103,7 +4327,11 @@ export function useAppController() {
     }
 
     const refreshPromise = (async () => {
-      const settlementsOk = await refreshDailySettlementsData();
+      const settlementsOk = await refreshDailySettlementsData({
+        limit: 1,
+        offset: 0,
+        merge: true,
+      });
       const remoteCycleStart = latestRemoteSettlementCycleRef.current.closedAt;
       const localCycleStart = settlementCycleStartIso ?? null;
       const useLocalCycleStart =
@@ -4131,40 +4359,58 @@ export function useAppController() {
           stockData,
           destructionData,
           employeeData,
-          absenceData,
           withdrawalData,
           productsOk,
         ] = await Promise.all([
-          fetchOrders(authToken, {
-            storeId: selectedStoreId,
-            from: cycleStart,
-            to: todayIso,
-          }),
-          fetchPurchases(authToken, {
-            storeId: selectedStoreId,
-            from: cycleStartDate,
-            to: todayDate,
-          }),
-          fetchExpenses(authToken, {
-            storeId: selectedStoreId,
-            ...(cycleStartClosureId
-              ? { cycleStartClosureId }
-              : { unanchoredCycle: true }),
-            to: todayDate,
-          }),
+          fetchAllListPages((offset) =>
+            fetchOrders(authToken, {
+              storeId: selectedStoreId,
+              from: cycleStart,
+              to: todayIso,
+              limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+              offset,
+            }),
+          ),
+          fetchAllListPages((offset) =>
+            fetchPurchases(authToken, {
+              storeId: selectedStoreId,
+              from: cycleStartDate,
+              to: todayDate,
+              limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+              offset,
+            }),
+          ),
+          fetchAllListPages((offset) =>
+            fetchExpenses(authToken, {
+              storeId: selectedStoreId,
+              ...(cycleStartClosureId
+                ? { cycleStartClosureId }
+                : { unanchoredCycle: true }),
+              to: todayDate,
+              limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+              offset,
+            }),
+          ),
           fetchInventoryStock(authToken, { storeId: selectedStoreId }),
-          fetchInventoryDestructions(authToken, {
-            storeId: selectedStoreId,
-            from: cycleStart,
-            to: todayIso,
-          }),
+          fetchAllListPages((offset) =>
+            fetchInventoryDestructions(authToken, {
+              storeId: selectedStoreId,
+              from: cycleStart,
+              to: todayIso,
+              limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+              offset,
+            }),
+          ),
           fetchEmployees(authToken, { storeId: selectedStoreId }),
-          fetchEmployeeAbsences(authToken, { storeId: selectedStoreId }),
-          fetchEmployeeWithdrawals(authToken, {
-            storeId: selectedStoreId,
-            from: cycleStart,
-            to: todayIso,
-          }),
+          fetchAllListPages((offset) =>
+            fetchEmployeeWithdrawals(authToken, {
+              storeId: selectedStoreId,
+              from: cycleStart,
+              to: todayIso,
+              limit: SETTLEMENT_CYCLE_PAGE_LIMIT,
+              offset,
+            }),
+          ),
           refreshProductsData(),
         ]);
 
@@ -4174,14 +4420,6 @@ export function useAppController() {
         setRemoteInventoryStockRows(stockData);
         setRemoteInventoryDestructions(destructionData);
 
-        const pendingAbsenceDeletes = new Set(
-          queue
-            .filter(
-              (job) =>
-                job.entity === "EMPLOYEE_ABSENCE" && job.action === "DELETE",
-            )
-            .map((job) => job.referenceId),
-        );
         const pendingWithdrawalDeletes = new Set(
           queue
             .filter(
@@ -4221,33 +4459,6 @@ export function useAppController() {
             ...previous.filter((item) => item.storeId !== selectedStoreId),
             ...Array.from(selected.values()),
           ].sort((a, b) => a.name.localeCompare(b.name, "ar"));
-        });
-
-        setEmployeeAbsences((previous) => {
-          const selected = new Map<string, EmployeeAbsenceEntry>();
-          absenceData.forEach((item) => {
-            if (!pendingAbsenceDeletes.has(item.clientAbsenceId)) {
-              selected.set(item.clientAbsenceId, {
-                id: item.clientAbsenceId,
-                employeeId: item.employeeClientId,
-                storeId: item.storeId,
-                absenceDate: item.absenceDate,
-                note: item.note,
-                createdAt: item.createdAt,
-                synced: true,
-              });
-            }
-          });
-          previous
-            .filter(
-              (item) => item.storeId === selectedStoreId && item.synced !== true,
-            )
-            .forEach((item) => selected.set(item.id, item));
-
-          return [
-            ...previous.filter((item) => item.storeId !== selectedStoreId),
-            ...Array.from(selected.values()),
-          ].sort((a, b) => b.absenceDate.localeCompare(a.absenceDate));
         });
 
         setEmployeeWithdrawals((previous) => {
@@ -4337,7 +4548,7 @@ export function useAppController() {
       setDashboardSummaries(dashboard.stores);
 
       try {
-        const withdrawals = await fetchCashboxWithdrawals(authToken, dateQuery);
+        const withdrawals = [] as Awaited<ReturnType<typeof fetchCashboxWithdrawals>>;
         setAdminCashboxWithdrawals(withdrawals);
       } catch (error: unknown) {
         if (error instanceof ApiError && error.status === 404) {
@@ -4351,6 +4562,49 @@ export function useAppController() {
       return true;
     } catch (error: unknown) {
       handleApiFailure(error, "تعذر تحديث لوحة الإدارة حالياً.");
+      return false;
+    }
+  }, [
+    adminFromDateInput,
+    adminToDateInput,
+    authToken,
+    handleApiFailure,
+    isAdmin,
+    isOnline,
+  ]);
+
+  const refreshAdminCashboxWithdrawalsData = useCallback(async () => {
+    if (!isOnline || !isAdmin || !authToken) {
+      return false;
+    }
+
+    if (
+      adminFromDateInput &&
+      adminToDateInput &&
+      adminFromDateInput > adminToDateInput
+    ) {
+      setStatusMessage("تاريخ البداية يجب أن يكون قبل أو يساوي تاريخ النهاية.");
+      return false;
+    }
+
+    const dateQuery = {
+      from: adminFromDateInput || undefined,
+      to: adminToDateInput || undefined,
+    };
+
+    try {
+      const withdrawals = await fetchCashboxWithdrawals(authToken, dateQuery);
+      setAdminCashboxWithdrawals(withdrawals);
+      return true;
+    } catch (error: unknown) {
+      if (error instanceof ApiError && error.status === 404) {
+        setStatusMessage(
+          "سجل سحوبات الصندوق غير متاح من نسخة السيرفر الحالية. حدّث الباكند وأعد تشغيله.",
+        );
+        return false;
+      }
+
+      handleApiFailure(error, "تعذر تحديث سجل سحوبات الصندوق حالياً.");
       return false;
     }
   }, [
@@ -4480,6 +4734,50 @@ export function useAppController() {
     refreshTimestampsRef.current = next;
     void saveObject(STORAGE_KEYS.refreshTimestamps, next);
   }, []);
+
+  const invalidateRefreshResources = useCallback(
+    (job: SyncJob) => {
+      const plan = getSyncInvalidationPlan(job, selectedStoreId);
+      if (plan.keys.length === 0 && plan.prefixes.length === 0) {
+        return;
+      }
+
+      const previous = refreshTimestampsRef.current;
+      let changed = false;
+      const next = { ...previous };
+
+      plan.keys.forEach((key) => {
+        if (key in next) {
+          delete next[key];
+          changed = true;
+        }
+      });
+
+      plan.prefixes.forEach((prefix) => {
+        Object.keys(next).forEach((key) => {
+          if (key.startsWith(prefix)) {
+            delete next[key];
+            changed = true;
+          }
+        });
+      });
+
+      if (changed) {
+        refreshTimestampsRef.current = next;
+        void saveObject(STORAGE_KEYS.refreshTimestamps, next);
+      }
+
+      if (__DEV__) {
+        const entity = job.entity ?? job.type ?? "UNKNOWN";
+        const action = job.action ?? "CREATE";
+        console.info("[sync]", entity, action, "invalidated", {
+          keys: plan.keys,
+          prefixes: plan.prefixes,
+        });
+      }
+    },
+    [selectedStoreId],
+  );
 
   const refreshResource = useCallback(
     async (
@@ -4634,6 +4932,10 @@ export function useAppController() {
     selectedStoreId,
     session?.accessToken,
   ]);
+
+  useEffect(() => {
+    refreshActiveScreenDataRef.current = refreshActiveScreenData;
+  }, [refreshActiveScreenData]);
 
   const applyAdminDateSelection = useCallback(
     (target: "from" | "to", selectedDate: Date) => {
@@ -4916,6 +5218,14 @@ export function useAppController() {
       return;
     }
 
+    if (AppState.currentState !== "active") {
+      return;
+    }
+
+    if (Date.now() < nextSyncAttemptAtRef.current) {
+      return;
+    }
+
     const jobsToSync = queue
       .filter((job) => !job.permanentFailure)
       .map((job, index) => ({ job, index }))
@@ -4958,11 +5268,6 @@ export function useAppController() {
     setStatusMessage("يتم حالياً مزامنة العمليات المحلية...");
     }
 
-    const inventoryChangesOnly = jobsToSync.every((job) =>
-      ["INVENTORY_ADJUSTMENT", "INVENTORY_DESTRUCTION"].includes(
-        job.entity ?? job.type ?? "",
-      ),
-    );
     const completedJobIds = new Set<string>();
     const retryJobs = new Map<string, SyncJob>();
     const blockedSettlementAdjustmentTimes = new Set<string>();
@@ -4989,7 +5294,8 @@ export function useAppController() {
         let handled = true;
 
         if (entity === "ORDER") {
-          await postOrder(authToken, job.payload as CreateOrderPayload);
+          const order = await postOrder(authToken, job.payload as CreateOrderPayload);
+          upsertRemoteOrder(order);
           markOrderSynced(job.referenceId);
         } else if (entity === "DAILY_SETTLEMENT") {
           const settlementPayload =
@@ -5036,10 +5342,13 @@ export function useAppController() {
             });
           }
 
-          await postExpense(authToken, payload);
+          const expense = await postExpense(authToken, payload);
+          upsertRemoteExpense(expense);
           markExpenseSynced(job.referenceId);
         } else if (entity === "EXPENSE" && action === "UPDATE") {
-          let payload = job.payload as UpdateExpensePayload;
+          let payload = job.payload as UpdateExpensePayload & {
+            storeId?: string;
+          };
           const matchingExpense = expenses.find(
             (item) => item.clientExpenseId === job.referenceId,
           );
@@ -5065,34 +5374,61 @@ export function useAppController() {
             });
           }
 
-          await patchExpense(authToken, job.referenceId, payload);
+          const { storeId: _expenseStoreId, ...expensePatchPayload } = payload;
+          const expense = await patchExpense(
+            authToken,
+            job.referenceId,
+            expensePatchPayload,
+          );
+          upsertRemoteExpense(expense);
           markExpenseSynced(job.referenceId);
         } else if (entity === "EXPENSE" && action === "DELETE") {
           await deleteExpense(authToken, job.referenceId);
+          removeRemoteExpense(job.referenceId);
         } else if (entity === "PURCHASE" && action === "CREATE") {
-          await postPurchase(authToken, job.payload as CreatePurchasePayload);
+          const purchase = await postPurchase(
+            authToken,
+            job.payload as CreatePurchasePayload,
+          );
+          upsertRemotePurchase(purchase);
           markPurchaseSynced(job.referenceId);
         } else if (entity === "PURCHASE" && action === "UPDATE") {
-          await patchPurchase(
+          const {
+            storeId: _purchaseStoreId,
+            ...purchasePatchPayload
+          } = job.payload as UpdatePurchasePayload & { storeId?: string };
+          const purchase = await patchPurchase(
             authToken,
             job.referenceId,
-            job.payload as UpdatePurchasePayload,
+            purchasePatchPayload,
           );
+          upsertRemotePurchase(purchase);
           markPurchaseSynced(job.referenceId);
         } else if (entity === "PURCHASE" && action === "DELETE") {
           await deletePurchase(authToken, job.referenceId);
+          removeRemotePurchase(job.referenceId);
         } else if (entity === "PRODUCT" && action === "CREATE") {
-          await postProduct(authToken, job.payload as CreateProductPayload);
+          const product = await postProduct(
+            authToken,
+            job.payload as CreateProductPayload,
+          );
+          upsertSyncedProduct(product);
           markProductSynced(job.referenceId);
         } else if (entity === "PRODUCT" && action === "UPDATE") {
-          await patchProduct(
+          const {
+            storeId: _productStoreId,
+            ...productPatchPayload
+          } = job.payload as UpdateProductPayload & { storeId?: string };
+          const product = await patchProduct(
             authToken,
             job.referenceId,
-            job.payload as UpdateProductPayload,
+            productPatchPayload,
           );
+          upsertSyncedProduct(product);
           markProductSynced(job.referenceId);
         } else if (entity === "PRODUCT" && action === "DELETE") {
           await deleteProduct(authToken, job.referenceId);
+          removeSyncedProduct(job.referenceId);
         } else if (
           entity === "INVENTORY_ADJUSTMENT" &&
           action === "CREATE"
@@ -5126,31 +5462,44 @@ export function useAppController() {
             destructionPayload.clientDestructionId,
           );
         } else if (entity === "EMPLOYEE" && action === "CREATE") {
-          await postEmployee(authToken, job.payload as CreateEmployeePayload);
+          const employee = await postEmployee(
+            authToken,
+            job.payload as CreateEmployeePayload,
+          );
+          upsertSyncedEmployee(employee);
           markEmployeeSynced(job.referenceId);
         } else if (entity === "EMPLOYEE" && action === "UPDATE") {
-          await patchEmployee(
+          const {
+            storeId: _employeeStoreId,
+            ...employeePatchPayload
+          } = job.payload as UpdateEmployeePayload & { storeId?: string };
+          const employee = await patchEmployee(
             authToken,
             job.referenceId,
-            job.payload as UpdateEmployeePayload,
+            employeePatchPayload,
           );
+          upsertSyncedEmployee(employee);
           markEmployeeSynced(job.referenceId);
         } else if (entity === "EMPLOYEE_ABSENCE" && action === "CREATE") {
-          await postEmployeeAbsence(
+          const absence = await postEmployeeAbsence(
             authToken,
             job.payload as CreateEmployeeAbsencePayload,
           );
+          upsertSyncedEmployeeAbsence(absence);
           markEmployeeAbsenceSynced(job.referenceId);
         } else if (entity === "EMPLOYEE_ABSENCE" && action === "DELETE") {
           await deleteEmployeeAbsence(authToken, job.referenceId);
+          removeSyncedEmployeeAbsence(job.referenceId);
         } else if (entity === "EMPLOYEE_WITHDRAWAL" && action === "CREATE") {
-          await postEmployeeWithdrawal(
+          const withdrawal = await postEmployeeWithdrawal(
             authToken,
             job.payload as CreateEmployeeWithdrawalPayload,
           );
+          upsertSyncedEmployeeWithdrawal(withdrawal);
           markEmployeeWithdrawalSynced(job.referenceId);
         } else if (entity === "EMPLOYEE_WITHDRAWAL" && action === "DELETE") {
           await deleteEmployeeWithdrawal(authToken, job.referenceId);
+          removeSyncedEmployeeWithdrawal(job.referenceId);
         } else {
           handled = false;
         }
@@ -5161,6 +5510,7 @@ export function useAppController() {
           );
         }
 
+        invalidateRefreshResources(job);
         completedJobIds.add(job.id);
       } catch (error: unknown) {
         if (error instanceof ApiError && error.status === 401) {
@@ -5185,8 +5535,12 @@ export function useAppController() {
           blockedSettlementAdjustmentTimes.add(job.createdAt);
           markSettlementSynced(job.referenceId);
           removeSettlementAdjustmentOrders(job.createdAt);
-          void refreshDailySettlementsData();
-          void refreshStoresData();
+          invalidateRefreshResources(job);
+          void refreshDailySettlementsData({
+            limit: 1,
+            offset: 0,
+            merge: true,
+          });
           continue;
         }
 
@@ -5195,6 +5549,18 @@ export function useAppController() {
           error.status === 404 &&
           action === "DELETE"
         ) {
+          if (entity === "EXPENSE") {
+            removeRemoteExpense(job.referenceId);
+          } else if (entity === "PURCHASE") {
+            removeRemotePurchase(job.referenceId);
+          } else if (entity === "PRODUCT") {
+            removeSyncedProduct(job.referenceId);
+          } else if (entity === "EMPLOYEE_ABSENCE") {
+            removeSyncedEmployeeAbsence(job.referenceId);
+          } else if (entity === "EMPLOYEE_WITHDRAWAL") {
+            removeSyncedEmployeeWithdrawal(job.referenceId);
+          }
+          invalidateRefreshResources(job);
           completedJobIds.add(job.id);
           continue;
         }
@@ -5230,26 +5596,25 @@ export function useAppController() {
     const snapshotRemainingCount =
       jobsToSync.length - completedJobIds.size;
     if (snapshotRemainingCount === 0) {
+      syncRetryDelayMsRef.current = SYNC_RETRY_BASE_DELAY_MS;
+      nextSyncAttemptAtRef.current = 0;
       if (activeScreenRef.current !== "pos") {
       setStatusMessage(
         `تمت مزامنة ${completedJobIds.size} عملية مؤجلة بنجاح.`,
       );
       }
-      if (inventoryChangesOnly) {
-        return;
-      }
-      if (activeScreenRef.current === "pos") {
-        return;
-      }
-      await Promise.all([
-        refreshDashboardData(),
-        refreshSettlementData(),
-      ]);
       return;
     }
 
     if (stoppedForAuthentication) {
+      nextSyncAttemptAtRef.current = Number.POSITIVE_INFINITY;
       return;
+    }
+
+    if (snapshotRemainingCount > 0) {
+      const retryDelay = syncRetryDelayMsRef.current;
+      nextSyncAttemptAtRef.current = Date.now() + retryDelay;
+      syncRetryDelayMsRef.current = getNextSyncRetryDelayMs(retryDelay);
     }
 
     if (activeScreenRef.current !== "pos") {
@@ -5263,6 +5628,7 @@ export function useAppController() {
     isAdmin,
     isOnline,
     expenses,
+    invalidateRefreshResources,
     markExpenseSynced,
     markEmployeeAbsenceSynced,
     markEmployeeSynced,
@@ -5277,14 +5643,23 @@ export function useAppController() {
     markSettlementSynced,
     persistSyncQueue,
     queue,
+    removeRemoteExpense,
+    removeRemotePurchase,
     removeSettlementAdjustmentOrders,
+    removeSyncedEmployeeAbsence,
+    removeSyncedEmployeeWithdrawal,
+    removeSyncedProduct,
     authToken,
     logout,
-    refreshDashboardData,
     refreshDailySettlementsData,
-    refreshSettlementData,
-    refreshStoresData,
+    upsertRemoteExpense,
+    upsertRemoteOrder,
+    upsertRemotePurchase,
     upsertRemoteSettlement,
+    upsertSyncedEmployee,
+    upsertSyncedEmployeeAbsence,
+    upsertSyncedEmployeeWithdrawal,
+    upsertSyncedProduct,
   ]);
 
   const loginUser = useCallback(async () => {
@@ -5905,11 +6280,10 @@ export function useAppController() {
       return;
     }
 
-    void refreshActiveScreenData();
+    void refreshActiveScreenDataRef.current();
   }, [
     activeScreen,
     isOnline,
-    refreshActiveScreenData,
     selectedStoreId,
     session?.accessToken,
   ]);
@@ -5919,26 +6293,23 @@ export function useAppController() {
       return;
     }
 
-    const intervalId = setInterval(() => {
-      void refreshActiveScreenData();
-    }, ACTIVE_SCREEN_REFRESH_INTERVAL_MS);
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextState;
 
-    return () => clearInterval(intervalId);
-  }, [isOnline, refreshActiveScreenData, session?.accessToken]);
-
-  useEffect(() => {
-    if (!isOnline || !session?.accessToken) {
-      return;
-    }
-
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        void refreshActiveScreenData();
+      if (previousState !== "active" && nextState === "active") {
+        nextSyncAttemptAtRef.current = 0;
+        syncRetryDelayMsRef.current = SYNC_RETRY_BASE_DELAY_MS;
+        syncWasAvailableRef.current = Boolean(isOnline && session?.accessToken);
+        void syncQueueRef.current();
+        void refreshActiveScreenDataRef.current();
+      } else if (nextState !== "active") {
+        syncWasAvailableRef.current = false;
       }
     });
 
     return () => subscription.remove();
-  }, [isOnline, refreshActiveScreenData, session?.accessToken]);
+  }, [isOnline, session?.accessToken]);
 
   useEffect(() => {
     if (!session || !isOnline) {
@@ -5962,13 +6333,20 @@ export function useAppController() {
     [queue],
   );
 
-  const syncQueueRef = useRef(syncQueue);
-
   useEffect(() => {
     syncQueueRef.current = syncQueue;
   }, [syncQueue]);
 
   useEffect(() => {
+    const canSyncNow = Boolean(
+      isOnline && session?.accessToken && AppState.currentState === "active",
+    );
+    if (canSyncNow && !syncWasAvailableRef.current) {
+      nextSyncAttemptAtRef.current = 0;
+      syncRetryDelayMsRef.current = SYNC_RETRY_BASE_DELAY_MS;
+    }
+    syncWasAvailableRef.current = canSyncNow;
+
     void syncQueueRef.current();
   }, [isOnline, session?.accessToken, syncQueueTrigger]);
 
@@ -5976,19 +6354,22 @@ export function useAppController() {
     if (
       !isOnline ||
       !session?.accessToken ||
+      AppState.currentState !== "active" ||
       !queue.some((job) => !job.permanentFailure)
     ) {
       return;
     }
 
-    const intervalId = setInterval(() => {
+    const delayMs = Math.max(0, nextSyncAttemptAtRef.current - Date.now());
+    const timeoutId = setTimeout(() => {
+      setSyncRetryTick((value) => value + 1);
       void syncQueueRef.current();
-    }, SYNC_RETRY_DELAY_MS);
+    }, delayMs);
 
     return () => {
-      clearInterval(intervalId);
+      clearTimeout(timeoutId);
     };
-  }, [isOnline, queue.length, session?.accessToken]);
+  }, [isOnline, session?.accessToken, syncQueueTrigger, syncRetryTick]);
 
   const pushPadToken = (token: string) => {
     setPosPadInput((previous) => {
@@ -7008,7 +7389,7 @@ export function useAppController() {
       createdAt: now,
       entity: 'EXPENSE',
       action: 'UPDATE',
-      payload: updatePayload,
+      payload: { ...updatePayload, storeId: effectiveStoreId },
     };
 
     if (isOnline && authToken) {
@@ -7054,6 +7435,9 @@ export function useAppController() {
     }
 
     const now = new Date().toISOString();
+    const existingExpense = expenses.find(
+      (item) => item.clientExpenseId === clientExpenseId,
+    );
     if (selectedExpenseDetails?.clientExpenseId === clientExpenseId) {
       setSelectedExpenseDetails(null);
     }
@@ -7070,7 +7454,7 @@ export function useAppController() {
       createdAt: now,
       entity: 'EXPENSE',
       action: 'DELETE',
-      payload: { clientExpenseId },
+      payload: { clientExpenseId, storeId: existingExpense?.storeId },
     };
 
     if (isOnline && authToken) {
@@ -7229,7 +7613,7 @@ export function useAppController() {
           createdAt: now,
           entity: 'PRODUCT',
           action: 'UPDATE',
-          payload: updatePayload,
+          payload: { ...updatePayload, storeId: selectedStoreId },
         }
       : {
           id: makeId('job'),
@@ -7815,6 +8199,9 @@ export function useAppController() {
     };
 
     const now = new Date().toISOString();
+    const existingPurchase = purchases.find(
+      (item) => item.clientPurchaseId === clientPurchaseId,
+    );
     setPurchases((previous) => {
       const next = previous.filter((item) => item.clientPurchaseId !== clientPurchaseId);
       persistArrayDeferred(STORAGE_KEYS.purchases, next);
@@ -7828,7 +8215,7 @@ export function useAppController() {
       createdAt: now,
       entity: 'PURCHASE',
       action: 'DELETE',
-      payload: { clientPurchaseId },
+      payload: { clientPurchaseId, storeId: existingPurchase?.storeId },
     };
 
     if (isOnline && authToken) {
@@ -7973,7 +8360,7 @@ export function useAppController() {
           createdAt: now,
           entity: 'EMPLOYEE',
           action: 'UPDATE',
-          payload: updatePayload,
+          payload: { ...updatePayload, storeId: employee.storeId },
         }
       : {
           id: makeId('job'),
@@ -8185,7 +8572,7 @@ export function useAppController() {
         createdAt: new Date().toISOString(),
         entity: 'EMPLOYEE_ABSENCE',
         action: 'DELETE',
-        payload: { clientAbsenceId: entryId },
+        payload: { clientAbsenceId: entryId, storeId: entry.storeId },
       });
     }
     setStatusMessage('تم حذف قيد الغياب.');
@@ -8206,7 +8593,7 @@ export function useAppController() {
         createdAt: new Date().toISOString(),
         entity: 'EMPLOYEE_WITHDRAWAL',
         action: 'DELETE',
-        payload: { clientWithdrawalId: entryId },
+        payload: { clientWithdrawalId: entryId, storeId: entry.storeId },
       });
     }
     setStatusMessage('تم حذف قيد السحبة.');
@@ -8941,6 +9328,7 @@ export function useAppController() {
     recentWithdrawalRows,
     refreshDailySettlementsData,
     refreshDashboardData,
+    refreshAdminCashboxWithdrawalsData,
     refreshAdminProductSalesData,
     refreshEmployeesData,
     refreshExpensesData,

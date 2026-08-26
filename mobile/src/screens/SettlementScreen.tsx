@@ -29,6 +29,7 @@ export function SettlementScreen() {
     recordInventoryDestruction,
     refreshAdminProductSalesData,
     refreshActiveScreenData,
+    refreshDailySettlementsData,
     selectedAdminProductSalesProduct,
     selectedAdminProductSalesProductId,
     selectedAdminProductSalesRow,
@@ -252,12 +253,7 @@ export function SettlementScreen() {
           {section.key === "archive" ? (
             <Pressable
               style={styles.smallRefreshButton}
-              onPress={() =>
-                void refreshActiveScreenData({
-                  force: true,
-                  showIndicator: false,
-                })
-              }
+              onPress={() => void refreshDailySettlementsData()}
             >
               <Text style={styles.smallRefreshText}>تحديث</Text>
             </Pressable>

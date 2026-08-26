@@ -12,6 +12,17 @@ import { StoresService } from '../stores/stores.service';
 import { DailySettlementsService } from './daily-settlements.service';
 import { DailySettlement } from './entities/daily-settlement.entity';
 
+function createAggregateQueryBuilder(rawRow: Record<string, string | number>) {
+  return {
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    setParameters: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn().mockResolvedValue(rawRow),
+  };
+}
+
 describe('DailySettlementsService', () => {
   let service: DailySettlementsService;
   let repository: jest.Mocked<Partial<Repository<DailySettlement>>>;
@@ -42,19 +53,6 @@ describe('DailySettlementsService', () => {
   };
 
   beforeEach(async () => {
-    const createQueryBuilder = (
-      rawRow: Record<string, number> = { total: 0 },
-    ) => {
-      const qb = {
-        select: jest.fn().mockReturnThis(),
-        addSelect: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        setParameters: jest.fn().mockReturnThis(),
-        getRawOne: jest.fn().mockResolvedValue(rawRow),
-      };
-      return qb;
-    };
     repository = {
       create: jest.fn(),
       findOne: jest.fn(),
@@ -62,19 +60,19 @@ describe('DailySettlementsService', () => {
     };
     orderRepository = {
       createQueryBuilder: jest.fn(() =>
-        createQueryBuilder({ salesAmount: 0, refundAmount: 0 }),
+        createAggregateQueryBuilder({ salesAmount: 0, refundAmount: 0 }),
       ),
     };
     expenseRepository = {
-      createQueryBuilder: jest.fn(() => createQueryBuilder()),
+      createQueryBuilder: jest.fn(() => createAggregateQueryBuilder({ total: 0 })),
     };
     purchaseRepository = {
       createQueryBuilder: jest.fn(() =>
-        createQueryBuilder({ purchasesAmount: 0, tawasiAmount: 0 }),
+        createAggregateQueryBuilder({ purchasesAmount: 0, tawasiAmount: 0 }),
       ),
     };
     employeeWithdrawalRepository = {
-      createQueryBuilder: jest.fn(() => createQueryBuilder()),
+      createQueryBuilder: jest.fn(() => createAggregateQueryBuilder({ total: 0 })),
     };
     storesService = {
       findById: jest.fn(),
@@ -155,6 +153,101 @@ describe('DailySettlementsService', () => {
     );
     expect(repository.save).toHaveBeenCalledWith(created);
     expect(storesService.setCashCarry).toHaveBeenCalledWith(storeId, 30);
+  });
+
+  it('keeps generated settlement financial snapshots based on the current cycle', async () => {
+    const previousSettlement = {
+      clientClosureId: 'close-previous',
+      syncedAt: new Date('2026-06-13T20:00:00.000Z'),
+    } as DailySettlement;
+    const orderQb = createAggregateQueryBuilder({
+      salesAmount: '1200.50',
+      refundAmount: '100.25',
+      ordersCount: '6',
+    });
+    const expenseQb = createAggregateQueryBuilder({
+      total: '80.25',
+      expensesCount: '3',
+    });
+    const purchaseQb = createAggregateQueryBuilder({
+      purchasesAmount: '350.75',
+      tawasiAmount: '70.25',
+      purchasesCount: '4',
+      paymentsAmount: '25.00',
+    });
+    const withdrawalQb = createAggregateQueryBuilder({
+      total: '45.50',
+      withdrawalsCount: '2',
+    });
+    const saved = {
+      ...payload,
+      id: 'server-id',
+      expectedRevenue: 0,
+      salesAmount: 1200.5,
+      refundAmount: 100.25,
+      expensesAmount: 80.25,
+      purchasesAmount: 350.75,
+      tawasiAmount: 70.25,
+      employeeWithdrawalsAmount: 45.5,
+      ordersCount: 6,
+      expensesCount: 3,
+      purchasesCount: 4,
+      withdrawalsCount: 2,
+      paymentsAmount: 25,
+      syncedAt: new Date(payload.syncedAt),
+    } as DailySettlement;
+
+    orderRepository.createQueryBuilder.mockReturnValueOnce(orderQb);
+    expenseRepository.createQueryBuilder.mockReturnValueOnce(expenseQb);
+    purchaseRepository.createQueryBuilder.mockReturnValueOnce(purchaseQb);
+    employeeWithdrawalRepository.createQueryBuilder.mockReturnValueOnce(
+      withdrawalQb,
+    );
+    repository.findOne
+      ?.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(previousSettlement)
+      .mockResolvedValueOnce(saved);
+    repository.create?.mockReturnValue(saved);
+    repository.save?.mockResolvedValue(saved);
+
+    await service.createOrUpdate(
+      { ...payload, expectedRevenue: undefined },
+      cashierUser,
+    );
+
+    expect(repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedRevenue: 0,
+        salesAmount: 1200.5,
+        refundAmount: 100.25,
+        expensesAmount: 80.25,
+        purchasesAmount: 350.75,
+        tawasiAmount: 70.25,
+        employeeWithdrawalsAmount: 45.5,
+        ordersCount: 6,
+        expensesCount: 3,
+        purchasesCount: 4,
+        withdrawalsCount: 2,
+        paymentsAmount: 25,
+      }),
+    );
+    expect(orderQb.andWhere).toHaveBeenCalledWith(
+      'order.orderedAt <= :cycleEndedAt',
+      { cycleEndedAt: new Date(payload.syncedAt) },
+    );
+    expect(orderQb.andWhere).toHaveBeenCalledWith(
+      'order.orderedAt > :cycleStartedAt',
+      { cycleStartedAt: previousSettlement.syncedAt },
+    );
+    expect(expenseQb.andWhere).toHaveBeenCalledWith(
+      'expense.cycleStartClosureId = :cycleStartClosureId',
+      { cycleStartClosureId: previousSettlement.clientClosureId },
+    );
+    expect(repository.findOne).toHaveBeenNthCalledWith(3, {
+      where: { storeId },
+      order: { businessDate: 'DESC', syncedAt: 'DESC', createdAt: 'DESC' },
+    });
   });
 
   it('excludes stock-only purchases from generated purchase totals', async () => {

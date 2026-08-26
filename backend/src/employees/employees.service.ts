@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreateEmployeeAbsenceDto } from './dto/create-employee-absence.dto';
@@ -30,11 +31,17 @@ export class EmployeesService {
     private readonly storesService: StoresService,
   ) {}
 
-  async findEmployees(storeId: string | undefined, authUser: AuthUser): Promise<Employee[]> {
-    const scopedStoreId = this.resolveStoreForRead(storeId, authUser);
+  async findEmployees(
+    query: ListEmployeesQueryDto,
+    authUser: AuthUser,
+  ): Promise<Employee[]> {
+    const scopedStoreId = this.resolveStoreForRead(query.storeId, authUser);
+    const { limit, offset } = resolveListPagination(query);
     return this.employeeRepository.find({
       where: scopedStoreId ? { storeId: scopedStoreId } : {},
       order: { name: 'ASC', createdAt: 'ASC' },
+      skip: offset,
+      take: limit,
     });
   }
 
@@ -95,13 +102,16 @@ export class EmployeesService {
   }
 
   async findAbsences(
-    storeId: string | undefined,
+    query: ListEmployeesQueryDto,
     authUser: AuthUser,
   ): Promise<EmployeeAbsence[]> {
-    const scopedStoreId = this.resolveStoreForRead(storeId, authUser);
+    const scopedStoreId = this.resolveStoreForRead(query.storeId, authUser);
+    const { limit, offset } = resolveListPagination(query);
     return this.absenceRepository.find({
       where: scopedStoreId ? { storeId: scopedStoreId } : {},
       order: { absenceDate: 'DESC', createdAt: 'DESC' },
+      skip: offset,
+      take: limit,
     });
   }
 
@@ -172,6 +182,10 @@ export class EmployeesService {
     if (query.to) {
       qb.andWhere('withdrawal.createdAt <= :to', { to: query.to });
     }
+
+    const { limit, offset } = resolveListPagination(query);
+    qb.skip(offset);
+    qb.take(limit);
 
     return qb.getMany();
   }

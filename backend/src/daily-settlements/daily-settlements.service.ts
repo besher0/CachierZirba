@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
 import { Expense } from '../expenses/entities/expense.entity';
@@ -151,7 +152,9 @@ export class DailySettlementsService {
     const qb = this.dailySettlementRepository
       .createQueryBuilder('s')
       .leftJoinAndSelect('s.store', 'store')
-      .orderBy('s.businessDate', 'DESC');
+      .orderBy('s.businessDate', 'DESC')
+      .addOrderBy('s.syncedAt', 'DESC')
+      .addOrderBy('s.createdAt', 'DESC');
 
     const scopedStoreId = this.resolveStoreForRead(query.storeId, authUser);
     if (scopedStoreId) {
@@ -169,6 +172,10 @@ export class DailySettlementsService {
         toDate: query.to.slice(0, 10),
       });
     }
+
+    const { limit, offset } = resolveListPagination(query);
+    qb.skip(offset);
+    qb.take(limit);
 
     return qb.getMany();
   }
@@ -226,7 +233,7 @@ export class DailySettlementsService {
   ): Promise<SettlementCycleSnapshots> {
     const previousSettlement = await this.dailySettlementRepository.findOne({
       where: { storeId },
-      order: { createdAt: 'DESC' },
+      order: { businessDate: 'DESC', syncedAt: 'DESC', createdAt: 'DESC' },
     });
     const cycleStartedAt =
       requestedCycleStartedAt ?? previousSettlement?.syncedAt ?? null;

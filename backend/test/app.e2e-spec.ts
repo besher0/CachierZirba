@@ -36,6 +36,7 @@ describe('Zirba API (e2e)', () => {
   beforeAll(async () => {
     delete process.env.DATABASE_URL;
     process.env.SQLITE_DB_PATH = e2eDbPath;
+    process.env.TYPEORM_SYNCHRONIZE = 'true';
     if (existsSync(e2eDbPath)) {
       await unlink(e2eDbPath);
     }

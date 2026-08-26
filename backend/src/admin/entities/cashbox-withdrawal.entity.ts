@@ -12,6 +12,7 @@ import { Store } from '../../stores/entities/store.entity';
 
 @Entity('cashbox_withdrawals')
 @Index('IDX_cashbox_withdrawals_store_withdrawn', ['storeId', 'withdrawnAt'])
+@Index('IDX_cashbox_withdrawals_withdrawn_at', ['withdrawnAt'])
 export class CashboxWithdrawal {
   @PrimaryGeneratedColumn('uuid')
   id: string;

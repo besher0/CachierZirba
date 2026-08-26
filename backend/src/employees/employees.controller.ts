@@ -23,7 +23,7 @@ export class EmployeesController {
     @Query() query: ListEmployeesQueryDto,
     @CurrentUser() authUser: AuthUser,
   ): Promise<Employee[]> {
-    return this.employeesService.findEmployees(query.storeId, authUser);
+    return this.employeesService.findEmployees(query, authUser);
   }
 
   @Post()
@@ -48,7 +48,7 @@ export class EmployeesController {
     @Query() query: ListEmployeesQueryDto,
     @CurrentUser() authUser: AuthUser,
   ): Promise<EmployeeAbsence[]> {
-    return this.employeesService.findAbsences(query.storeId, authUser);
+    return this.employeesService.findAbsences(query, authUser);
   }
 
   @Post('absences')

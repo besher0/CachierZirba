@@ -17,6 +17,7 @@ import { OrderItem } from '../interfaces/order-item.interface';
 @Entity('orders')
 @Unique('UQ_client_order_id', ['clientOrderId'])
 @Index('IDX_orders_store_ordered_at', ['storeId', 'orderedAt'])
+@Index('IDX_orders_ordered_at_store', ['orderedAt', 'storeId'])
 export class Order {
   @PrimaryGeneratedColumn('uuid')
   id: string;

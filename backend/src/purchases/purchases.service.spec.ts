@@ -7,10 +7,33 @@ import { StoresService } from '../stores/stores.service';
 import { Purchase } from './entities/purchase.entity';
 import { PurchasesService } from './purchases.service';
 
+type MockQueryBuilder = {
+  leftJoinAndSelect: jest.Mock;
+  orderBy: jest.Mock;
+  addOrderBy: jest.Mock;
+  andWhere: jest.Mock;
+  skip: jest.Mock;
+  take: jest.Mock;
+  getMany: jest.Mock;
+};
+
+function createMockQueryBuilder(): MockQueryBuilder {
+  const qb = {} as MockQueryBuilder;
+  qb.leftJoinAndSelect = jest.fn(() => qb);
+  qb.orderBy = jest.fn(() => qb);
+  qb.addOrderBy = jest.fn(() => qb);
+  qb.andWhere = jest.fn(() => qb);
+  qb.skip = jest.fn(() => qb);
+  qb.take = jest.fn(() => qb);
+  qb.getMany = jest.fn().mockResolvedValue([]);
+  return qb;
+}
+
 describe('PurchasesService', () => {
   let service: PurchasesService;
   let repository: jest.Mocked<Partial<Repository<Purchase>>>;
   let storesService: { findById: jest.Mock };
+  let queryBuilder: MockQueryBuilder;
 
   const storeId = '11111111-1111-4111-8111-111111111111';
   const cashierUser: AuthUser = {
@@ -39,8 +62,10 @@ describe('PurchasesService', () => {
   };
 
   beforeEach(async () => {
+    queryBuilder = createMockQueryBuilder();
     repository = {
       create: jest.fn(),
+      createQueryBuilder: jest.fn(() => queryBuilder as never),
       findOne: jest.fn(),
       save: jest.fn(),
     };
@@ -118,7 +143,9 @@ describe('PurchasesService', () => {
     repository.create?.mockReturnValue(created);
     repository.save?.mockResolvedValue(saved);
 
-    await expect(service.create(stockOnlyPayload, adminUser)).resolves.toBe(saved);
+    await expect(service.create(stockOnlyPayload, adminUser)).resolves.toBe(
+      saved,
+    );
     expect(repository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         purchaseKind: 'STOCK_ONLY',
@@ -127,5 +154,57 @@ describe('PurchasesService', () => {
         paymentAmount: 0,
       }),
     );
+  });
+
+  it('applies the default list limit when none is provided', async () => {
+    await service.findAll({}, adminUser);
+
+    expect(queryBuilder.skip).toHaveBeenCalledWith(0);
+    expect(queryBuilder.take).toHaveBeenCalledWith(200);
+  });
+
+  it('caps the list limit at the maximum value', async () => {
+    await service.findAll({ limit: 999 }, adminUser);
+
+    expect(queryBuilder.take).toHaveBeenCalledWith(500);
+  });
+
+  it('applies list offset with the requested limit', async () => {
+    await service.findAll({ limit: 50, offset: 40 }, adminUser);
+
+    expect(queryBuilder.skip).toHaveBeenCalledWith(40);
+    expect(queryBuilder.take).toHaveBeenCalledWith(50);
+  });
+
+  it('keeps purchase list filters while paginating', async () => {
+    await service.findAll(
+      {
+        storeId,
+        from: '2026-06-01T00:00:00.000Z',
+        to: '2026-06-30',
+        product: 'cones',
+        limit: 25,
+        offset: 10,
+      },
+      adminUser,
+    );
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith('p.storeId = :storeId', {
+      storeId,
+    });
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'p.purchaseDate >= :fromDate',
+      { fromDate: '2026-06-01' },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'p.purchaseDate <= :toDate',
+      { toDate: '2026-06-30' },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'LOWER(p.productName) LIKE LOWER(:product)',
+      { product: '%cones%' },
+    );
+    expect(queryBuilder.skip).toHaveBeenCalledWith(10);
+    expect(queryBuilder.take).toHaveBeenCalledWith(25);
   });
 });

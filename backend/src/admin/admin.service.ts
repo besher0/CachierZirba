@@ -3,6 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { DateRangeQueryDto } from '../common/dto/date-range-query.dto';
+import {
+  ListPaginationQuery,
+  resolveListPagination,
+} from '../common/list-pagination';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { Order } from '../orders/entities/order.entity';
 import { OrderStatus } from '../orders/enums/order-status.enum';
@@ -14,22 +18,29 @@ import { CashboxWithdrawal } from './entities/cashbox-withdrawal.entity';
 
 interface OrderAggRow {
   storeId: string;
-  ordersCount: string;
-  completedRevenue: string;
-  refundAmount: string;
+  ordersCount: string | number | null;
+  completedRevenue: string | number | null;
+  refundAmount: string | number | null;
 }
 
 interface SettlementAggRow {
   storeId: string;
-  cashBoxAmount: string;
-  sharesAmount: string;
-  expectedRevenue: string;
-  expectedCarryForwardAmount: string;
-  actualRemainingAmount: string;
+  cashBoxAmount: string | number | null;
+  sharesAmount: string | number | null;
+  expectedRevenue: string | number | null;
+  expectedCarryForwardAmount: string | number | null;
+  actualRemainingAmount: string | number | null;
+  allTimeCashBoxAmount: string | number | null;
 }
 
 interface CashboxWithdrawalAggRow {
-  cashBoxWithdrawalsAmount: string;
+  cashBoxWithdrawalsAmount: string | number | null;
+  allTimeCashBoxWithdrawalsAmount?: string | number | null;
+}
+
+interface DashboardCacheEntry {
+  expiresAt: number;
+  response: AdminDashboardResponse;
 }
 
 export interface StoreDashboardSummary {
@@ -90,8 +101,12 @@ export interface ProductSalesSummaryResponse {
   netAmount: number;
 }
 
+const DASHBOARD_CACHE_TTL_MS = 120000;
+
 @Injectable()
 export class AdminService {
+  private readonly dashboardCache = new Map<string, DashboardCacheEntry>();
+
   constructor(
     @InjectRepository(Store)
     private readonly storeRepository: Repository<Store>,
@@ -105,19 +120,23 @@ export class AdminService {
   ) {}
 
   async getDashboard(query: DateRangeQueryDto): Promise<AdminDashboardResponse> {
-    const stores = await this.storeRepository.find({ order: { name: 'ASC' } });
+    const cacheKey = this.getDashboardCacheKey(query);
+    const cached = this.dashboardCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return this.cloneDashboardResponse(cached.response);
+    }
 
-    const orderAggRows = await this.buildOrderAggQuery(query).getRawMany<OrderAggRow>();
-    const settlementAggRows = await this
-      .buildSettlementAggQuery(query)
-      .getRawMany<SettlementAggRow>();
-    const withdrawalAggRows =
-      await this.getCashboxWithdrawalTotalOrEmpty(query);
-    const allTimeCashBoxRows = await this
-      .buildSettlementAggQuery({})
-      .getRawMany<SettlementAggRow>();
-    const allTimeWithdrawalRows =
-      await this.getCashboxWithdrawalTotalOrEmpty({});
+    const [
+      stores,
+      orderAggRows,
+      settlementAggRows,
+      withdrawalAggRows,
+    ] = await Promise.all([
+      this.storeRepository.find({ order: { name: 'ASC' } }),
+      this.buildOrderAggQuery(query).getRawMany<OrderAggRow>(),
+      this.buildDashboardSettlementAggQuery(query).getRawMany<SettlementAggRow>(),
+      this.getCashboxWithdrawalDashboardTotalsOrEmpty(query),
+    ]);
 
     const orderMap = new Map<string, OrderAggRow>(
       orderAggRows.map((row) => [row.storeId, row]),
@@ -125,20 +144,16 @@ export class AdminService {
     const settlementMap = new Map<string, SettlementAggRow>(
       settlementAggRows.map((row) => [row.storeId, row]),
     );
-    const allTimeCashBoxMap = new Map<string, SettlementAggRow>(
-      allTimeCashBoxRows.map((row) => [row.storeId, row]),
-    );
     const cashBoxWithdrawalsAmount = this.parseNumber(
       withdrawalAggRows?.cashBoxWithdrawalsAmount,
     );
     const allTimeCashBoxWithdrawalsAmount = this.parseNumber(
-      allTimeWithdrawalRows?.cashBoxWithdrawalsAmount,
+      withdrawalAggRows?.allTimeCashBoxWithdrawalsAmount,
     );
 
     const storeSummaries = stores.map((store) => {
       const orderAgg = orderMap.get(store.id);
       const settlementAgg = settlementMap.get(store.id);
-      const allTimeCashBoxAgg = allTimeCashBoxMap.get(store.id);
 
       const ordersCount = this.parseNumber(orderAgg?.ordersCount);
       const completedRevenue = this.parseNumber(orderAgg?.completedRevenue);
@@ -147,7 +162,7 @@ export class AdminService {
       const cashBoxAmount = this.parseNumber(settlementAgg?.cashBoxAmount);
       const cashBoxWithdrawalsAmount = 0;
       const actualCashBoxRemainingAmount = this.toMoney(
-        this.parseNumber(allTimeCashBoxAgg?.cashBoxAmount),
+        this.parseNumber(settlementAgg?.allTimeCashBoxAmount),
       );
       const expectedCarryForwardAmount = this.parseNumber(
         settlementAgg?.expectedCarryForwardAmount,
@@ -176,7 +191,7 @@ export class AdminService {
       } satisfies StoreDashboardSummary;
     });
 
-    return {
+    const response = {
       totals: {
         ordersCount: storeSummaries.reduce((sum, item) => sum + item.ordersCount, 0),
         completedRevenue: storeSummaries.reduce(
@@ -209,39 +224,40 @@ export class AdminService {
       },
       stores: storeSummaries,
     };
+
+    this.dashboardCache.set(cacheKey, {
+      expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
+      response: this.cloneDashboardResponse(response),
+    });
+
+    return response;
   }
 
   async getStoreSummary(
     storeId: string,
     query: DateRangeQueryDto,
   ): Promise<StoreSummaryResponse> {
-    const store = await this.storesService.findById(storeId);
-    const orders = await this.listStoreOrders(storeId, query);
-    const settlements = await this.listStoreDailySettlements(storeId, query);
+    const [store, orderAgg, settlementAgg] = await Promise.all([
+      this.storesService.findById(storeId),
+      this.buildOrderAggQuery(query, storeId).getRawOne<OrderAggRow>(),
+      this.buildDashboardSettlementAggQuery(query, storeId).getRawOne<SettlementAggRow>(),
+    ]);
     const cashBoxWithdrawalsAmount = 0;
-    const actualCashBoxRemainingAmount =
-      await this.getStoreActualCashBoxRemainingAmount(storeId);
+    const actualCashBoxRemainingAmount = this.toMoney(
+      this.parseNumber(settlementAgg?.allTimeCashBoxAmount),
+    );
 
-    const ordersCount = orders.length;
-    const completedRevenue = orders
-      .filter((item) => item.status === OrderStatus.COMPLETED)
-      .reduce((sum, item) => sum + item.total, 0);
-    const refundAmount = orders
-      .filter((item) => item.status === OrderStatus.REFUNDED)
-      .reduce((sum, item) => sum + item.total, 0);
-    const sharesAmount = settlements.reduce((sum, item) => sum + item.sharesAmount, 0);
-    const cashBoxAmount = settlements.reduce((sum, item) => sum + item.cashBoxAmount, 0);
-    const expectedCarryForwardAmount = settlements.reduce((sum, item) => {
-      const expectedCarryForward = Math.max(
-        item.actualRemainingAmount - item.cashBoxAmount - item.sharesAmount,
-        0,
-      );
-      return sum + expectedCarryForward;
-    }, 0);
-    const expectedRevenue = settlements.reduce((sum, item) => sum + item.expectedRevenue, 0);
-    const actualRemainingAmount = settlements.reduce(
-      (sum, item) => sum + item.actualRemainingAmount,
-      0,
+    const ordersCount = this.parseNumber(orderAgg?.ordersCount);
+    const completedRevenue = this.parseNumber(orderAgg?.completedRevenue);
+    const refundAmount = this.parseNumber(orderAgg?.refundAmount);
+    const sharesAmount = this.parseNumber(settlementAgg?.sharesAmount);
+    const cashBoxAmount = this.parseNumber(settlementAgg?.cashBoxAmount);
+    const expectedCarryForwardAmount = this.parseNumber(
+      settlementAgg?.expectedCarryForwardAmount,
+    );
+    const expectedRevenue = this.parseNumber(settlementAgg?.expectedRevenue);
+    const actualRemainingAmount = this.parseNumber(
+      settlementAgg?.actualRemainingAmount,
     );
     const settlementDifferenceAmount = Number(
       (actualRemainingAmount - expectedRevenue).toFixed(2),
@@ -270,7 +286,11 @@ export class AdminService {
     };
   }
 
-  async listStoreOrders(storeId: string, query: ListOrdersQueryDto): Promise<Order[]> {
+  async listStoreOrders(
+    storeId: string,
+    query: ListOrdersQueryDto,
+    options: { paginate?: boolean } = {},
+  ): Promise<Order[]> {
     await this.storesService.findById(storeId);
 
     const qb = this.orderRepository
@@ -293,12 +313,10 @@ export class AdminService {
       qb.andWhere('o.orderedAt <= :to', { to: toValue });
     }
 
-    if (query.offset !== undefined) {
-      qb.skip(query.offset);
-    }
-
-    if (query.limit !== undefined) {
-      qb.take(query.limit);
+    if (options.paginate !== false) {
+      const { limit, offset } = resolveListPagination(query);
+      qb.skip(offset);
+      qb.take(limit);
     }
 
     return qb.getMany();
@@ -306,7 +324,8 @@ export class AdminService {
 
   async listStoreDailySettlements(
     storeId: string,
-    query: DateRangeQueryDto,
+    query: DateRangeQueryDto & ListPaginationQuery,
+    options: { paginate?: boolean } = {},
   ): Promise<DailySettlement[]> {
     await this.storesService.findById(storeId);
 
@@ -324,6 +343,12 @@ export class AdminService {
     const toDate = this.toDateOnly(query.to);
     if (toDate) {
       qb.andWhere('s.businessDate <= :toDate', { toDate });
+    }
+
+    if (options.paginate !== false) {
+      const { limit, offset } = resolveListPagination(query);
+      qb.skip(offset);
+      qb.take(limit);
     }
 
     return qb.getMany();
@@ -352,6 +377,7 @@ export class AdminService {
     });
 
     const saved = await this.cashboxWithdrawalRepository.save(withdrawal);
+    this.invalidateDashboardCache();
     return this.cashboxWithdrawalRepository.findOneOrFail({
       where: { id: saved.id },
       relations: { store: true },
@@ -359,7 +385,7 @@ export class AdminService {
   }
 
   async listCashboxWithdrawals(
-    query: DateRangeQueryDto,
+    query: DateRangeQueryDto & ListPaginationQuery,
   ): Promise<CashboxWithdrawal[]> {
     const qb = this.cashboxWithdrawalRepository
       .createQueryBuilder('w')
@@ -376,6 +402,10 @@ export class AdminService {
       qb.andWhere('w.withdrawnAt <= :to', { to: toValue });
     }
 
+    const { limit, offset } = resolveListPagination(query);
+    qb.skip(offset);
+    qb.take(limit);
+
     try {
       return await qb.getMany();
     } catch (error: unknown) {
@@ -391,7 +421,9 @@ export class AdminService {
     storeId: string,
     query: DateRangeQueryDto,
   ): Promise<ProductSalesSummaryResponse[]> {
-    const orders = await this.listStoreOrders(storeId, query);
+    const orders = await this.listStoreOrders(storeId, query, {
+      paginate: false,
+    });
     const byProduct = new Map<string, ProductSalesSummaryResponse>();
 
     orders.forEach((order) => {
@@ -430,17 +462,17 @@ export class AdminService {
       .sort((a, b) => a.productName.localeCompare(b.productName, 'ar'));
   }
 
-  private buildOrderAggQuery(query: DateRangeQueryDto) {
+  private buildOrderAggQuery(query: DateRangeQueryDto, storeId?: string) {
     const qb = this.orderRepository
       .createQueryBuilder('o')
       .select('o.storeId', 'storeId')
-      .addSelect('COUNT(o.id)', 'ordersCount')
+      .addSelect('COALESCE(COUNT(o.id), 0)', 'ordersCount')
       .addSelect(
-        'SUM(CASE WHEN o.status = :completedStatus THEN o.total ELSE 0 END)',
+        'COALESCE(SUM(CASE WHEN o.status = :completedStatus THEN o.total ELSE 0 END), 0)',
         'completedRevenue',
       )
       .addSelect(
-        'SUM(CASE WHEN o.status = :refundedStatus THEN o.total ELSE 0 END)',
+        'COALESCE(SUM(CASE WHEN o.status = :refundedStatus THEN o.total ELSE 0 END), 0)',
         'refundAmount',
       )
       .setParameters({
@@ -448,6 +480,10 @@ export class AdminService {
         refundedStatus: OrderStatus.REFUNDED,
       })
       .groupBy('o.storeId');
+
+    if (storeId) {
+      qb.andWhere('o.storeId = :storeId', { storeId });
+    }
 
     const fromValue = this.toOrderFromBoundary(query.from);
     if (fromValue) {
@@ -457,6 +493,58 @@ export class AdminService {
     const toValue = this.toOrderToBoundary(query.to);
     if (toValue) {
       qb.andWhere('o.orderedAt <= :to', { to: toValue });
+    }
+
+    return qb;
+  }
+
+  private buildDashboardSettlementAggQuery(
+    query: DateRangeQueryDto,
+    storeId?: string,
+  ) {
+    const periodFilters: string[] = [];
+    const params: Record<string, string> = {};
+
+    const fromDate = this.toDateOnly(query.from);
+    if (fromDate) {
+      periodFilters.push('s.businessDate >= :fromDate');
+      params.fromDate = fromDate;
+    }
+
+    const toDate = this.toDateOnly(query.to);
+    if (toDate) {
+      periodFilters.push('s.businessDate <= :toDate');
+      params.toDate = toDate;
+    }
+
+    const periodPredicate =
+      periodFilters.length > 0 ? periodFilters.join(' AND ') : '1 = 1';
+    const periodSum = (expression: string) =>
+      `COALESCE(SUM(CASE WHEN ${periodPredicate} THEN ${expression} ELSE 0 END), 0)`;
+
+    const carryForwardExpression =
+      'CASE WHEN (s.actualRemainingAmount - s.cashBoxAmount - s.sharesAmount) > 0 THEN (s.actualRemainingAmount - s.cashBoxAmount - s.sharesAmount) ELSE 0 END';
+
+    const qb = this.dailySettlementRepository
+      .createQueryBuilder('s')
+      .select('s.storeId', 'storeId')
+      .addSelect(periodSum('s.cashBoxAmount'), 'cashBoxAmount')
+      .addSelect(periodSum('s.sharesAmount'), 'sharesAmount')
+      .addSelect(periodSum('s.expectedRevenue'), 'expectedRevenue')
+      .addSelect(
+        periodSum(carryForwardExpression),
+        'expectedCarryForwardAmount',
+      )
+      .addSelect(periodSum('s.actualRemainingAmount'), 'actualRemainingAmount')
+      .addSelect('COALESCE(SUM(s.cashBoxAmount), 0)', 'allTimeCashBoxAmount')
+      .groupBy('s.storeId');
+
+    if (storeId) {
+      qb.andWhere('s.storeId = :storeId', { storeId });
+    }
+
+    if (Object.keys(params).length > 0) {
+      qb.setParameters(params);
     }
 
     return qb;
@@ -507,6 +595,43 @@ export class AdminService {
     return qb;
   }
 
+  private buildCashboxWithdrawalDashboardTotalsQuery(query: DateRangeQueryDto) {
+    const periodFilters: string[] = [];
+    const params: Record<string, string> = {};
+
+    const fromValue = this.toOrderFromBoundary(query.from);
+    if (fromValue) {
+      periodFilters.push('w.withdrawnAt >= :from');
+      params.from = fromValue;
+    }
+
+    const toValue = this.toOrderToBoundary(query.to);
+    if (toValue) {
+      periodFilters.push('w.withdrawnAt <= :to');
+      params.to = toValue;
+    }
+
+    const periodPredicate =
+      periodFilters.length > 0 ? periodFilters.join(' AND ') : '1 = 1';
+
+    const qb = this.cashboxWithdrawalRepository
+      .createQueryBuilder('w')
+      .select(
+        `COALESCE(SUM(CASE WHEN ${periodPredicate} THEN w.amount ELSE 0 END), 0)`,
+        'cashBoxWithdrawalsAmount',
+      )
+      .addSelect(
+        'COALESCE(SUM(w.amount), 0)',
+        'allTimeCashBoxWithdrawalsAmount',
+      );
+
+    if (Object.keys(params).length > 0) {
+      qb.setParameters(params);
+    }
+
+    return qb;
+  }
+
   private async getCashboxWithdrawalTotalOrEmpty(
     query: DateRangeQueryDto,
   ): Promise<CashboxWithdrawalAggRow | undefined> {
@@ -517,6 +642,25 @@ export class AdminService {
     } catch (error: unknown) {
       if (this.isMissingCashboxWithdrawalsTableError(error)) {
         return { cashBoxWithdrawalsAmount: '0' };
+      }
+
+      throw error;
+    }
+  }
+
+  private async getCashboxWithdrawalDashboardTotalsOrEmpty(
+    query: DateRangeQueryDto,
+  ): Promise<CashboxWithdrawalAggRow | undefined> {
+    try {
+      return await this.buildCashboxWithdrawalDashboardTotalsQuery(query).getRawOne<
+        CashboxWithdrawalAggRow
+      >();
+    } catch (error: unknown) {
+      if (this.isMissingCashboxWithdrawalsTableError(error)) {
+        return {
+          cashBoxWithdrawalsAmount: '0',
+          allTimeCashBoxWithdrawalsAmount: '0',
+        };
       }
 
       throw error;
@@ -548,8 +692,8 @@ export class AdminService {
     );
   }
 
-  private parseNumber(value: string | number | undefined): number {
-    if (value === undefined) {
+  private parseNumber(value: string | number | null | undefined): number {
+    if (value === undefined || value === null) {
       return 0;
     }
 
@@ -559,6 +703,26 @@ export class AdminService {
 
   private toMoney(value: number): number {
     return Number(value.toFixed(2));
+  }
+
+  private getDashboardCacheKey(query: DateRangeQueryDto): string {
+    return [
+      this.normalizeDateInput(query.from) ?? '',
+      this.normalizeDateInput(query.to) ?? '',
+    ].join(':');
+  }
+
+  private cloneDashboardResponse(
+    response: AdminDashboardResponse,
+  ): AdminDashboardResponse {
+    return {
+      totals: { ...response.totals },
+      stores: response.stores.map((store) => ({ ...store })),
+    };
+  }
+
+  private invalidateDashboardCache(): void {
+    this.dashboardCache.clear();
   }
 
   private normalizeDateInput(value: string | undefined): string | undefined {

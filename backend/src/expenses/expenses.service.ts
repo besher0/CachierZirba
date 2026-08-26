@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
 import { StoresService } from '../stores/stores.service';
@@ -101,7 +102,10 @@ export class ExpensesService {
     return this.findById(record.id);
   }
 
-  async remove(clientExpenseId: string, authUser: AuthUser): Promise<{ deleted: true }> {
+  async remove(
+    clientExpenseId: string,
+    authUser: AuthUser,
+  ): Promise<{ deleted: true }> {
     const record = await this.findByClientExpenseId(clientExpenseId);
     this.assertRecordWritePermission(record, authUser);
 
@@ -109,7 +113,10 @@ export class ExpensesService {
     return { deleted: true };
   }
 
-  async findAll(query: ListExpensesQueryDto, authUser: AuthUser): Promise<Expense[]> {
+  async findAll(
+    query: ListExpensesQueryDto,
+    authUser: AuthUser,
+  ): Promise<Expense[]> {
     const qb = this.expenseRepository
       .createQueryBuilder('e')
       .leftJoinAndSelect('e.store', 'store')
@@ -122,11 +129,15 @@ export class ExpensesService {
     }
 
     if (query.from) {
-      qb.andWhere('e.expenseDate >= :fromDate', { fromDate: query.from.slice(0, 10) });
+      qb.andWhere('e.expenseDate >= :fromDate', {
+        fromDate: query.from.slice(0, 10),
+      });
     }
 
     if (query.to) {
-      qb.andWhere('e.expenseDate <= :toDate', { toDate: query.to.slice(0, 10) });
+      qb.andWhere('e.expenseDate <= :toDate', {
+        toDate: query.to.slice(0, 10),
+      });
     }
 
     if (query.category) {
@@ -147,6 +158,10 @@ export class ExpensesService {
       qb.andWhere('e.cycleStartClosureId IS NULL');
     }
 
+    const { limit, offset } = resolveListPagination(query);
+    qb.skip(offset);
+    qb.take(limit);
+
     return qb.getMany();
   }
 
@@ -163,7 +178,9 @@ export class ExpensesService {
     return record;
   }
 
-  private async findByClientExpenseId(clientExpenseId: string): Promise<Expense> {
+  private async findByClientExpenseId(
+    clientExpenseId: string,
+  ): Promise<Expense> {
     const record = await this.expenseRepository.findOne({
       where: { clientExpenseId },
       relations: { store: true },
@@ -199,7 +216,9 @@ export class ExpensesService {
       }
 
       if (requestedStoreId && requestedStoreId !== authUser.storeId) {
-        throw new ForbiddenException('Cashier can only view expenses for assigned store.');
+        throw new ForbiddenException(
+          'Cashier can only view expenses for assigned store.',
+        );
       }
 
       return authUser.storeId;
@@ -208,7 +227,10 @@ export class ExpensesService {
     return requestedStoreId;
   }
 
-  private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {
+  private resolveStoreForWrite(
+    requestedStoreId: string,
+    authUser: AuthUser,
+  ): string {
     if (authUser.role === UserRole.ADMIN) {
       return requestedStoreId;
     }
@@ -218,20 +240,26 @@ export class ExpensesService {
     }
 
     if (requestedStoreId !== authUser.storeId) {
-      throw new ForbiddenException('Cashier can only manage expenses for assigned store.');
+      throw new ForbiddenException(
+        'Cashier can only manage expenses for assigned store.',
+      );
     }
 
     return authUser.storeId;
   }
 
-  private assertRecordWritePermission(record: Expense, authUser: AuthUser): void {
+  private assertRecordWritePermission(
+    record: Expense,
+    authUser: AuthUser,
+  ): void {
     if (authUser.role === UserRole.ADMIN) {
       return;
     }
 
     if (!authUser.storeId || authUser.storeId !== record.storeId) {
-      throw new ForbiddenException('Cashier can only manage expenses for assigned store.');
+      throw new ForbiddenException(
+        'Cashier can only manage expenses for assigned store.',
+      );
     }
   }
-
 }

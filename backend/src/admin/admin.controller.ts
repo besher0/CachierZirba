@@ -14,6 +14,7 @@ import {
   StoreSummaryResponse,
 } from './admin.service';
 import { CreateCashboxWithdrawalDto } from './dto/create-cashbox-withdrawal.dto';
+import { ListAdminDateRangeQueryDto } from './dto/list-admin-date-range-query.dto';
 import { CashboxWithdrawal } from './entities/cashbox-withdrawal.entity';
 
 @Roles(UserRole.ADMIN)
@@ -36,7 +37,7 @@ export class AdminController {
 
   @Get('cashbox-withdrawals')
   listCashboxWithdrawals(
-    @Query() query: DateRangeQueryDto,
+    @Query() query: ListAdminDateRangeQueryDto,
   ): Promise<CashboxWithdrawal[]> {
     return this.adminService.listCashboxWithdrawals(query);
   }
@@ -68,7 +69,7 @@ export class AdminController {
   @Get('stores/:storeId/daily-settlements')
   getStoreDailySettlements(
     @Param('storeId') storeId: string,
-    @Query() query: DateRangeQueryDto,
+    @Query() query: ListAdminDateRangeQueryDto,
   ): Promise<DailySettlement[]> {
     return this.adminService.listStoreDailySettlements(storeId, query);
   }

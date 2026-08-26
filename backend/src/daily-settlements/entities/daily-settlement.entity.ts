@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -11,6 +12,16 @@ import {
 import { Store } from '../../stores/entities/store.entity';
 
 @Entity('daily_settlements')
+@Index('IDX_daily_settlements_store_latest', [
+  'storeId',
+  'businessDate',
+  'syncedAt',
+  'createdAt',
+])
+@Index('IDX_daily_settlements_business_date_store', [
+  'businessDate',
+  'storeId',
+])
 @Unique('UQ_client_closure_id', ['clientClosureId'])
 @Unique('UQ_store_business_date', ['storeId', 'businessDate'])
 export class DailySettlement {

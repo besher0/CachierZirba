@@ -140,6 +140,7 @@ export function AdminDashboardScreen() {
     purchasesAmount,
     quantity,
     queue,
+    refreshAdminCashboxWithdrawalsData,
     refreshDashboardData,
     refundAmount,
     resizeMode,
@@ -387,6 +388,12 @@ export function AdminDashboardScreen() {
                         </Pressable>
 
                         <Text style={styles.storeTableTitle}>سحوبات الصندوق</Text>
+                        <Pressable
+                          style={styles.smallRefreshButton}
+                          onPress={() => void refreshAdminCashboxWithdrawalsData()}
+                        >
+                          <Text style={styles.smallRefreshText}>تحديث السجل</Text>
+                        </Pressable>
                         {adminCashboxWithdrawals.length === 0 ? (
                           <Text style={styles.emptyText}>
                             لا توجد سحوبات صندوق ضمن الفترة المحددة.

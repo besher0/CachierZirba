@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -56,7 +57,10 @@ export class OrdersService {
     }
   }
 
-  async findAll(query: ListOrdersQueryDto, authUser: AuthUser): Promise<Order[]> {
+  async findAll(
+    query: ListOrdersQueryDto,
+    authUser: AuthUser,
+  ): Promise<Order[]> {
     const qb = this.orderRepository
       .createQueryBuilder('o')
       .leftJoinAndSelect('o.store', 'store')
@@ -79,13 +83,9 @@ export class OrdersService {
       qb.andWhere('o.orderedAt <= :to', { to: query.to });
     }
 
-    if (query.offset !== undefined) {
-      qb.skip(query.offset);
-    }
-
-    if (query.limit !== undefined) {
-      qb.take(query.limit);
-    }
+    const { limit, offset } = resolveListPagination(query);
+    qb.skip(offset);
+    qb.take(limit);
 
     return qb.getMany();
   }
@@ -110,20 +110,27 @@ export class OrdersService {
     });
 
     if (!order) {
-      throw new Error(`Order with clientOrderId ${clientOrderId} was not found.`);
+      throw new Error(
+        `Order with clientOrderId ${clientOrderId} was not found.`,
+      );
     }
 
     return order;
   }
 
-  private resolveStoreForWrite(requestedStoreId: string, authUser: AuthUser): string {
+  private resolveStoreForWrite(
+    requestedStoreId: string,
+    authUser: AuthUser,
+  ): string {
     if (authUser.role === UserRole.CASHIER) {
       if (!authUser.storeId) {
         throw new ForbiddenException('Cashier account has no assigned store.');
       }
 
       if (requestedStoreId !== authUser.storeId) {
-        throw new ForbiddenException('Cashier can only create orders for assigned store.');
+        throw new ForbiddenException(
+          'Cashier can only create orders for assigned store.',
+        );
       }
 
       return authUser.storeId;
@@ -142,7 +149,9 @@ export class OrdersService {
       }
 
       if (requestedStoreId && requestedStoreId !== authUser.storeId) {
-        throw new ForbiddenException('Cashier can only view assigned store orders.');
+        throw new ForbiddenException(
+          'Cashier can only view assigned store orders.',
+        );
       }
 
       return authUser.storeId;

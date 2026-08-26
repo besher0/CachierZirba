@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { StoresService } from '../stores/stores.service';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
@@ -150,6 +151,10 @@ export class PurchasesService {
         product: `%${query.product}%`,
       });
     }
+
+    const { limit, offset } = resolveListPagination(query);
+    qb.skip(offset);
+    qb.take(limit);
 
     return qb.getMany();
   }
