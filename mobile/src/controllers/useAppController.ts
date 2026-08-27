@@ -237,6 +237,7 @@ const ADMIN_DASHBOARD_ALL_STORES = "__ALL__";
 const ORDER_REFRESH_LIMIT = 200;
 const LIST_REFRESH_LIMIT = 200;
 const SETTLEMENT_CYCLE_PAGE_LIMIT = 500;
+const DEFAULT_ADMIN_PRODUCT_SALES_LOOKBACK_DAYS = 30;
 const DEFAULT_PAYROLL_WEEK_START_DAY = 1;
 const PAYROLL_WEEKDAY_OPTIONS = [
   { value: 0, label: "الأحد" },
@@ -766,9 +767,14 @@ export function useAppController() {
   >(null);
   const [adminDatePickerValue, setAdminDatePickerValue] = useState(new Date());
   const [adminProductSalesFromInput, setAdminProductSalesFromInput] =
-    useState("");
-  const [adminProductSalesToInput, setAdminProductSalesToInput] =
-    useState("");
+    useState(() =>
+      toIsoDateOnly(
+        addDays(new Date(), -DEFAULT_ADMIN_PRODUCT_SALES_LOOKBACK_DAYS),
+      ),
+    );
+  const [adminProductSalesToInput, setAdminProductSalesToInput] = useState(() =>
+    toIsoDateOnly(new Date()),
+  );
   const [
     selectedAdminProductSalesProductId,
     setSelectedAdminProductSalesProductId,

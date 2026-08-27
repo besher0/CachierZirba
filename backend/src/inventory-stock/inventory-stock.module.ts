@@ -1,9 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
-import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
-import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
-import { Order } from '../orders/entities/order.entity';
+import { InventoryBalancesModule } from '../inventory-balances/inventory-balances.module';
 import { Product } from '../products/entities/product.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
 import { StoresModule } from '../stores/stores.module';
@@ -12,14 +9,8 @@ import { InventoryStockService } from './inventory-stock.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      Product,
-      Purchase,
-      Order,
-      InventoryAdjustment,
-      InventoryDestruction,
-      DailySettlement,
-    ]),
+    TypeOrmModule.forFeature([Product, Purchase]),
+    InventoryBalancesModule,
     StoresModule,
   ],
   controllers: [InventoryStockController],

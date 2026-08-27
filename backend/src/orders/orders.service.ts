@@ -5,6 +5,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -18,6 +19,7 @@ export class OrdersService {
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     private readonly storesService: StoresService,
+    private readonly inventoryBalancesService: InventoryBalancesService,
   ) {}
 
   async create(dto: CreateOrderDto, authUser: AuthUser): Promise<Order> {
@@ -34,20 +36,30 @@ export class OrdersService {
     }
 
     try {
-      const order = this.orderRepository.create({
-        ...dto,
-        storeId: scopedStoreId,
-        cashierName: dto.cashierName ?? null,
-        status: dto.status ?? OrderStatus.COMPLETED,
-        paymentMethod: dto.paymentMethod ?? PaymentMethod.CASH,
-        discount: dto.discount ?? 0,
-        tax: dto.tax ?? 0,
-        note: dto.note ?? null,
-        orderedAt: dto.orderedAt ? new Date(dto.orderedAt) : new Date(),
-        syncedAt: new Date(),
-      });
+      const saved = await this.inventoryBalancesService.runInTransaction(
+        async (manager) => {
+          const orderRepository = manager.getRepository(Order);
+          const order = orderRepository.create({
+            ...dto,
+            storeId: scopedStoreId,
+            cashierName: dto.cashierName ?? null,
+            status: dto.status ?? OrderStatus.COMPLETED,
+            paymentMethod: dto.paymentMethod ?? PaymentMethod.CASH,
+            discount: dto.discount ?? 0,
+            tax: dto.tax ?? 0,
+            note: dto.note ?? null,
+            orderedAt: dto.orderedAt ? new Date(dto.orderedAt) : new Date(),
+            syncedAt: new Date(),
+          });
 
-      const saved = await this.orderRepository.save(order);
+          const savedOrder = await orderRepository.save(order);
+          await this.inventoryBalancesService.applyOrderDelta(
+            manager,
+            savedOrder,
+          );
+          return savedOrder;
+        },
+      );
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {

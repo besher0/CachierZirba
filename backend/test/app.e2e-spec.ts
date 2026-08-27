@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { InventoryBalance } from '../src/inventory-balances/entities/inventory-balance.entity';
+import { InventoryBalancesService } from '../src/inventory-balances/inventory-balances.service';
+import { DataSource } from 'typeorm';
 
 const MAIN_STORE_ID = '11111111-1111-4111-8111-111111111111';
 const MALL_STORE_ID = '22222222-2222-4222-8222-222222222222';
@@ -22,6 +25,96 @@ interface LoginResponse {
   expiresIn: string;
 }
 
+interface ProductSalesTestItem {
+  productName: string;
+  quantity: number;
+  lineTotal: number;
+}
+
+interface ProductSalesTestOrder {
+  storeId: string;
+  status: string;
+  orderedAt: string;
+  items: ProductSalesTestItem[];
+}
+
+function expectedProductSalesFromOldReduction(
+  orders: ProductSalesTestOrder[],
+  storeId: string,
+  range: { from?: string; to?: string } = {},
+) {
+  const fromBoundary = range.from
+    ? new Date(
+        range.from.length === 10
+          ? `${range.from}T00:00:00.000Z`
+          : range.from,
+      )
+    : null;
+  const toBoundary = range.to
+    ? new Date(
+        range.to.length === 10 ? `${range.to}T23:59:59.999Z` : range.to,
+      )
+    : null;
+  const byProduct = new Map<
+    string,
+    {
+      productName: string;
+      soldQty: number;
+      refundedQty: number;
+      netQty: number;
+      netAmount: number;
+    }
+  >();
+
+  orders
+    .filter((order) => order.storeId === storeId)
+    .filter((order) => {
+      const orderedAt = new Date(order.orderedAt);
+      return (
+        (!fromBoundary || orderedAt >= fromBoundary) &&
+        (!toBoundary || orderedAt <= toBoundary)
+      );
+    })
+    .sort(
+      (a, b) =>
+        new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime(),
+    )
+    .forEach((order) => {
+      order.items.forEach((item) => {
+        const key = item.productName.trim().toLocaleLowerCase();
+        const row = byProduct.get(key) ?? {
+          productName: item.productName,
+          soldQty: 0,
+          refundedQty: 0,
+          netQty: 0,
+          netAmount: 0,
+        };
+
+        if (order.status === 'REFUNDED') {
+          row.refundedQty += item.quantity;
+          row.netQty -= item.quantity;
+          row.netAmount -= item.lineTotal;
+        } else {
+          row.soldQty += item.quantity;
+          row.netQty += item.quantity;
+          row.netAmount += item.lineTotal;
+        }
+
+        byProduct.set(key, row);
+      });
+    });
+
+  return Array.from(byProduct.values())
+    .map((row) => ({
+      ...row,
+      soldQty: Number(row.soldQty.toFixed(3)),
+      refundedQty: Number(row.refundedQty.toFixed(3)),
+      netQty: Number(row.netQty.toFixed(3)),
+      netAmount: Number(row.netAmount.toFixed(2)),
+    }))
+    .sort((a, b) => a.productName.localeCompare(b.productName, 'ar'));
+}
+
 describe('Zirba API (e2e)', () => {
   let app: INestApplication<App>;
   let adminToken = '';
@@ -31,6 +124,8 @@ describe('Zirba API (e2e)', () => {
   let adminCreatedPurchaseId = '';
   let createdExpenseId = '';
   let createdPurchaseId = '';
+  let dataSource: DataSource;
+  let inventoryBalancesService: InventoryBalancesService;
   const e2eDbPath = join(process.cwd(), 'zirba.e2e.db');
 
   beforeAll(async () => {
@@ -56,6 +151,8 @@ describe('Zirba API (e2e)', () => {
     );
 
     await app.init();
+    dataSource = app.get(DataSource);
+    inventoryBalancesService = app.get(InventoryBalancesService);
   });
 
   it('GET /api/health should be public', async () => {
@@ -144,6 +241,469 @@ describe('Zirba API (e2e)', () => {
 
     expect(response.body).toHaveProperty('totals');
     expect(Array.isArray(response.body.stores)).toBe(true);
+  });
+
+  it('GET /api/admin/stores/:storeId/product-sales aggregates items in SQL with the old financial semantics', async () => {
+    const productSalesOrders: ProductSalesTestOrder[] = [
+      {
+        storeId: MAIN_STORE_ID,
+        status: 'COMPLETED',
+        orderedAt: '2026-07-25T09:00:00.000Z',
+        items: [{ productName: 'SQL Cake', quantity: 4, lineTotal: 40 }],
+      },
+      {
+        storeId: MAIN_STORE_ID,
+        status: 'COMPLETED',
+        orderedAt: '2026-08-01T09:00:00.000Z',
+        items: [
+          { productName: 'SQL Cake', quantity: 2.5, lineTotal: 25 },
+          { productName: 'SQL Tea', quantity: 1.25, lineTotal: 6.25 },
+        ],
+      },
+      {
+        storeId: MAIN_STORE_ID,
+        status: 'COMPLETED',
+        orderedAt: '2026-08-02T09:00:00.000Z',
+        items: [
+          { productName: ' sql cake ', quantity: 0.75, lineTotal: 7.5 },
+          { productName: 'SQL Bun', quantity: 2, lineTotal: 5 },
+        ],
+      },
+      {
+        storeId: MAIN_STORE_ID,
+        status: 'REFUNDED',
+        orderedAt: '2026-08-03T09:00:00.000Z',
+        items: [
+          { productName: 'sql cake', quantity: 1.5, lineTotal: 15.01 },
+          { productName: 'SQL Tea', quantity: 0.25, lineTotal: 1.25 },
+        ],
+      },
+      {
+        storeId: MALL_STORE_ID,
+        status: 'COMPLETED',
+        orderedAt: '2026-08-02T09:00:00.000Z',
+        items: [{ productName: 'SQL Cake', quantity: 99, lineTotal: 990 }],
+      },
+    ];
+
+    for (const [index, order] of productSalesOrders.entries()) {
+      const total = order.items.reduce((sum, item) => sum + item.lineTotal, 0);
+      await request(app.getHttpServer())
+        .post('/api/orders')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          clientOrderId: `product-sales-sql-${index + 1}`,
+          storeId: order.storeId,
+          cashierName: 'Report Test',
+          status: order.status,
+          paymentMethod: 'CASH',
+          subtotal: Number(total.toFixed(2)),
+          discount: 0,
+          tax: 0,
+          total: Number(total.toFixed(2)),
+          orderedAt: order.orderedAt,
+          items: order.items.map((item) => ({
+            productName: item.productName,
+            quantity: item.quantity,
+            unitPrice: Number((item.lineTotal / item.quantity).toFixed(2)),
+            lineTotal: item.lineTotal,
+          })),
+        })
+        .expect(201);
+    }
+
+    const fetchProductSales = async (
+      storeId: string,
+      range: { from?: string; to?: string } = {},
+    ) => {
+      const query = [
+        range.from ? `from=${encodeURIComponent(range.from)}` : '',
+        range.to ? `to=${encodeURIComponent(range.to)}` : '',
+      ]
+        .filter(Boolean)
+        .join('&');
+      const response = await request(app.getHttpServer())
+        .get(
+          `/api/admin/stores/${storeId}/product-sales${query ? `?${query}` : ''}`,
+        )
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      return response.body;
+    };
+
+    await expect(fetchProductSales(MAIN_STORE_ID)).resolves.toEqual(
+      expectedProductSalesFromOldReduction(productSalesOrders, MAIN_STORE_ID),
+    );
+    await expect(
+      fetchProductSales(MAIN_STORE_ID, { from: '2026-08-02' }),
+    ).resolves.toEqual(
+      expectedProductSalesFromOldReduction(productSalesOrders, MAIN_STORE_ID, {
+        from: '2026-08-02',
+      }),
+    );
+    await expect(
+      fetchProductSales(MAIN_STORE_ID, { to: '2026-08-01' }),
+    ).resolves.toEqual(
+      expectedProductSalesFromOldReduction(productSalesOrders, MAIN_STORE_ID, {
+        to: '2026-08-01',
+      }),
+    );
+    await expect(
+      fetchProductSales(MAIN_STORE_ID, {
+        from: '2026-08-01',
+        to: '2026-08-03',
+      }),
+    ).resolves.toEqual(
+      expectedProductSalesFromOldReduction(productSalesOrders, MAIN_STORE_ID, {
+        from: '2026-08-01',
+        to: '2026-08-03',
+      }),
+    );
+    await expect(fetchProductSales(MALL_STORE_ID)).resolves.toEqual(
+      expectedProductSalesFromOldReduction(productSalesOrders, MALL_STORE_ID),
+    );
+  });
+
+  it('keeps inventory current-state transactional, idempotent, isolated, and snapshot-based', async () => {
+    await request(app.getHttpServer())
+      .post('/api/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientProductId: 'inv-cake',
+        name: 'Inventory Cake',
+        unitType: 'PIECE',
+        price: 20,
+        costPrice: 10,
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientProductId: 'inv-beans',
+        name: 'Inventory Beans',
+        unitType: 'KG',
+        price: 30,
+        costPrice: 15,
+      })
+      .expect(201);
+
+    const getStock = async (storeId: string) => {
+      const response = await request(app.getHttpServer())
+        .get(`/api/inventory-stock?storeId=${storeId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      return response.body as Array<{
+        productClientId: string;
+        remainingQty: number;
+        previousRemainingQty: number;
+        loggedToday: number;
+      }>;
+    };
+    const findStock = async (storeId: string, productClientId: string) =>
+      (await getStock(storeId)).find(
+        (item) => item.productClientId === productClientId,
+      );
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 0, previousRemainingQty: 0 }),
+    );
+
+    const purchasePayload = {
+      clientPurchaseId: 'inv-purchase-cake-1',
+      storeId: MAIN_STORE_ID,
+      productName: 'Inventory Cake',
+      quantity: 5,
+      unitCost: 10,
+      totalCost: 50,
+      purchaseDate: '2026-08-27',
+      syncedAt: '2026-08-27T08:00:00.000Z',
+    };
+    await request(app.getHttpServer())
+      .post('/api/purchases')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(purchasePayload)
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/purchases')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(purchasePayload)
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/purchases')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...purchasePayload,
+        clientPurchaseId: 'inv-payment-cake-1',
+        purchaseKind: 'PAYMENT',
+        quantity: 100,
+        totalCost: 0,
+        paymentAmount: 100,
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/purchases')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...purchasePayload,
+        clientPurchaseId: 'inv-purchase-beans-1',
+        productName: 'Inventory Beans',
+        quantity: 1.25,
+        unitCost: 15,
+        totalCost: 18.75,
+      })
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 5 }),
+    );
+    expect(await findStock(MAIN_STORE_ID, 'inv-beans')).toEqual(
+      expect.objectContaining({ remainingQty: 1.25 }),
+    );
+
+    const orderPayload = {
+      clientOrderId: 'inv-order-sale-1',
+      storeId: MAIN_STORE_ID,
+      cashierName: 'Cashier',
+      status: 'COMPLETED',
+      paymentMethod: 'CASH',
+      subtotal: 40,
+      discount: 0,
+      tax: 0,
+      total: 40,
+      orderedAt: '2026-08-27T03:00:00.000Z',
+      items: [
+        {
+          productName: 'Inventory Cake',
+          quantity: 2,
+          unitPrice: 20,
+          lineTotal: 40,
+        },
+      ],
+    };
+    await request(app.getHttpServer())
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(orderPayload)
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(orderPayload)
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...orderPayload,
+        clientOrderId: 'inv-order-refund-1',
+        status: 'REFUNDED',
+        subtotal: 20,
+        total: 20,
+        items: [
+          {
+            productName: 'Inventory Cake',
+            quantity: 1,
+            unitPrice: 20,
+            lineTotal: 20,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 4 }),
+    );
+
+    const destructionPayload = {
+      clientDestructionId: 'inv-destruction-1',
+      storeId: MAIN_STORE_ID,
+      productClientId: 'inv-cake',
+      quantity: 0.5,
+      destroyedAt: '2026-08-27T03:30:00.000Z',
+      syncedAt: '2026-08-27T03:30:00.000Z',
+    };
+    await request(app.getHttpServer())
+      .post('/api/inventory-destructions')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(destructionPayload)
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/inventory-destructions')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(destructionPayload)
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 3.5 }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/api/inventory-adjustments')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientAdjustmentId: 'inv-adjustment-1',
+        storeId: MAIN_STORE_ID,
+        productClientId: 'inv-cake',
+        actualQuantity: 12.75,
+        adjustedAt: '2026-08-27T23:00:00.000Z',
+        syncedAt: '2026-08-27T23:00:00.000Z',
+      })
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 12.75 }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/api/purchases')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...purchasePayload,
+        clientPurchaseId: 'inv-purchase-mall-1',
+        storeId: MALL_STORE_ID,
+        quantity: 10,
+        totalCost: 100,
+      })
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 12.75 }),
+    );
+    expect(await findStock(MALL_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 10 }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/api/daily-settlements')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientClosureId: 'inv-settlement-1',
+        storeId: MAIN_STORE_ID,
+        businessDate: '2026-08-27',
+        cashBoxAmount: 100,
+        sharesAmount: 10,
+        actualRemainingAmount: 120,
+        expectedRevenue: 120,
+        syncedAt: '2026-08-27T20:00:00.000Z',
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...orderPayload,
+        clientOrderId: 'inv-order-refund-after-settlement',
+        status: 'REFUNDED',
+        orderedAt: '2026-08-27T23:05:00.000Z',
+        subtotal: 40,
+        total: 40,
+        items: [
+          {
+            productName: 'Inventory Cake',
+            quantity: 2,
+            unitPrice: 20,
+            lineTotal: 40,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({
+        remainingQty: 14.75,
+        previousRemainingQty: 12.75,
+      }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...orderPayload,
+        clientOrderId: 'inv-order-concurrent-1',
+        orderedAt: '2026-08-27T23:10:00.000Z',
+        total: 20,
+        items: [
+          {
+            productName: 'Inventory Cake',
+            quantity: 1,
+            unitPrice: 20,
+            lineTotal: 20,
+          },
+        ],
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...orderPayload,
+        clientOrderId: 'inv-order-concurrent-2',
+        orderedAt: '2026-08-27T23:11:00.000Z',
+        total: 40,
+        items: [
+          {
+            productName: 'Inventory Cake',
+            quantity: 2,
+            unitPrice: 20,
+            lineTotal: 40,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 11.75 }),
+    );
+
+    await expect(
+      inventoryBalancesService.runInTransaction(async (manager) => {
+        await inventoryBalancesService.applyPurchaseDelta(manager, {
+          storeId: MAIN_STORE_ID,
+          productName: 'Inventory Cake',
+          quantity: 100,
+          purchaseKind: 'SUPPLY',
+        });
+        throw new Error('force rollback');
+      }),
+    ).rejects.toThrow('force rollback');
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 11.75 }),
+    );
+
+    await dataSource.getRepository(InventoryBalance).update(
+      { storeId: MAIN_STORE_ID, productClientId: 'inv-cake' },
+      { quantity: 10 },
+    );
+
+    const mismatch = await request(app.getHttpServer())
+      .get(`/api/admin/inventory-reconciliation?storeId=${MAIN_STORE_ID}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(mismatch.body).toEqual([
+      expect.objectContaining({
+        productClientId: 'inv-cake',
+        calculatedFromHistory: 11.75,
+        currentBalance: 10,
+        difference: -1.75,
+      }),
+    ]);
+
+    await request(app.getHttpServer())
+      .post(`/api/admin/inventory-reconciliation/${MAIN_STORE_ID}/repair`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(201);
+
+    expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
+      expect.objectContaining({ remainingQty: 11.75 }),
+    );
   });
 
   it('GET /api/orders should enforce store scope for cashier', async () => {

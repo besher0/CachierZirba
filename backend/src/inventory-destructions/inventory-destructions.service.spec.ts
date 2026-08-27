@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { InventoryDestruction } from './entities/inventory-destruction.entity';
 import { InventoryDestructionsService } from './inventory-destructions.service';
@@ -12,6 +13,10 @@ describe('InventoryDestructionsService', () => {
   let service: InventoryDestructionsService;
   let repository: jest.Mocked<Partial<Repository<InventoryDestruction>>>;
   let storesService: { findById: jest.Mock };
+  let inventoryBalancesService: {
+    runInTransaction: jest.Mock;
+    applyDestructionDelta: jest.Mock;
+  };
 
   const adminUser: AuthUser = {
     id: 'admin-id',
@@ -44,6 +49,14 @@ describe('InventoryDestructionsService', () => {
       save: jest.fn(),
     };
     storesService = { findById: jest.fn() };
+    inventoryBalancesService = {
+      runInTransaction: jest.fn(async (work) =>
+        work({
+          getRepository: jest.fn(() => repository),
+        }),
+      ),
+      applyDestructionDelta: jest.fn(),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -53,6 +66,7 @@ describe('InventoryDestructionsService', () => {
           useValue: repository,
         },
         { provide: StoresService, useValue: storesService },
+        { provide: InventoryBalancesService, useValue: inventoryBalancesService },
       ],
     }).compile();
 
@@ -80,6 +94,10 @@ describe('InventoryDestructionsService', () => {
         productClientId: payload.productClientId,
         quantity: 2.5,
       }),
+    );
+    expect(inventoryBalancesService.applyDestructionDelta).toHaveBeenCalledWith(
+      expect.anything(),
+      saved,
     );
   });
 
@@ -136,5 +154,9 @@ describe('InventoryDestructionsService', () => {
       }),
     );
     expect(repository.save).toHaveBeenCalledWith(created);
+    expect(inventoryBalancesService.applyDestructionDelta).toHaveBeenCalledWith(
+      expect.anything(),
+      saved,
+    );
   });
 });

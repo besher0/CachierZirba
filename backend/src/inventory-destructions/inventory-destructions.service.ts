@@ -9,6 +9,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { CreateInventoryDestructionDto } from './dto/create-inventory-destruction.dto';
 import { ListInventoryDestructionsQueryDto } from './dto/list-inventory-destructions-query.dto';
@@ -20,6 +21,7 @@ export class InventoryDestructionsService {
     @InjectRepository(InventoryDestruction)
     private readonly destructionRepository: Repository<InventoryDestruction>,
     private readonly storesService: StoresService,
+    private readonly inventoryBalancesService: InventoryBalancesService,
   ) {}
 
   async create(
@@ -39,16 +41,27 @@ export class InventoryDestructionsService {
     }
 
     try {
-      const record = this.destructionRepository.create({
-        clientDestructionId: dto.clientDestructionId,
-        storeId: scopedStoreId,
-        productClientId: dto.productClientId,
-        quantity: dto.quantity,
-        note: dto.note?.trim() || null,
-        destroyedAt: new Date(dto.destroyedAt),
-        syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
-      });
-      const saved = await this.destructionRepository.save(record);
+      const saved = await this.inventoryBalancesService.runInTransaction(
+        async (manager) => {
+          const destructionRepository =
+            manager.getRepository(InventoryDestruction);
+          const record = destructionRepository.create({
+            clientDestructionId: dto.clientDestructionId,
+            storeId: scopedStoreId,
+            productClientId: dto.productClientId,
+            quantity: dto.quantity,
+            note: dto.note?.trim() || null,
+            destroyedAt: new Date(dto.destroyedAt),
+            syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
+          });
+          const savedRecord = await destructionRepository.save(record);
+          await this.inventoryBalancesService.applyDestructionDelta(
+            manager,
+            savedRecord,
+          );
+          return savedRecord;
+        },
+      );
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {

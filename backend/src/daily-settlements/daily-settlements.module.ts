@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
 import { Expense } from '../expenses/entities/expense.entity';
+import { InventoryBalancesModule } from '../inventory-balances/inventory-balances.module';
 import { Order } from '../orders/entities/order.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
 import { StoresModule } from '../stores/stores.module';
@@ -19,6 +20,7 @@ import { DailySettlement } from './entities/daily-settlement.entity';
       EmployeeWithdrawal,
     ]),
     StoresModule,
+    InventoryBalancesModule,
   ],
   controllers: [DailySettlementsController],
   providers: [DailySettlementsService],

@@ -9,6 +9,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import { ListInventoryAdjustmentsQueryDto } from './dto/list-inventory-adjustments-query.dto';
@@ -20,6 +21,7 @@ export class InventoryAdjustmentsService {
     @InjectRepository(InventoryAdjustment)
     private readonly adjustmentRepository: Repository<InventoryAdjustment>,
     private readonly storesService: StoresService,
+    private readonly inventoryBalancesService: InventoryBalancesService,
   ) {}
 
   async create(
@@ -40,15 +42,27 @@ export class InventoryAdjustmentsService {
     }
 
     try {
-      const record = this.adjustmentRepository.create({
-        clientAdjustmentId: dto.clientAdjustmentId,
-        storeId: dto.storeId,
-        productClientId: dto.productClientId,
-        actualQuantity: dto.actualQuantity,
-        adjustedAt: new Date(dto.adjustedAt),
-        syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
-      });
-      const saved = await this.adjustmentRepository.save(record);
+      const saved = await this.inventoryBalancesService.runInTransaction(
+        async (manager) => {
+          const adjustmentRepository = manager.getRepository(InventoryAdjustment);
+          const record = adjustmentRepository.create({
+            clientAdjustmentId: dto.clientAdjustmentId,
+            storeId: dto.storeId,
+            productClientId: dto.productClientId,
+            actualQuantity: dto.actualQuantity,
+            adjustedAt: new Date(dto.adjustedAt),
+            syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
+          });
+          const savedRecord = await adjustmentRepository.save(record);
+          await this.inventoryBalancesService.setAbsoluteQuantity(
+            manager,
+            savedRecord.storeId,
+            savedRecord.productClientId,
+            savedRecord.actualQuantity,
+          );
+          return savedRecord;
+        },
+      );
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {

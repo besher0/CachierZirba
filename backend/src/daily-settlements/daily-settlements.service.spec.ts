@@ -6,6 +6,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
 import { Expense } from '../expenses/entities/expense.entity';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { Order } from '../orders/entities/order.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
 import { StoresService } from '../stores/stores.service';
@@ -31,6 +32,11 @@ describe('DailySettlementsService', () => {
   let purchaseRepository: { createQueryBuilder: jest.Mock };
   let employeeWithdrawalRepository: { createQueryBuilder: jest.Mock };
   let storesService: { findById: jest.Mock; setCashCarry: jest.Mock };
+  let inventoryBalancesService: {
+    runInTransaction: jest.Mock;
+    snapshotSettlement: jest.Mock;
+  };
+  let transactionUpdate: jest.Mock;
 
   const storeId = '11111111-1111-4111-8111-111111111111';
   const cashierUser: AuthUser = {
@@ -78,6 +84,16 @@ describe('DailySettlementsService', () => {
       findById: jest.fn(),
       setCashCarry: jest.fn(),
     };
+    transactionUpdate = jest.fn();
+    inventoryBalancesService = {
+      runInTransaction: jest.fn(async (work) =>
+        work({
+          getRepository: jest.fn(() => repository),
+          update: transactionUpdate,
+        }),
+      ),
+      snapshotSettlement: jest.fn(),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -94,6 +110,7 @@ describe('DailySettlementsService', () => {
           useValue: employeeWithdrawalRepository,
         },
         { provide: StoresService, useValue: storesService },
+        { provide: InventoryBalancesService, useValue: inventoryBalancesService },
       ],
     }).compile();
 
@@ -152,7 +169,15 @@ describe('DailySettlementsService', () => {
       saved,
     );
     expect(repository.save).toHaveBeenCalledWith(created);
-    expect(storesService.setCashCarry).toHaveBeenCalledWith(storeId, 30);
+    expect(transactionUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: storeId },
+      { cashCarryAmount: 30 },
+    );
+    expect(inventoryBalancesService.snapshotSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      saved,
+    );
   });
 
   it('keeps generated settlement financial snapshots based on the current cycle', async () => {

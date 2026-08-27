@@ -191,7 +191,7 @@ describe('AdminService', () => {
   ];
 
   let storeRepository: { find: jest.Mock };
-  let orderRepository: { createQueryBuilder: jest.Mock };
+  let orderRepository: { createQueryBuilder: jest.Mock; query: jest.Mock };
   let dailySettlementRepository: { createQueryBuilder: jest.Mock };
   let cashboxWithdrawalRepository: {
     create: jest.Mock;
@@ -208,6 +208,7 @@ describe('AdminService', () => {
     };
     orderRepository = {
       createQueryBuilder: jest.fn(),
+      query: jest.fn(),
     };
     dailySettlementRepository = {
       createQueryBuilder: jest.fn(),
@@ -384,6 +385,66 @@ describe('AdminService', () => {
     expect(settlementQb.getRawOne).toHaveBeenCalledTimes(1);
     expect(orderQb.getMany).not.toHaveBeenCalled();
     expect(settlementQb.getMany).not.toHaveBeenCalled();
+  });
+
+  it('aggregates store product sales in SQL without loading raw order rows', async () => {
+    const ordersQb = createQueryBuilderMock({ many: [] });
+    orderRepository.createQueryBuilder.mockReturnValue(ordersQb);
+    orderRepository.query.mockResolvedValue([
+      {
+        productName: 'sql cake',
+        soldQty: '3.25',
+        refundedQty: '1.5',
+        netQty: '1.75',
+        netAmount: '17.49',
+      },
+      {
+        productName: 'SQL Tea',
+        soldQty: '1',
+        refundedQty: '0',
+        netQty: '1',
+        netAmount: '4',
+      },
+    ]);
+
+    await expect(
+      service.listStoreProductSales('store-1', {
+        from: '2026-08-01',
+        to: '2026-08-31',
+      }),
+    ).resolves.toEqual([
+      {
+        productName: 'sql cake',
+        soldQty: 3.25,
+        refundedQty: 1.5,
+        netQty: 1.75,
+        netAmount: 17.49,
+      },
+      {
+        productName: 'SQL Tea',
+        soldQty: 1,
+        refundedQty: 0,
+        netQty: 1,
+        netAmount: 4,
+      },
+    ]);
+
+    expect(storesService.findById).toHaveBeenCalledWith('store-1');
+    expect(orderRepository.query).toHaveBeenCalledTimes(1);
+    expect(orderRepository.createQueryBuilder).not.toHaveBeenCalled();
+    expect(ordersQb.getMany).not.toHaveBeenCalled();
+    expect(orderRepository.query.mock.calls[0][0]).toContain(
+      'jsonb_array_elements',
+    );
+    expect(orderRepository.query.mock.calls[0][1]).toEqual([
+      'store-1',
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-31T23:59:59.999Z',
+      OrderStatus.REFUNDED,
+      OrderStatus.REFUNDED,
+      OrderStatus.REFUNDED,
+      OrderStatus.REFUNDED,
+    ]);
   });
 
   it('invalidates dashboard cache after cashbox withdrawal writes', async () => {

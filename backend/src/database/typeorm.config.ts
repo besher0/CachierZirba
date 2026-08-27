@@ -11,6 +11,8 @@ import { Expense } from '../expenses/entities/expense.entity';
 import { EmployeeAbsence } from '../employees/entities/employee-absence.entity';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
 import { Employee } from '../employees/entities/employee.entity';
+import { InventoryBalance } from '../inventory-balances/entities/inventory-balance.entity';
+import { InventorySettlementSnapshot } from '../inventory-balances/entities/inventory-settlement-snapshot.entity';
 import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
 import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
 import { Order } from '../orders/entities/order.entity';
@@ -27,6 +29,7 @@ import { AddExpenseSettlementCycleAnchor1793000000000 } from './migrations/17930
 import { AddSettlementArchiveSnapshots1794000000000 } from './migrations/1794000000000-AddSettlementArchiveSnapshots';
 import { AddDailySettlementLatestIndex1795000000000 } from './migrations/1795000000000-AddDailySettlementLatestIndex';
 import { AddDashboardAggregationIndexes1796000000000 } from './migrations/1796000000000-AddDashboardAggregationIndexes';
+import { CreateInventoryBalances1797000000000 } from './migrations/1797000000000-CreateInventoryBalances';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -46,6 +49,8 @@ const entities = [
   EmployeeWithdrawal,
   InventoryAdjustment,
   InventoryDestruction,
+  InventoryBalance,
+  InventorySettlementSnapshot,
   CashboxWithdrawal,
 ];
 
@@ -85,6 +90,7 @@ export function createTypeOrmOptions(
         AddSettlementArchiveSnapshots1794000000000,
         AddDailySettlementLatestIndex1795000000000,
         AddDashboardAggregationIndexes1796000000000,
+        CreateInventoryBalances1797000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,

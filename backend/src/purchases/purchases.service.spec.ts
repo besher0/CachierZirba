@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { Purchase } from './entities/purchase.entity';
 import { PurchasesService } from './purchases.service';
@@ -33,6 +34,10 @@ describe('PurchasesService', () => {
   let service: PurchasesService;
   let repository: jest.Mocked<Partial<Repository<Purchase>>>;
   let storesService: { findById: jest.Mock };
+  let inventoryBalancesService: {
+    runInTransaction: jest.Mock;
+    applyPurchaseDelta: jest.Mock;
+  };
   let queryBuilder: MockQueryBuilder;
 
   const storeId = '11111111-1111-4111-8111-111111111111';
@@ -70,6 +75,14 @@ describe('PurchasesService', () => {
       save: jest.fn(),
     };
     storesService = { findById: jest.fn() };
+    inventoryBalancesService = {
+      runInTransaction: jest.fn(async (work) =>
+        work({
+          getRepository: jest.fn(() => repository),
+        }),
+      ),
+      applyPurchaseDelta: jest.fn(),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -79,6 +92,7 @@ describe('PurchasesService', () => {
           useValue: repository,
         },
         { provide: StoresService, useValue: storesService },
+        { provide: InventoryBalancesService, useValue: inventoryBalancesService },
       ],
     }).compile();
 
@@ -101,6 +115,10 @@ describe('PurchasesService', () => {
     await expect(service.create(payload, cashierUser)).resolves.toBe(saved);
     expect(storesService.findById).toHaveBeenCalledWith(storeId);
     expect(repository.save).toHaveBeenCalledWith(created);
+    expect(inventoryBalancesService.applyPurchaseDelta).toHaveBeenCalledWith(
+      expect.anything(),
+      saved,
+    );
   });
 
   it('allows an admin to create a purchase for the selected store', async () => {
@@ -119,6 +137,10 @@ describe('PurchasesService', () => {
     await expect(service.create(payload, adminUser)).resolves.toBe(saved);
     expect(storesService.findById).toHaveBeenCalledWith(storeId);
     expect(repository.save).toHaveBeenCalledWith(created);
+    expect(inventoryBalancesService.applyPurchaseDelta).toHaveBeenCalledWith(
+      expect.anything(),
+      saved,
+    );
   });
 
   it('accepts stock-only purchases for inventory without invoice cost', async () => {

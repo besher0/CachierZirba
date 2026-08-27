@@ -1,36 +1,47 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
-import { DailySettlement } from '../daily-settlements/entities/daily-settlement.entity';
-import { InventoryAdjustment } from '../inventory-adjustments/entities/inventory-adjustment.entity';
-import { InventoryDestruction } from '../inventory-destructions/entities/inventory-destruction.entity';
-import { Order } from '../orders/entities/order.entity';
-import { OrderStatus } from '../orders/enums/order-status.enum';
+import { InventoryBalance } from '../inventory-balances/entities/inventory-balance.entity';
+import { InventorySettlementSnapshot } from '../inventory-balances/entities/inventory-settlement-snapshot.entity';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { Product } from '../products/entities/product.entity';
 import { Purchase } from '../purchases/entities/purchase.entity';
 import { StoresService } from '../stores/stores.service';
 import { InventoryStockService } from './inventory-stock.service';
 
-type FindRepository<T> = {
-  find: jest.MockedFunction<Repository<T>['find']>;
+type ProductRepositoryMock = {
+  find: jest.Mock;
 };
 
-function createFindRepository<T>(): FindRepository<T> {
-  return {
-    find: jest.fn() as jest.MockedFunction<Repository<T>['find']>,
-  };
+type PurchaseQueryBuilderMock = {
+  select: jest.Mock;
+  addSelect: jest.Mock;
+  where: jest.Mock;
+  andWhere: jest.Mock;
+  groupBy: jest.Mock;
+  getRawMany: jest.Mock;
+};
+
+function createPurchaseQueryBuilder(): PurchaseQueryBuilderMock {
+  const qb = {} as PurchaseQueryBuilderMock;
+  qb.select = jest.fn(() => qb);
+  qb.addSelect = jest.fn(() => qb);
+  qb.where = jest.fn(() => qb);
+  qb.andWhere = jest.fn(() => qb);
+  qb.groupBy = jest.fn(() => qb);
+  qb.getRawMany = jest.fn().mockResolvedValue([]);
+  return qb;
 }
 
 describe('InventoryStockService', () => {
   let service: InventoryStockService;
-  let productRepository: FindRepository<Product>;
-  let purchaseRepository: FindRepository<Purchase>;
-  let orderRepository: FindRepository<Order>;
-  let adjustmentRepository: FindRepository<InventoryAdjustment>;
-  let destructionRepository: FindRepository<InventoryDestruction>;
-  let dailySettlementRepository: FindRepository<DailySettlement>;
+  let productRepository: ProductRepositoryMock;
+  let purchaseQueryBuilder: PurchaseQueryBuilderMock;
+  let inventoryBalancesService: {
+    findBalancesByStore: jest.Mock;
+    findLatestSnapshotsByStore: jest.Mock;
+  };
 
   const storeId = '11111111-1111-4111-8111-111111111111';
   const authUser: AuthUser = {
@@ -40,14 +51,36 @@ describe('InventoryStockService', () => {
     role: UserRole.CASHIER,
     storeId,
   };
+  const products = [
+    {
+      id: 'server-product-id',
+      clientProductId: 'product-1',
+      name: 'Cake',
+      unitType: 'PIECE',
+      price: 20,
+      costPrice: 10,
+      createdAt: new Date('2020-01-01T00:00:00.000Z'),
+    },
+    {
+      id: 'server-product-id-2',
+      clientProductId: 'product-2',
+      name: 'Coffee',
+      unitType: 'KG',
+      price: 30,
+      costPrice: 15,
+      createdAt: new Date('2020-01-01T00:00:00.000Z'),
+    },
+  ] as Product[];
 
   beforeEach(async () => {
-    productRepository = createFindRepository<Product>();
-    purchaseRepository = createFindRepository<Purchase>();
-    orderRepository = createFindRepository<Order>();
-    adjustmentRepository = createFindRepository<InventoryAdjustment>();
-    destructionRepository = createFindRepository<InventoryDestruction>();
-    dailySettlementRepository = createFindRepository<DailySettlement>();
+    purchaseQueryBuilder = createPurchaseQueryBuilder();
+    productRepository = {
+      find: jest.fn().mockResolvedValue(products),
+    };
+    inventoryBalancesService = {
+      findBalancesByStore: jest.fn().mockResolvedValue([]),
+      findLatestSnapshotsByStore: jest.fn().mockResolvedValue([]),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -58,23 +91,13 @@ describe('InventoryStockService', () => {
         },
         {
           provide: getRepositoryToken(Purchase),
-          useValue: purchaseRepository,
+          useValue: {
+            createQueryBuilder: jest.fn(() => purchaseQueryBuilder),
+          },
         },
         {
-          provide: getRepositoryToken(Order),
-          useValue: orderRepository,
-        },
-        {
-          provide: getRepositoryToken(InventoryAdjustment),
-          useValue: adjustmentRepository,
-        },
-        {
-          provide: getRepositoryToken(InventoryDestruction),
-          useValue: destructionRepository,
-        },
-        {
-          provide: getRepositoryToken(DailySettlement),
-          useValue: dailySettlementRepository,
+          provide: InventoryBalancesService,
+          useValue: inventoryBalancesService,
         },
         {
           provide: StoresService,
@@ -86,221 +109,68 @@ describe('InventoryStockService', () => {
     service = module.get(InventoryStockService);
   });
 
-  function mockSingleProduct(): void {
-    productRepository.find.mockResolvedValue([
-      {
-        id: 'server-product-id',
-        clientProductId: 'product-1',
-        name: 'Cake',
-        unitType: 'PIECE',
-        price: 20,
-        costPrice: 10,
-        createdAt: new Date('2020-01-01T00:00:00.000Z'),
-      } as Product,
-    ]);
-  }
-
-  beforeEach(() => {
-    purchaseRepository.find.mockResolvedValue([]);
-    orderRepository.find.mockResolvedValue([]);
-    adjustmentRepository.find.mockResolvedValue([]);
-    destructionRepository.find.mockResolvedValue([]);
-    dailySettlementRepository.find.mockResolvedValue([]);
-  });
-
-  it('uses the latest settlement closing quantity as previous remaining', async () => {
-    mockSingleProduct();
-    dailySettlementRepository.find.mockResolvedValue([
+  it('reads current stock from inventory balances and previous stock from latest settlement snapshots', async () => {
+    inventoryBalancesService.findBalancesByStore.mockResolvedValue([
       {
         storeId,
-        businessDate: '2020-01-04',
-        syncedAt: new Date('2020-01-04T20:00:00.000Z'),
-        createdAt: new Date('2020-01-04T20:00:00.000Z'),
-      } as DailySettlement,
-    ]);
-    adjustmentRepository.find.mockResolvedValue([
-      {
         productClientId: 'product-1',
-        actualQuantity: 8,
-        adjustedAt: new Date('2020-01-05T00:00:00.000Z'),
-        createdAt: new Date('2020-01-05T00:00:00.000Z'),
-      } as InventoryAdjustment,
+        quantity: 8.1254,
+      },
+    ] as InventoryBalance[]);
+    inventoryBalancesService.findLatestSnapshotsByStore.mockResolvedValue([
       {
+        storeId,
         productClientId: 'product-1',
-        actualQuantity: 20,
-        adjustedAt: new Date('2020-01-02T00:00:00.000Z'),
-        createdAt: new Date('2020-01-02T00:00:00.000Z'),
-      } as InventoryAdjustment,
-    ]);
+        quantity: 7.5,
+      },
+    ] as InventorySettlementSnapshot[]);
 
     const rows = await service.findAll({ storeId }, authUser);
 
     expect(rows).toEqual([
       expect.objectContaining({
         productClientId: 'product-1',
-        remainingQty: 8,
-        previousRemainingQty: 20,
+        remainingQty: 8.125,
+        previousRemainingQty: 7.5,
       }),
-    ]);
-  });
-
-  it('includes movements up to the latest settlement in previous remaining', async () => {
-    mockSingleProduct();
-    dailySettlementRepository.find.mockResolvedValue([
-      {
-        storeId,
-        businessDate: '2020-01-04',
-        syncedAt: new Date('2020-01-04T20:00:00.000Z'),
-        createdAt: new Date('2020-01-04T20:00:00.000Z'),
-      } as DailySettlement,
-    ]);
-    purchaseRepository.find.mockResolvedValue([
-      {
-        storeId,
-        productName: 'Cake',
-        quantity: 7,
-        purchaseKind: 'SUPPLY',
-        purchaseDate: '2020-01-03',
-        createdAt: new Date('2020-01-03T12:00:00.000Z'),
-      } as Purchase,
-    ]);
-
-    const rows = await service.findAll({ storeId }, authUser);
-
-    expect(rows).toEqual([
       expect.objectContaining({
-        productClientId: 'product-1',
-        remainingQty: 7,
-        previousRemainingQty: 7,
-      }),
-    ]);
-  });
-
-  it('falls back to zero when a product has no previous settlement', async () => {
-    mockSingleProduct();
-    purchaseRepository.find.mockResolvedValue([
-      {
-        storeId,
-        productName: 'Cake',
-        quantity: 7,
-        purchaseKind: 'SUPPLY',
-        purchaseDate: '2020-01-03',
-        createdAt: new Date('2020-01-03T12:00:00.000Z'),
-      } as Purchase,
-    ]);
-
-    const rows = await service.findAll({ storeId }, authUser);
-
-    expect(rows).toEqual([
-      expect.objectContaining({
-        productClientId: 'product-1',
-        remainingQty: 7,
+        productClientId: 'product-2',
+        remainingQty: 0,
         previousRemainingQty: 0,
       }),
     ]);
+    expect(inventoryBalancesService.findBalancesByStore).toHaveBeenCalledWith(
+      storeId,
+    );
   });
 
-  it('counts stock-only purchases as received inventory', async () => {
-    mockSingleProduct();
-    purchaseRepository.find.mockResolvedValue([
-      {
-        storeId,
-        productName: 'Cake',
-        quantity: 4,
-        purchaseKind: 'STOCK_ONLY',
-        purchaseDate: '2020-01-03',
-        createdAt: new Date('2020-01-03T12:00:00.000Z'),
-      } as Purchase,
+  it('calculates loggedToday only from today non-payment purchase aggregation', async () => {
+    purchaseQueryBuilder.getRawMany.mockResolvedValue([
+      { productName: 'Cake', quantity: '4.25' },
+      { productName: 'Unknown', quantity: '99' },
     ]);
 
     const rows = await service.findAll({ storeId }, authUser);
 
-    expect(rows).toEqual([
+    expect(purchaseQueryBuilder.where).toHaveBeenCalledWith(
+      'purchase.storeId = :storeId',
+      { storeId },
+    );
+    expect(purchaseQueryBuilder.andWhere).toHaveBeenCalledWith(
+      'purchase.purchaseKind <> :paymentKind',
+      { paymentKind: 'PAYMENT' },
+    );
+    expect(rows[0]).toEqual(
       expect.objectContaining({
         productClientId: 'product-1',
-        remainingQty: 4,
+        loggedToday: 4.25,
       }),
-    ]);
-  });
-
-  it('does not change previous remaining from movements after the last settlement', async () => {
-    mockSingleProduct();
-    dailySettlementRepository.find.mockResolvedValue([
-      {
-        storeId,
-        businessDate: '2020-01-02',
-        syncedAt: new Date('2020-01-02T00:00:00.000Z'),
-        createdAt: new Date('2020-01-02T00:00:00.000Z'),
-      } as DailySettlement,
-    ]);
-    adjustmentRepository.find.mockResolvedValue([
-      {
-        productClientId: 'product-1',
-        actualQuantity: 10,
-        adjustedAt: new Date('2020-01-02T00:00:00.000Z'),
-        createdAt: new Date('2020-01-02T00:00:00.000Z'),
-      } as InventoryAdjustment,
-    ]);
-    purchaseRepository.find.mockResolvedValue([
-      {
-        storeId,
-        productName: 'Cake',
-        quantity: 99,
-        purchaseKind: 'SUPPLY',
-        purchaseDate: '2020-01-01',
-        createdAt: new Date('2020-01-01T12:00:00.000Z'),
-      } as Purchase,
-      {
-        storeId,
-        productName: 'Cake',
-        quantity: 5,
-        purchaseKind: 'SUPPLY',
-        purchaseDate: '2020-01-03',
-        createdAt: new Date('2020-01-03T12:00:00.000Z'),
-      } as Purchase,
-    ]);
-    orderRepository.find.mockResolvedValue([
-      {
-        storeId,
-        status: OrderStatus.COMPLETED,
-        orderedAt: new Date('2020-01-04T12:00:00.000Z'),
-        createdAt: new Date('2020-01-04T12:00:00.000Z'),
-        items: [
-          { productName: 'Cake', quantity: 3, unitPrice: 20, lineTotal: 60 },
-        ],
-      } as Order,
-      {
-        storeId,
-        status: OrderStatus.REFUNDED,
-        orderedAt: new Date('2020-01-05T12:00:00.000Z'),
-        createdAt: new Date('2020-01-05T12:00:00.000Z'),
-        items: [
-          { productName: 'Cake', quantity: 1, unitPrice: 20, lineTotal: 20 },
-        ],
-      } as Order,
-    ]);
-    destructionRepository.find.mockResolvedValue([
-      {
-        storeId,
-        productClientId: 'product-1',
-        quantity: 2,
-        destroyedAt: new Date('2020-01-06T12:00:00.000Z'),
-        createdAt: new Date('2020-01-06T12:00:00.000Z'),
-      } as InventoryDestruction,
-    ]);
-
-    const rows = await service.findAll({ storeId }, authUser);
-
-    expect(rows).toEqual([
+    );
+    expect(rows[1]).toEqual(
       expect.objectContaining({
-        storeId,
-        productId: 'product-1',
-        productClientId: 'product-1',
-        name: 'Cake',
-        remainingQty: 11,
-        previousRemainingQty: 10,
+        productClientId: 'product-2',
         loggedToday: 0,
       }),
-    ]);
+    );
   });
 });

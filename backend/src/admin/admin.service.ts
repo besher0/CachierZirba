@@ -38,6 +38,14 @@ interface CashboxWithdrawalAggRow {
   allTimeCashBoxWithdrawalsAmount?: string | number | null;
 }
 
+interface ProductSalesAggRow {
+  productName: string | null;
+  soldQty: string | number | null;
+  refundedQty: string | number | null;
+  netQty: string | number | null;
+  netAmount: string | number | null;
+}
+
 interface DashboardCacheEntry {
   expiresAt: number;
   response: AdminDashboardResponse;
@@ -421,45 +429,163 @@ export class AdminService {
     storeId: string,
     query: DateRangeQueryDto,
   ): Promise<ProductSalesSummaryResponse[]> {
-    const orders = await this.listStoreOrders(storeId, query, {
-      paginate: false,
-    });
-    const byProduct = new Map<string, ProductSalesSummaryResponse>();
+    await this.storesService.findById(storeId);
 
-    orders.forEach((order) => {
-      order.items.forEach((item) => {
-        const key = item.productName.trim().toLocaleLowerCase();
-        const row = byProduct.get(key) ?? {
-          productName: item.productName,
-          soldQty: 0,
-          refundedQty: 0,
-          netQty: 0,
-          netAmount: 0,
-        };
+    const rows = await this.queryStoreProductSales(storeId, query);
 
-        if (order.status === OrderStatus.REFUNDED) {
-          row.refundedQty += item.quantity;
-          row.netQty -= item.quantity;
-          row.netAmount -= item.lineTotal;
-        } else {
-          row.soldQty += item.quantity;
-          row.netQty += item.quantity;
-          row.netAmount += item.lineTotal;
-        }
-
-        byProduct.set(key, row);
-      });
-    });
-
-    return Array.from(byProduct.values())
+    return rows
       .map((row) => ({
-        ...row,
-        soldQty: Number(row.soldQty.toFixed(3)),
-        refundedQty: Number(row.refundedQty.toFixed(3)),
-        netQty: Number(row.netQty.toFixed(3)),
-        netAmount: this.toMoney(row.netAmount),
+        productName: row.productName ?? '',
+        soldQty: Number(this.parseNumber(row.soldQty).toFixed(3)),
+        refundedQty: Number(this.parseNumber(row.refundedQty).toFixed(3)),
+        netQty: Number(this.parseNumber(row.netQty).toFixed(3)),
+        netAmount: this.toMoney(this.parseNumber(row.netAmount)),
       }))
+      .filter((row) => row.productName.length > 0)
       .sort((a, b) => a.productName.localeCompare(b.productName, 'ar'));
+  }
+
+  private async queryStoreProductSales(
+    storeId: string,
+    query: DateRangeQueryDto,
+  ): Promise<ProductSalesAggRow[]> {
+    const databaseType = this.getOrderDatabaseType();
+    const params: unknown[] = [];
+    const addParam = (value: unknown): string => {
+      params.push(value);
+      return databaseType === 'postgres' ? `$${params.length}` : '?';
+    };
+
+    const whereClauses = [`o."storeId" = ${addParam(storeId)}`];
+    const fromValue = this.toRawOrderFromBoundary(query.from, databaseType);
+    if (fromValue) {
+      whereClauses.push(`o."orderedAt" >= ${addParam(fromValue)}`);
+    }
+
+    const toValue = this.toRawOrderToBoundary(query.to, databaseType);
+    if (toValue) {
+      whereClauses.push(`o."orderedAt" <= ${addParam(toValue)}`);
+    }
+
+    const refundedStatusForSold = addParam(OrderStatus.REFUNDED);
+    const refundedStatusForRefunded = addParam(OrderStatus.REFUNDED);
+    const refundedStatusForNetQty = addParam(OrderStatus.REFUNDED);
+    const refundedStatusForNetAmount = addParam(OrderStatus.REFUNDED);
+
+    const sql =
+      databaseType === 'sqlite'
+        ? this.buildSqliteProductSalesQuery({
+            whereClause: whereClauses.join(' AND '),
+            refundedStatusForSold,
+            refundedStatusForRefunded,
+            refundedStatusForNetQty,
+            refundedStatusForNetAmount,
+          })
+        : this.buildPostgresProductSalesQuery({
+            whereClause: whereClauses.join(' AND '),
+            refundedStatusForSold,
+            refundedStatusForRefunded,
+            refundedStatusForNetQty,
+            refundedStatusForNetAmount,
+          });
+
+    return this.orderRepository.query(sql, params) as Promise<
+      ProductSalesAggRow[]
+    >;
+  }
+
+  private buildPostgresProductSalesQuery(options: {
+    whereClause: string;
+    refundedStatusForSold: string;
+    refundedStatusForRefunded: string;
+    refundedStatusForNetQty: string;
+    refundedStatusForNetAmount: string;
+  }): string {
+    const quantityExpression =
+      'COALESCE(NULLIF(item.value ->> \'quantity\', \'\')::double precision, 0)';
+    const lineTotalExpression =
+      'COALESCE(NULLIF(item.value ->> \'lineTotal\', \'\')::double precision, 0)';
+
+    return `
+      WITH expanded AS (
+        SELECT
+          item.value ->> 'productName' AS "productName",
+          LOWER(TRIM(item.value ->> 'productName')) AS "productKey",
+          ${quantityExpression} AS "quantity",
+          ${lineTotalExpression} AS "lineTotal",
+          o."status" AS "status",
+          o."orderedAt" AS "orderedAt",
+          item.ordinality AS "itemIndex"
+        FROM "orders" o
+        CROSS JOIN LATERAL jsonb_array_elements(o."items"::jsonb)
+          WITH ORDINALITY AS item(value, ordinality)
+        WHERE ${options.whereClause}
+      ),
+      ranked AS (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY "productKey"
+            ORDER BY "orderedAt" DESC, "itemIndex" ASC
+          ) AS "productRank"
+        FROM expanded
+        WHERE "productKey" IS NOT NULL AND "productKey" <> ''
+      )
+      SELECT
+        MAX(CASE WHEN "productRank" = 1 THEN "productName" END) AS "productName",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForSold} THEN 0 ELSE "quantity" END), 0) AS "soldQty",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForRefunded} THEN "quantity" ELSE 0 END), 0) AS "refundedQty",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForNetQty} THEN ("quantity" * -1) ELSE "quantity" END), 0) AS "netQty",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForNetAmount} THEN ("lineTotal" * -1) ELSE "lineTotal" END), 0) AS "netAmount"
+      FROM ranked
+      GROUP BY "productKey"
+    `;
+  }
+
+  private buildSqliteProductSalesQuery(options: {
+    whereClause: string;
+    refundedStatusForSold: string;
+    refundedStatusForRefunded: string;
+    refundedStatusForNetQty: string;
+    refundedStatusForNetAmount: string;
+  }): string {
+    const productNameExpression = `json_extract(item.value, '$.productName')`;
+    const quantityExpression = `CAST(COALESCE(NULLIF(json_extract(item.value, '$.quantity'), ''), 0) AS REAL)`;
+    const lineTotalExpression = `CAST(COALESCE(NULLIF(json_extract(item.value, '$.lineTotal'), ''), 0) AS REAL)`;
+
+    return `
+      WITH expanded AS (
+        SELECT
+          ${productNameExpression} AS "productName",
+          LOWER(TRIM(${productNameExpression})) AS "productKey",
+          ${quantityExpression} AS "quantity",
+          ${lineTotalExpression} AS "lineTotal",
+          o."status" AS "status",
+          o."orderedAt" AS "orderedAt",
+          CAST(item.key AS INTEGER) AS "itemIndex"
+        FROM "orders" o
+        JOIN json_each(o."items") AS item
+        WHERE ${options.whereClause}
+      ),
+      ranked AS (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY "productKey"
+            ORDER BY "orderedAt" DESC, "itemIndex" ASC
+          ) AS "productRank"
+        FROM expanded
+        WHERE "productKey" IS NOT NULL AND "productKey" <> ''
+      )
+      SELECT
+        MAX(CASE WHEN "productRank" = 1 THEN "productName" END) AS "productName",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForSold} THEN 0 ELSE "quantity" END), 0) AS "soldQty",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForRefunded} THEN "quantity" ELSE 0 END), 0) AS "refundedQty",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForNetQty} THEN ("quantity" * -1) ELSE "quantity" END), 0) AS "netQty",
+        COALESCE(SUM(CASE WHEN "status" = ${options.refundedStatusForNetAmount} THEN ("lineTotal" * -1) ELSE "lineTotal" END), 0) AS "netAmount"
+      FROM ranked
+      GROUP BY "productKey"
+    `;
   }
 
   private buildOrderAggQuery(query: DateRangeQueryDto, storeId?: string) {
@@ -701,6 +827,19 @@ export class AdminService {
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  private getOrderDatabaseType(): string {
+    const manager = this.orderRepository.manager as {
+      connection?: { options?: { type?: string } };
+      dataSource?: { options?: { type?: string } };
+    } | undefined;
+
+    return (
+      manager?.connection?.options?.type ??
+      manager?.dataSource?.options?.type ??
+      'postgres'
+    );
+  }
+
   private toMoney(value: number): number {
     return Number(value.toFixed(2));
   }
@@ -763,6 +902,36 @@ export class AdminService {
     }
 
     return normalized;
+  }
+
+  private toRawOrderFromBoundary(
+    value: string | undefined,
+    databaseType: string,
+  ): string | undefined {
+    return this.toRawOrderBoundary(this.toOrderFromBoundary(value), databaseType);
+  }
+
+  private toRawOrderToBoundary(
+    value: string | undefined,
+    databaseType: string,
+  ): string | undefined {
+    return this.toRawOrderBoundary(this.toOrderToBoundary(value), databaseType);
+  }
+
+  private toRawOrderBoundary(
+    value: string | undefined,
+    databaseType: string,
+  ): string | undefined {
+    if (!value || databaseType !== 'sqlite') {
+      return value;
+    }
+
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().replace('T', ' ').replace('Z', '');
+    }
+
+    return value.replace('T', ' ').replace('Z', '');
   }
 
   private isMissingCashboxWithdrawalsTableError(error: unknown): boolean {

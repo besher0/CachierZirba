@@ -4,16 +4,23 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
+import {
+  EntityManager,
+  ObjectLiteral,
+  Repository,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { EmployeeWithdrawal } from '../employees/entities/employee-withdrawal.entity';
 import { Expense } from '../expenses/entities/expense.entity';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { Order } from '../orders/entities/order.entity';
 import { OrderStatus } from '../orders/enums/order-status.enum';
 import { Purchase } from '../purchases/entities/purchase.entity';
+import { Store } from '../stores/entities/store.entity';
 import { StoresService } from '../stores/stores.service';
 import { CreateDailySettlementDto } from './dto/create-daily-settlement.dto';
 import { ListDailySettlementsQueryDto } from './dto/list-daily-settlements-query.dto';
@@ -48,6 +55,7 @@ export class DailySettlementsService {
     @InjectRepository(EmployeeWithdrawal)
     private readonly employeeWithdrawalRepository: Repository<EmployeeWithdrawal>,
     private readonly storesService: StoresService,
+    private readonly inventoryBalancesService: InventoryBalancesService,
   ) {}
 
   async createOrUpdate(
@@ -87,33 +95,44 @@ export class DailySettlementsService {
         syncedAt,
         dto.cycleStartedAt ? new Date(dto.cycleStartedAt) : undefined,
       );
-      const record = this.dailySettlementRepository.create({
-        ...dto,
-        storeId: scopedStoreId,
-        actualRemainingAmount: dto.actualRemainingAmount,
-        expectedRevenue: dto.expectedRevenue ?? 0,
-        carryInAmount: dto.carryInAmount ?? 0,
-        cycleStartedAt: dto.cycleStartedAt
-          ? new Date(dto.cycleStartedAt)
-          : snapshots.cycleStartedAt,
-        salesAmount: dto.salesAmount ?? snapshots.salesAmount,
-        refundAmount: dto.refundAmount ?? snapshots.refundAmount,
-        expensesAmount: dto.expensesAmount ?? snapshots.expensesAmount,
-        purchasesAmount: dto.purchasesAmount ?? snapshots.purchasesAmount,
-        tawasiAmount: dto.tawasiAmount ?? snapshots.tawasiAmount,
-        employeeWithdrawalsAmount:
-          dto.employeeWithdrawalsAmount ?? snapshots.employeeWithdrawalsAmount,
-        ordersCount: dto.ordersCount ?? snapshots.ordersCount,
-        expensesCount: dto.expensesCount ?? snapshots.expensesCount,
-        purchasesCount: dto.purchasesCount ?? snapshots.purchasesCount,
-        withdrawalsCount: dto.withdrawalsCount ?? snapshots.withdrawalsCount,
-        paymentsAmount: dto.paymentsAmount ?? snapshots.paymentsAmount,
-        note: dto.note ?? null,
-        syncedAt,
-      });
+      const saved = await this.inventoryBalancesService.runInTransaction(
+        async (manager) => {
+          const settlementRepository = manager.getRepository(DailySettlement);
+          const record = settlementRepository.create({
+            ...dto,
+            storeId: scopedStoreId,
+            actualRemainingAmount: dto.actualRemainingAmount,
+            expectedRevenue: dto.expectedRevenue ?? 0,
+            carryInAmount: dto.carryInAmount ?? 0,
+            cycleStartedAt: dto.cycleStartedAt
+              ? new Date(dto.cycleStartedAt)
+              : snapshots.cycleStartedAt,
+            salesAmount: dto.salesAmount ?? snapshots.salesAmount,
+            refundAmount: dto.refundAmount ?? snapshots.refundAmount,
+            expensesAmount: dto.expensesAmount ?? snapshots.expensesAmount,
+            purchasesAmount: dto.purchasesAmount ?? snapshots.purchasesAmount,
+            tawasiAmount: dto.tawasiAmount ?? snapshots.tawasiAmount,
+            employeeWithdrawalsAmount:
+              dto.employeeWithdrawalsAmount ??
+              snapshots.employeeWithdrawalsAmount,
+            ordersCount: dto.ordersCount ?? snapshots.ordersCount,
+            expensesCount: dto.expensesCount ?? snapshots.expensesCount,
+            purchasesCount: dto.purchasesCount ?? snapshots.purchasesCount,
+            withdrawalsCount: dto.withdrawalsCount ?? snapshots.withdrawalsCount,
+            paymentsAmount: dto.paymentsAmount ?? snapshots.paymentsAmount,
+            note: dto.note ?? null,
+            syncedAt,
+          });
 
-      const saved = await this.dailySettlementRepository.save(record);
-      await this.updateStoreCashCarry(saved);
+          const savedSettlement = await settlementRepository.save(record);
+          await this.updateStoreCashCarry(savedSettlement, manager);
+          await this.inventoryBalancesService.snapshotSettlement(
+            manager,
+            savedSettlement,
+          );
+          return savedSettlement;
+        },
+      );
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
@@ -216,6 +235,7 @@ export class DailySettlementsService {
 
   private async updateStoreCashCarry(
     settlement: DailySettlement,
+    manager: EntityManager | undefined = undefined,
   ): Promise<void> {
     const carryForward = Math.max(
       settlement.actualRemainingAmount -
@@ -223,6 +243,14 @@ export class DailySettlementsService {
         settlement.sharesAmount,
       0,
     );
+    if (manager) {
+      await manager.update(
+        Store,
+        { id: settlement.storeId },
+        { cashCarryAmount: Number(carryForward.toFixed(2)) },
+      );
+      return;
+    }
     await this.storesService.setCashCarry(settlement.storeId, carryForward);
   }
 

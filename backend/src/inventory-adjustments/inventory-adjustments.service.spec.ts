@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { InventoryAdjustment } from './entities/inventory-adjustment.entity';
 import { InventoryAdjustmentsService } from './inventory-adjustments.service';
@@ -12,6 +13,10 @@ describe('InventoryAdjustmentsService', () => {
   let service: InventoryAdjustmentsService;
   let repository: jest.Mocked<Partial<Repository<InventoryAdjustment>>>;
   let storesService: { findById: jest.Mock };
+  let inventoryBalancesService: {
+    runInTransaction: jest.Mock;
+    setAbsoluteQuantity: jest.Mock;
+  };
 
   const adminUser: AuthUser = {
     id: 'admin-id',
@@ -43,6 +48,14 @@ describe('InventoryAdjustmentsService', () => {
       save: jest.fn(),
     };
     storesService = { findById: jest.fn() };
+    inventoryBalancesService = {
+      runInTransaction: jest.fn(async (work) =>
+        work({
+          getRepository: jest.fn(() => repository),
+        }),
+      ),
+      setAbsoluteQuantity: jest.fn(),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -52,6 +65,7 @@ describe('InventoryAdjustmentsService', () => {
           useValue: repository,
         },
         { provide: StoresService, useValue: storesService },
+        { provide: InventoryBalancesService, useValue: inventoryBalancesService },
       ],
     }).compile();
 
@@ -101,5 +115,11 @@ describe('InventoryAdjustmentsService', () => {
       }),
     );
     expect(repository.save).toHaveBeenCalledWith(created);
+    expect(inventoryBalancesService.setAbsoluteQuantity).toHaveBeenCalledWith(
+      expect.anything(),
+      payload.storeId,
+      payload.productClientId,
+      payload.actualQuantity,
+    );
   });
 });

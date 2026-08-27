@@ -9,6 +9,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
 import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
+import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
 import { StoresService } from '../stores/stores.service';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
 import { ListPurchasesQueryDto } from './dto/list-purchases-query.dto';
@@ -21,6 +22,7 @@ export class PurchasesService {
     @InjectRepository(Purchase)
     private readonly purchaseRepository: Repository<Purchase>,
     private readonly storesService: StoresService,
+    private readonly inventoryBalancesService: InventoryBalancesService,
   ) {}
 
   async create(dto: CreatePurchaseDto, authUser: AuthUser): Promise<Purchase> {
@@ -37,17 +39,27 @@ export class PurchasesService {
     }
 
     try {
-      const record = this.purchaseRepository.create({
-        ...dto,
-        storeId: scopedStoreId,
-        purchaseKind: dto.purchaseKind ?? 'SUPPLY',
-        sellPrice: dto.sellPrice ?? null,
-        paymentAmount: dto.paymentAmount ?? 0,
-        note: dto.note ?? null,
-        syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
-      });
+      const saved = await this.inventoryBalancesService.runInTransaction(
+        async (manager) => {
+          const purchaseRepository = manager.getRepository(Purchase);
+          const record = purchaseRepository.create({
+            ...dto,
+            storeId: scopedStoreId,
+            purchaseKind: dto.purchaseKind ?? 'SUPPLY',
+            sellPrice: dto.sellPrice ?? null,
+            paymentAmount: dto.paymentAmount ?? 0,
+            note: dto.note ?? null,
+            syncedAt: dto.syncedAt ? new Date(dto.syncedAt) : new Date(),
+          });
 
-      const saved = await this.purchaseRepository.save(record);
+          const savedRecord = await purchaseRepository.save(record);
+          await this.inventoryBalancesService.applyPurchaseDelta(
+            manager,
+            savedRecord,
+          );
+          return savedRecord;
+        },
+      );
       return this.findById(saved.id);
     } catch (error: unknown) {
       if (isUniqueConstraintError(error)) {
@@ -66,45 +78,57 @@ export class PurchasesService {
     const record = await this.findByClientPurchaseId(clientPurchaseId);
     this.assertRecordWritePermission(record, authUser);
 
-    if (dto.productName !== undefined) {
-      record.productName = dto.productName;
-    }
+    await this.inventoryBalancesService.runInTransaction(async (manager) => {
+      await this.inventoryBalancesService.applyPurchaseDelta(
+        manager,
+        record,
+        -1,
+      );
 
-    if (dto.quantity !== undefined) {
-      record.quantity = dto.quantity;
-    }
+      if (dto.productName !== undefined) {
+        record.productName = dto.productName;
+      }
 
-    if (dto.unitCost !== undefined) {
-      record.unitCost = dto.unitCost;
-    }
+      if (dto.quantity !== undefined) {
+        record.quantity = dto.quantity;
+      }
 
-    if (dto.totalCost !== undefined) {
-      record.totalCost = dto.totalCost;
-    }
+      if (dto.unitCost !== undefined) {
+        record.unitCost = dto.unitCost;
+      }
 
-    if (dto.purchaseKind !== undefined) {
-      record.purchaseKind = dto.purchaseKind;
-    }
+      if (dto.totalCost !== undefined) {
+        record.totalCost = dto.totalCost;
+      }
 
-    if (dto.sellPrice !== undefined) {
-      record.sellPrice = dto.sellPrice;
-    }
+      if (dto.purchaseKind !== undefined) {
+        record.purchaseKind = dto.purchaseKind;
+      }
 
-    if (dto.paymentAmount !== undefined) {
-      record.paymentAmount = dto.paymentAmount;
-    }
+      if (dto.sellPrice !== undefined) {
+        record.sellPrice = dto.sellPrice;
+      }
 
-    if (dto.purchaseDate !== undefined) {
-      record.purchaseDate = dto.purchaseDate;
-    }
+      if (dto.paymentAmount !== undefined) {
+        record.paymentAmount = dto.paymentAmount;
+      }
 
-    if (dto.note !== undefined) {
-      record.note = dto.note;
-    }
+      if (dto.purchaseDate !== undefined) {
+        record.purchaseDate = dto.purchaseDate;
+      }
 
-    record.syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
+      if (dto.note !== undefined) {
+        record.note = dto.note;
+      }
 
-    await this.purchaseRepository.save(record);
+      record.syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
+
+      const savedRecord = await manager.getRepository(Purchase).save(record);
+      await this.inventoryBalancesService.applyPurchaseDelta(
+        manager,
+        savedRecord,
+      );
+    });
     return this.findById(record.id);
   }
 
@@ -115,7 +139,14 @@ export class PurchasesService {
     const record = await this.findByClientPurchaseId(clientPurchaseId);
     this.assertRecordWritePermission(record, authUser);
 
-    await this.purchaseRepository.delete({ id: record.id });
+    await this.inventoryBalancesService.runInTransaction(async (manager) => {
+      await this.inventoryBalancesService.applyPurchaseDelta(
+        manager,
+        record,
+        -1,
+      );
+      await manager.getRepository(Purchase).delete({ id: record.id });
+    });
     return { deleted: true };
   }
 
