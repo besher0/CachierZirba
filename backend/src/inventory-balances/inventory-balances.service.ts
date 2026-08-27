@@ -26,6 +26,11 @@ export interface InventoryReconciliationRow {
   difference: number;
 }
 
+export interface InventorySnapshotQuantity {
+  productClientId: string;
+  quantity: number;
+}
+
 @Injectable()
 export class InventoryBalancesService {
   constructor(
@@ -106,21 +111,33 @@ export class InventoryBalancesService {
   async snapshotSettlement(
     manager: EntityManager,
     settlement: DailySettlement,
+    snapshotQuantities: InventorySnapshotQuantity[] = [],
   ): Promise<void> {
     const balances = await manager.find(InventoryBalance, {
       where: { storeId: settlement.storeId },
     });
-    if (balances.length === 0) {
+
+    const snapshotByProduct = new Map(
+      balances.map((balance) => [
+        balance.productClientId,
+        this.roundQuantity(balance.quantity),
+      ]),
+    );
+    snapshotQuantities.forEach((item) => {
+      snapshotByProduct.set(item.productClientId, this.roundQuantity(item.quantity));
+    });
+
+    if (snapshotByProduct.size === 0) {
       return;
     }
 
     await manager.upsert(
       InventorySettlementSnapshot,
-      balances.map((balance) => ({
+      Array.from(snapshotByProduct.entries()).map(([productClientId, quantity]) => ({
         settlementId: settlement.id,
         storeId: settlement.storeId,
-        productClientId: balance.productClientId,
-        quantity: this.roundQuantity(balance.quantity),
+        productClientId,
+        quantity,
       })),
       ['settlementId', 'productClientId'],
     );

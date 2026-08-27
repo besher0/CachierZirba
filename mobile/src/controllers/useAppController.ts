@@ -7003,6 +7003,35 @@ export function useAppController() {
       });
     }
 
+    const auditQuantityByProductId = new Map(
+      pieceStockAuditRows.map((row) => [
+        row.productId,
+        row.actualQty ?? row.expectedQty,
+      ]),
+    );
+    const inventorySnapshots = productSupplyRows
+      .map((row) => {
+        const product = products.find(
+          (item) =>
+            item.id === row.productId ||
+            item.clientProductId === row.productId,
+        );
+        if (!product) {
+          return null;
+        }
+
+        return {
+          productClientId: product.clientProductId,
+          quantity: Number(
+            (auditQuantityByProductId.get(row.productId) ?? row.remainingQty).toFixed(3),
+          ),
+        };
+      })
+      .filter(
+        (item): item is { productClientId: string; quantity: number } =>
+          item !== null,
+      );
+
     const payload: CreateDailySettlementPayload = {
       clientClosureId,
       storeId: effectiveStoreId,
@@ -7034,6 +7063,7 @@ export function useAppController() {
           .reduce((sum, item) => sum + item.paymentAmount, 0)
           .toFixed(2),
       ),
+      inventorySnapshots,
       note: settlementNoteInput.trim() || undefined,
       syncedAt: createdAt,
     };

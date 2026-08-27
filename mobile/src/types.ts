@@ -124,6 +124,10 @@ export interface CreateDailySettlementPayload {
   purchasesCount?: number | null;
   withdrawalsCount?: number | null;
   paymentsAmount?: number | null;
+  inventorySnapshots?: Array<{
+    productClientId: string;
+    quantity: number;
+  }>;
   note?: string;
   syncedAt: string;
 }

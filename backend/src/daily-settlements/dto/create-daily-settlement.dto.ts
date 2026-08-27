@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsArray,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -9,7 +10,20 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+
+export class DailySettlementInventorySnapshotDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  productClientId: string;
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  quantity: number;
+}
 
 export class CreateDailySettlementDto {
   @IsString()
@@ -124,6 +138,12 @@ export class CreateDailySettlementDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DailySettlementInventorySnapshotDto)
+  inventorySnapshots?: DailySettlementInventorySnapshotDto[];
 
   @IsOptional()
   @IsDateString()

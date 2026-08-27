@@ -89,6 +89,7 @@ export class DailySettlementsService {
     }
 
     try {
+      const { inventorySnapshots, ...settlementDto } = dto;
       const syncedAt = dto.syncedAt ? new Date(dto.syncedAt) : new Date();
       const snapshots = await this.buildCycleSnapshots(
         scopedStoreId,
@@ -99,7 +100,7 @@ export class DailySettlementsService {
         async (manager) => {
           const settlementRepository = manager.getRepository(DailySettlement);
           const record = settlementRepository.create({
-            ...dto,
+            ...settlementDto,
             storeId: scopedStoreId,
             actualRemainingAmount: dto.actualRemainingAmount,
             expectedRevenue: dto.expectedRevenue ?? 0,
@@ -129,6 +130,7 @@ export class DailySettlementsService {
           await this.inventoryBalancesService.snapshotSettlement(
             manager,
             savedSettlement,
+            inventorySnapshots,
           );
           return savedSettlement;
         },

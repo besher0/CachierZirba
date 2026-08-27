@@ -177,6 +177,38 @@ describe('DailySettlementsService', () => {
     expect(inventoryBalancesService.snapshotSettlement).toHaveBeenCalledWith(
       expect.anything(),
       saved,
+      undefined,
+    );
+  });
+
+  it('passes closing inventory snapshots to the settlement inventory snapshot', async () => {
+    const inventorySnapshots = [
+      { productClientId: 'product-1', quantity: 4.25 },
+      { productClientId: 'product-2', quantity: 0 },
+    ];
+    const created = {
+      ...payload,
+      note: null,
+      inventorySnapshots,
+      syncedAt: new Date(payload.syncedAt),
+    } as unknown as DailySettlement;
+    const saved = { ...created, id: 'server-id' } as DailySettlement;
+    repository.findOne
+      ?.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(saved);
+    repository.create?.mockReturnValue(created);
+    repository.save?.mockResolvedValue(saved);
+
+    await expect(
+      service.createOrUpdate({ ...payload, inventorySnapshots }, cashierUser),
+    ).resolves.toBe(saved);
+
+    expect(inventoryBalancesService.snapshotSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      saved,
+      inventorySnapshots,
     );
   });
 

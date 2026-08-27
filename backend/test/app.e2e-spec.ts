@@ -757,6 +757,59 @@ describe('Zirba API (e2e)', () => {
     expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
       expect.objectContaining({ remainingQty: 12.5 }),
     );
+
+    await request(app.getHttpServer())
+      .post('/api/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientProductId: 'inv-closing-snapshot',
+        name: 'Inventory Closing Snapshot',
+        unitType: 'PIECE',
+        price: 12,
+        costPrice: 6,
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/inventory-adjustments')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientAdjustmentId: 'inv-closing-snapshot-adjustment',
+        storeId: MALL_STORE_ID,
+        productClientId: 'inv-closing-snapshot',
+        actualQuantity: 5,
+        adjustedAt: '2026-08-28T18:00:00.000Z',
+        syncedAt: '2026-08-28T18:00:00.000Z',
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/daily-settlements')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        clientClosureId: 'inv-closing-snapshot-settlement',
+        storeId: MALL_STORE_ID,
+        businessDate: '2026-08-28',
+        cashBoxAmount: 0,
+        sharesAmount: 0,
+        actualRemainingAmount: 0,
+        expectedRevenue: 0,
+        syncedAt: '2026-08-28T20:00:00.000Z',
+        inventorySnapshots: [
+          {
+            productClientId: 'inv-closing-snapshot',
+            quantity: 2.5,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect(await findStock(MALL_STORE_ID, 'inv-closing-snapshot')).toEqual(
+      expect.objectContaining({
+        remainingQty: 5,
+        previousRemainingQty: 2.5,
+      }),
+    );
   });
 
   it('GET /api/orders should enforce store scope for cashier', async () => {
