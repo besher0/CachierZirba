@@ -593,6 +593,59 @@ describe('Zirba API (e2e)', () => {
       })
       .expect(201);
 
+    const cycleStockBeforeNewPurchases = await request(app.getHttpServer())
+      .get('/api/inventory-stock')
+      .query({
+        storeId: MAIN_STORE_ID,
+        cycleStartedAt: '2026-08-27T20:00:00.000Z',
+      })
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(
+      (
+        cycleStockBeforeNewPurchases.body as Array<{
+          productClientId: string;
+          previousRemainingQty: number;
+          loggedToday: number;
+        }>
+      ).find((item) => item.productClientId === 'inv-cake'),
+    ).toEqual(
+      expect.objectContaining({
+        previousRemainingQty: 12.75,
+        loggedToday: 0,
+      }),
+    );
+
+    await request(app.getHttpServer())
+      .post('/api/purchases')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        ...purchasePayload,
+        clientPurchaseId: 'inv-purchase-cake-after-settlement',
+        quantity: 0.75,
+        totalCost: 7.5,
+        purchaseDate: '2026-08-27',
+        syncedAt: '2026-08-27T23:01:00.000Z',
+      })
+      .expect(201);
+
+    const cycleStockAfterNewPurchases = await request(app.getHttpServer())
+      .get('/api/inventory-stock')
+      .query({
+        storeId: MAIN_STORE_ID,
+        cycleStartedAt: '2026-08-27T20:00:00.000Z',
+      })
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(
+      (
+        cycleStockAfterNewPurchases.body as Array<{
+          productClientId: string;
+          loggedToday: number;
+        }>
+      ).find((item) => item.productClientId === 'inv-cake'),
+    ).toEqual(expect.objectContaining({ loggedToday: 0.75 }));
+
     await request(app.getHttpServer())
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -616,7 +669,7 @@ describe('Zirba API (e2e)', () => {
 
     expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
       expect.objectContaining({
-        remainingQty: 14.75,
+        remainingQty: 15.5,
         previousRemainingQty: 12.75,
       }),
     );
@@ -659,7 +712,7 @@ describe('Zirba API (e2e)', () => {
       .expect(201);
 
     expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
-      expect.objectContaining({ remainingQty: 11.75 }),
+      expect.objectContaining({ remainingQty: 12.5 }),
     );
 
     await expect(
@@ -675,7 +728,7 @@ describe('Zirba API (e2e)', () => {
     ).rejects.toThrow('force rollback');
 
     expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
-      expect.objectContaining({ remainingQty: 11.75 }),
+      expect.objectContaining({ remainingQty: 12.5 }),
     );
 
     await dataSource.getRepository(InventoryBalance).update(
@@ -690,9 +743,9 @@ describe('Zirba API (e2e)', () => {
     expect(mismatch.body).toEqual([
       expect.objectContaining({
         productClientId: 'inv-cake',
-        calculatedFromHistory: 11.75,
+        calculatedFromHistory: 12.5,
         currentBalance: 10,
-        difference: -1.75,
+        difference: -2.5,
       }),
     ]);
 
@@ -702,7 +755,7 @@ describe('Zirba API (e2e)', () => {
       .expect(201);
 
     expect(await findStock(MAIN_STORE_ID, 'inv-cake')).toEqual(
-      expect.objectContaining({ remainingQty: 11.75 }),
+      expect.objectContaining({ remainingQty: 12.5 }),
     );
   });
 

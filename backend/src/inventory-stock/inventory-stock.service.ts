@@ -39,7 +39,7 @@ export class InventoryStockService {
         }),
         this.inventoryBalancesService.findBalancesByStore(storeId),
         this.inventoryBalancesService.findLatestSnapshotsByStore(storeId),
-        this.getTodayReceivedRows(storeId),
+        this.getReceivedRows(storeId, query.cycleStartedAt),
       ]);
 
     const productsByName = new Map(
@@ -99,21 +99,30 @@ export class InventoryStockService {
     });
   }
 
-  private async getTodayReceivedRows(
+  private async getReceivedRows(
     storeId: string,
+    cycleStartedAt?: string,
   ): Promise<Array<{ productName: string; quantity: string | number }>> {
     const todayDate = this.toDateOnlyInDamascus(new Date());
-    return this.purchaseRepository
+    const qb = this.purchaseRepository
       .createQueryBuilder('purchase')
       .select('purchase.productName', 'productName')
       .addSelect('COALESCE(SUM(purchase.quantity), 0)', 'quantity')
       .where('purchase.storeId = :storeId', { storeId })
-      .andWhere('purchase.purchaseDate = :todayDate', { todayDate })
       .andWhere('purchase.purchaseKind <> :paymentKind', {
         paymentKind: 'PAYMENT',
       })
-      .groupBy('purchase.productName')
-      .getRawMany<{ productName: string; quantity: string | number }>();
+      .groupBy('purchase.productName');
+
+    if (cycleStartedAt) {
+      qb.andWhere('purchase.syncedAt > :cycleStartedAt', {
+        cycleStartedAt: new Date(cycleStartedAt),
+      });
+    } else {
+      qb.andWhere('purchase.purchaseDate = :todayDate', { todayDate });
+    }
+
+    return qb.getRawMany<{ productName: string; quantity: string | number }>();
   }
 
   private resolveStoreForRead(

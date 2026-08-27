@@ -49,7 +49,7 @@ export class InventoryBalancesService {
     purchase: Pick<
       Purchase,
       'storeId' | 'productName' | 'quantity' | 'purchaseKind'
-    > & { createdAt?: Date },
+    > & { createdAt?: Date; syncedAt?: Date },
     sign = 1,
   ): Promise<void> {
     const delta = await this.getPurchaseDelta(manager, purchase, sign);
@@ -214,7 +214,7 @@ export class InventoryBalancesService {
     purchase: Pick<
       Purchase,
       'storeId' | 'productName' | 'quantity' | 'purchaseKind'
-    > & { createdAt?: Date },
+    > & { createdAt?: Date; syncedAt?: Date },
     sign: number,
   ): Promise<ProductQuantityDelta[]> {
     if (purchase.purchaseKind === 'PAYMENT') {
@@ -228,10 +228,11 @@ export class InventoryBalancesService {
     const latestAdjustment = productId
       ? await this.getLatestAdjustment(manager, purchase.storeId, productId)
       : null;
+    const purchaseOccurredAt = this.getPurchaseOccurredAt(purchase);
     if (
       latestAdjustment &&
-      purchase.createdAt &&
-      purchase.createdAt <= latestAdjustment.adjustedAt
+      purchaseOccurredAt &&
+      purchaseOccurredAt <= latestAdjustment.adjustedAt
     ) {
       return [];
     }
@@ -462,7 +463,8 @@ export class InventoryBalancesService {
         return;
       }
       const adjustment = latestAdjustmentByProduct.get(productClientId);
-      if (!adjustment || purchase.createdAt > adjustment.adjustedAt) {
+      const purchaseOccurredAt = this.getPurchaseOccurredAt(purchase);
+      if (!adjustment || (purchaseOccurredAt && purchaseOccurredAt > adjustment.adjustedAt)) {
         balances.set(
           productClientId,
           (balances.get(productClientId) ?? 0) + purchase.quantity,
@@ -512,6 +514,12 @@ export class InventoryBalancesService {
 
   private normalizeProductKey(value: string): string {
     return value.trim().toLowerCase();
+  }
+
+  private getPurchaseOccurredAt(
+    purchase: { syncedAt?: Date; createdAt?: Date },
+  ): Date | undefined {
+    return purchase.syncedAt ?? purchase.createdAt;
   }
 
   private roundQuantity(value: number): number {

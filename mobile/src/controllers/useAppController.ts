@@ -4397,7 +4397,10 @@ export function useAppController() {
               offset,
             }),
           ),
-          fetchInventoryStock(authToken, { storeId: selectedStoreId }),
+          fetchInventoryStock(authToken, {
+            storeId: selectedStoreId,
+            cycleStartedAt: cycleStart,
+          }),
           fetchAllListPages((offset) =>
             fetchInventoryDestructions(authToken, {
               storeId: selectedStoreId,

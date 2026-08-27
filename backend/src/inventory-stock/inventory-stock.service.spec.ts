@@ -160,6 +160,10 @@ describe('InventoryStockService', () => {
       'purchase.purchaseKind <> :paymentKind',
       { paymentKind: 'PAYMENT' },
     );
+    expect(purchaseQueryBuilder.andWhere).toHaveBeenCalledWith(
+      'purchase.purchaseDate = :todayDate',
+      expect.objectContaining({ todayDate: expect.any(String) }),
+    );
     expect(rows[0]).toEqual(
       expect.objectContaining({
         productClientId: 'product-1',
@@ -170,6 +174,30 @@ describe('InventoryStockService', () => {
       expect.objectContaining({
         productClientId: 'product-2',
         loggedToday: 0,
+      }),
+    );
+  });
+
+  it('calculates received quantity from the current settlement cycle when cycleStartedAt is provided', async () => {
+    purchaseQueryBuilder.getRawMany.mockResolvedValue([
+      { productName: 'Cake', quantity: '3' },
+    ]);
+
+    const cycleStartedAt = '2026-08-28T10:00:00.000Z';
+    const rows = await service.findAll({ storeId, cycleStartedAt }, authUser);
+
+    expect(purchaseQueryBuilder.andWhere).toHaveBeenCalledWith(
+      'purchase.syncedAt > :cycleStartedAt',
+      { cycleStartedAt: new Date(cycleStartedAt) },
+    );
+    expect(purchaseQueryBuilder.andWhere).not.toHaveBeenCalledWith(
+      'purchase.purchaseDate = :todayDate',
+      expect.anything(),
+    );
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        productClientId: 'product-1',
+        loggedToday: 3,
       }),
     );
   });
