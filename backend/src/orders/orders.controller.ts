@@ -14,12 +14,18 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Post()
-  create(@Body() dto: CreateOrderDto, @CurrentUser() authUser: AuthUser): Promise<Order> {
+  create(
+    @Body() dto: CreateOrderDto,
+    @CurrentUser() authUser: AuthUser,
+  ): Promise<Order> {
     return this.ordersService.create(dto, authUser);
   }
 
   @Get()
-  findAll(@Query() query: ListOrdersQueryDto, @CurrentUser() authUser: AuthUser): Promise<Order[]> {
+  findAll(
+    @Query() query: ListOrdersQueryDto,
+    @CurrentUser() authUser: AuthUser,
+  ): Promise<Order[]> {
     return this.ordersService.findAll(query, authUser);
   }
 }

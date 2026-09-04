@@ -30,6 +30,7 @@ import { AddSettlementArchiveSnapshots1794000000000 } from './migrations/1794000
 import { AddDailySettlementLatestIndex1795000000000 } from './migrations/1795000000000-AddDailySettlementLatestIndex';
 import { AddDashboardAggregationIndexes1796000000000 } from './migrations/1796000000000-AddDashboardAggregationIndexes';
 import { CreateInventoryBalances1797000000000 } from './migrations/1797000000000-CreateInventoryBalances';
+import { RebuildLatestInventorySettlementSnapshots1798000000000 } from './migrations/1798000000000-RebuildLatestInventorySettlementSnapshots';
 
 type DatabaseConfigOverrides = {
   migrations?: DataSourceOptions['migrations'];
@@ -91,6 +92,7 @@ export function createTypeOrmOptions(
         AddDailySettlementLatestIndex1795000000000,
         AddDashboardAggregationIndexes1796000000000,
         CreateInventoryBalances1797000000000,
+        RebuildLatestInventorySettlementSnapshots1798000000000,
       ],
       migrationsRun: migrations === undefined,
       synchronize,
