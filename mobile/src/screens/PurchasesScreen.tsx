@@ -48,6 +48,7 @@ export function PurchasesScreen() {
     purchaseFilterFrom,
     purchaseFilterProduct,
     purchaseFilterTo,
+    purchaseHistorySummaryRows,
     purchaseInvoiceDateInput,
     purchaseProductSalesSummaryRows,
     receiveTodaySupplies,
@@ -85,6 +86,7 @@ export function PurchasesScreen() {
   const sections = [
     { key: "supply", data: productSupplyRows },
     { key: "sales", data: purchaseProductSalesSummaryRows },
+    { key: "summary", data: purchaseHistorySummaryRows },
     { key: "history", data: filteredPurchaseRows },
   ];
 
@@ -184,15 +186,62 @@ export function PurchasesScreen() {
               <Text style={styles.emptyText}>لا توجد مبيعات ضمن الفترة المحددة.</Text>
             ) : null}
           </View>
+        ) : section.key === "summary" ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderInline}>
+              <Text style={styles.sectionTitle}>تجميع المشتريات ضمن الفترة</Text>
+            </View>
+            {section.data.length === 0 ? (
+              <Text style={styles.emptyText}>لا توجد كميات مشتراة ضمن الفترة المحددة.</Text>
+            ) : null}
+          </View>
         ) : (
           <View style={styles.section}>
             <View style={styles.sectionHeaderInline}>
-              <Text style={styles.sectionTitle}>عمليات الشراء حسب المنتج</Text>
+              <Text style={styles.sectionTitle}>عمليات الشراء المنفردة</Text>
               <Pressable
                 style={styles.smallRefreshButton}
                 onPress={() => void exportPurchasesData()}
               >
                 <Text style={styles.smallRefreshText}>تصدير CSV</Text>
+              </Pressable>
+            </View>
+            <View style={styles.inputRow}>
+              <Pressable
+                style={styles.input}
+                onPress={() => openPurchaseDatePicker("from")}
+              >
+                <Text
+                  style={
+                    purchaseFilterFrom
+                      ? styles.datePickerInputText
+                      : styles.datePickerInputPlaceholder
+                  }
+                >
+                  {purchaseFilterFrom || "من تاريخ"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.input}
+                onPress={() => openPurchaseDatePicker("to")}
+              >
+                <Text
+                  style={
+                    purchaseFilterTo
+                      ? styles.datePickerInputText
+                      : styles.datePickerInputPlaceholder
+                  }
+                >
+                  {purchaseFilterTo || "إلى تاريخ"}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.rowActionButtons}>
+              <Pressable
+                style={styles.smallRefreshButton}
+                onPress={clearPurchaseDateFilters}
+              >
+                <Text style={styles.smallRefreshText}>مسح التاريخ</Text>
               </Pressable>
             </View>
             {section.data.length === 0 ? (

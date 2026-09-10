@@ -2188,6 +2188,68 @@ export function useAppController() {
     ],
   );
 
+  useEffect(() => {
+    if (
+      activeScreen !== "purchases" ||
+      heavyReportScreen !== "purchases" ||
+      !authToken ||
+      !selectedStoreId ||
+      !isOnline ||
+      !purchaseFilterFrom ||
+      !purchaseFilterTo
+    ) {
+      return;
+    }
+
+    if (purchaseFilterFrom > purchaseFilterTo) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const data = await fetchAllListPages(
+          (offset) =>
+            fetchOrders(authToken, {
+              storeId: selectedStoreId,
+              from: purchaseFilterFrom || undefined,
+              to: purchaseFilterTo || undefined,
+              limit: ORDER_REFRESH_LIMIT,
+              offset,
+            }),
+          ORDER_REFRESH_LIMIT,
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setRemoteOrders((previous) => {
+          const rows = new Map(previous.map((item) => [item.clientOrderId, item]));
+          data.forEach((item) => rows.set(item.clientOrderId, item));
+          return Array.from(rows.values());
+        });
+      } catch {
+        if (!cancelled) {
+          setStatusMessage("تعذر تحديث كمية المبيع ضمن فترة المشتريات المحددة.");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeScreen,
+    authToken,
+    heavyReportScreen,
+    isOnline,
+    purchaseFilterFrom,
+    purchaseFilterTo,
+    selectedStoreId,
+  ]);
+
   const openExpenseDetails = useCallback((item: ExpenseRow) => {
     setSelectedExpenseDetails(item);
   }, []);
@@ -4867,6 +4929,7 @@ export function useAppController() {
             await Promise.all([
               refreshGlobal("products", refreshProductsData),
               refreshForStore("inventory", refreshInventoryData),
+              refreshForStore("orders", refreshOrdersData),
             ]);
             return;
           case "expenses":
