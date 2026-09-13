@@ -178,7 +178,7 @@ describe('InventoryStockService', () => {
     );
   });
 
-  it('calculates received quantity from the current settlement cycle when cycleStartedAt is provided', async () => {
+  it('keeps loggedToday limited to today when cycleStartedAt is provided', async () => {
     purchaseQueryBuilder.getRawMany.mockResolvedValue([
       { productName: 'Cake', quantity: '3' },
     ]);
@@ -190,9 +190,9 @@ describe('InventoryStockService', () => {
       'purchase.syncedAt > :cycleStartedAt',
       { cycleStartedAt: new Date(cycleStartedAt) },
     );
-    expect(purchaseQueryBuilder.andWhere).not.toHaveBeenCalledWith(
+    expect(purchaseQueryBuilder.andWhere).toHaveBeenCalledWith(
       'purchase.purchaseDate = :todayDate',
-      expect.anything(),
+      expect.objectContaining({ todayDate: expect.any(String) }),
     );
     expect(rows[0]).toEqual(
       expect.objectContaining({

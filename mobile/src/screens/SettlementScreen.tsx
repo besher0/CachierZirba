@@ -89,7 +89,7 @@ export function SettlementScreen() {
       case "destructionHistory":
         return "المنتجات المتلفة في الدورة";
       case "audit":
-        return "تدقيق مخزون منتجات القطعة";
+        return "تدقيق مخزون المنتجات";
       case "archive":
         return `أرشيف تسويات ${selectedStore?.name ?? "الفرع"}`;
       default:
@@ -517,7 +517,9 @@ export function SettlementScreen() {
             <View style={styles.orderRow}>
               <View style={styles.orderRowMain}>
                 <Text style={styles.orderRowId}>{item.productName}</Text>
-                <Text style={styles.orderRowItems}>النظري: {item.expectedQty}</Text>
+                <Text style={styles.orderRowItems}>
+                  {item.unitType === "KG" ? "كيلو" : "قطعة"} | النظري: {item.expectedQty}
+                </Text>
               </View>
               <View style={styles.orderRowMain}>
                 <Text style={styles.orderRowMeta}>

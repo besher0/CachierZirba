@@ -301,6 +301,9 @@ interface PurchaseHistorySummaryRow {
   sellPrice: number;
   firstPurchaseDate: string;
   lastPurchaseDate: string;
+  periodFrom?: string;
+  periodTo?: string;
+  periodDaysCount?: number;
   purchaseDatesCount: number;
   synced: boolean;
   pendingCount: number;
@@ -315,6 +318,21 @@ interface TodayPurchasePaymentRow {
 
 function buildPurchaseInvoiceNoteKey(storeId: string, invoiceDate: string): string {
   return `${storeId}:${invoiceDate}`;
+}
+
+function countInclusiveIsoDateDays(from: string, to: string): number {
+  const fromTime = dateFromIsoOnly(from).getTime();
+  const toTime = dateFromIsoOnly(to).getTime();
+
+  if (
+    !Number.isFinite(fromTime) ||
+    !Number.isFinite(toTime) ||
+    toTime < fromTime
+  ) {
+    return 0;
+  }
+
+  return Math.floor((toTime - fromTime) / 86400000) + 1;
 }
 
 function buildOrderCreateSyncJob(order: LocalOrder): SyncJob {
@@ -1854,6 +1872,8 @@ export function useAppController() {
       .map(({ purchaseDates, sortIndex, ...row }) => {
         const quantity = Number(row.quantity.toFixed(3));
         const totalCost = Number(row.totalCost.toFixed(2));
+        const periodFrom = purchaseFilterFrom || row.firstPurchaseDate;
+        const periodTo = purchaseFilterTo || row.lastPurchaseDate;
         return {
           ...row,
           quantity,
@@ -1861,10 +1881,19 @@ export function useAppController() {
           unitCost:
             quantity > 0 ? Number((totalCost / quantity).toFixed(2)) : 0,
           sellPrice: Number(row.sellPrice.toFixed(2)),
+          periodFrom,
+          periodTo,
+          periodDaysCount: countInclusiveIsoDateDays(periodFrom, periodTo),
           purchaseDatesCount: purchaseDates.size,
         };
       });
-  }, [filteredPurchaseRows, heavyReportScreen, posProducts]);
+  }, [
+    filteredPurchaseRows,
+    heavyReportScreen,
+    posProducts,
+    purchaseFilterFrom,
+    purchaseFilterTo,
+  ]);
 
   const purchaseInvoiceRows = useMemo<TodayPurchaseInvoiceRow[]>(() => {
     if (heavyReportScreen !== "purchases") {
@@ -7046,7 +7075,10 @@ export function useAppController() {
 
     const adjustmentRows = isCashier
       ? pieceStockAuditRows.filter(
-          (row) => row.diffQty !== null && Math.abs(row.diffQty) > 0,
+          (row) =>
+            row.unitType === "PIECE" &&
+            row.diffQty !== null &&
+            Math.abs(row.diffQty) > 0,
         )
       : [];
     const { adjustmentRecords, adjustmentJobs } = buildSettlementAdjustmentOrders({

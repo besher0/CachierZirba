@@ -13,6 +13,7 @@ export interface PieceStockAuditInput {
 export interface PieceStockAuditRow {
   productId: string;
   productName: string;
+  unitType: ProductTemplate["unitType"];
   expectedQty: number;
   actualQty: number | null;
   diffQty: number | null;
@@ -51,7 +52,6 @@ export function buildPieceStockAuditRows(
   parseNumberInput: (value: string) => number,
 ): PieceStockAuditRow[] {
   return productSupplyRows
-    .filter((item) => item.unitType === "PIECE")
     .map((item) => {
       const rawInput = settlementActualInputs[item.productId] ?? "";
       const hasInput = rawInput.trim().length > 0;
@@ -59,11 +59,14 @@ export function buildPieceStockAuditRows(
       const diffQty =
         actualQty === null ? null : Number((actualQty - item.remainingQty).toFixed(3));
       const adjustmentAmount =
-        diffQty === null ? null : Number((-diffQty * item.sellPrice).toFixed(2));
+        diffQty === null || item.unitType !== "PIECE"
+          ? null
+          : Number((-diffQty * item.sellPrice).toFixed(2));
 
       return {
         productId: item.productId,
         productName: item.name,
+        unitType: item.unitType,
         expectedQty: item.remainingQty,
         actualQty,
         diffQty,

@@ -112,14 +112,13 @@ export class InventoryStockService {
       .andWhere('purchase.purchaseKind <> :paymentKind', {
         paymentKind: 'PAYMENT',
       })
+      .andWhere('purchase.purchaseDate = :todayDate', { todayDate })
       .groupBy('purchase.productName');
 
     if (cycleStartedAt) {
       qb.andWhere('purchase.syncedAt > :cycleStartedAt', {
         cycleStartedAt: new Date(cycleStartedAt),
       });
-    } else {
-      qb.andWhere('purchase.purchaseDate = :todayDate', { todayDate });
     }
 
     return qb.getRawMany<{ productName: string; quantity: string | number }>();

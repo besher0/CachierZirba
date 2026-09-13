@@ -3,6 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import {
+  toBusinessDayEndBoundary,
+  toBusinessDayStartBoundary,
+} from '../common/business-date-boundaries';
 import { resolveListPagination } from '../common/list-pagination';
 import { isUniqueConstraintError } from '../database/is-unique-constraint-error';
 import { InventoryBalancesService } from '../inventory-balances/inventory-balances.service';
@@ -87,12 +91,14 @@ export class OrdersService {
       qb.andWhere('o.status = :status', { status: query.status });
     }
 
-    if (query.from) {
-      qb.andWhere('o.orderedAt >= :from', { from: query.from });
+    const fromValue = toBusinessDayStartBoundary(query.from);
+    if (fromValue) {
+      qb.andWhere('o.orderedAt >= :from', { from: fromValue });
     }
 
-    if (query.to) {
-      qb.andWhere('o.orderedAt <= :to', { to: query.to });
+    const toValue = toBusinessDayEndBoundary(query.to);
+    if (toValue) {
+      qb.andWhere('o.orderedAt <= :to', { to: toValue });
     }
 
     const { limit, offset } = resolveListPagination(query);

@@ -438,8 +438,8 @@ describe('AdminService', () => {
     );
     expect(orderRepository.query.mock.calls[0][1]).toEqual([
       'store-1',
-      '2026-08-01T00:00:00.000Z',
-      '2026-08-31T23:59:59.999Z',
+      '2026-07-31T21:00:00.000Z',
+      '2026-08-31T20:59:59.999Z',
       OrderStatus.REFUNDED,
       OrderStatus.REFUNDED,
       OrderStatus.REFUNDED,

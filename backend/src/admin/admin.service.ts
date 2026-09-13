@@ -2,6 +2,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { AuthUser } from '../auth/interfaces/auth-user.interface';
+import {
+  toBusinessDayEndBoundary,
+  toBusinessDayStartBoundary,
+  toDateOnly,
+} from '../common/business-date-boundaries';
 import { DateRangeQueryDto } from '../common/dto/date-range-query.dto';
 import {
   ListPaginationQuery,
@@ -870,38 +875,15 @@ export class AdminService {
   }
 
   private toDateOnly(value: string | undefined): string | undefined {
-    const normalized = this.normalizeDateInput(value);
-    if (!normalized) {
-      return undefined;
-    }
-
-    return normalized.slice(0, 10);
+    return toDateOnly(value);
   }
 
   private toOrderFromBoundary(value: string | undefined): string | undefined {
-    const normalized = this.normalizeDateInput(value);
-    if (!normalized) {
-      return undefined;
-    }
-
-    if (normalized.length === 10) {
-      return `${normalized}T00:00:00.000Z`;
-    }
-
-    return normalized;
+    return toBusinessDayStartBoundary(value);
   }
 
   private toOrderToBoundary(value: string | undefined): string | undefined {
-    const normalized = this.normalizeDateInput(value);
-    if (!normalized) {
-      return undefined;
-    }
-
-    if (normalized.length === 10) {
-      return `${normalized}T23:59:59.999Z`;
-    }
-
-    return normalized;
+    return toBusinessDayEndBoundary(value);
   }
 
   private toRawOrderFromBoundary(

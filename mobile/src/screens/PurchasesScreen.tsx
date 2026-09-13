@@ -453,10 +453,13 @@ export function PurchasesScreen() {
               </Text>
             </View>
             <Text style={styles.orderRowMeta}>
-              {item.firstPurchaseDate === item.lastPurchaseDate
-                ? item.firstPurchaseDate
-                : `${item.firstPurchaseDate} - ${item.lastPurchaseDate}`}
-              {item.purchaseDatesCount > 1 ? ` | ${item.purchaseDatesCount} أيام` : ""}
+              {(item.periodFrom ?? item.firstPurchaseDate) ===
+              (item.periodTo ?? item.lastPurchaseDate)
+                ? item.periodFrom ?? item.firstPurchaseDate
+                : `${item.periodFrom ?? item.firstPurchaseDate} - ${
+                    item.periodTo ?? item.lastPurchaseDate
+                  }`}
+              {item.periodDaysCount > 1 ? ` | ${item.periodDaysCount} أيام` : ""}
             </Text>
             {item.purchaseKind === "TAWASI" ? (
               <Text style={styles.orderRowMeta}>

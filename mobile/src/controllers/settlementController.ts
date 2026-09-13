@@ -32,7 +32,7 @@ export function buildSettlementAdjustmentOrders({
   const adjustmentJobs: SyncJob[] = [];
 
   adjustmentRows.forEach((row) => {
-    if (row.diffQty === null) {
+    if (row.unitType !== "PIECE" || row.diffQty === null) {
       return;
     }
 
